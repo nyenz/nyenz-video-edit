@@ -1,17 +1,19 @@
-# Nyenz Edit (EditForge)
+# Nyenz Edit
 
-A free video editor that runs on your own computer. You write a few simple lines ("keep 0:10-0:40", "speed 2 from 15 to 20", "loudnorm") and
-EditForge makes the video. No accounts, no cloud, no tracking, nothing is sent anywhere.
+A free video editor that runs on your own computer. No accounts, no cloud, nothing is sent anywhere.
 
-**Version 1.5.0.** Read SELF_REVIEW.md for what was and was not tested.
+## Download (Windows)
+### [Download NyenzEdit-Setup.exe](https://github.com/nyenz/nyenz-video-edit/releases/latest/download/NyenzEdit-Setup.exe)
+This link always gives the newest version. Do **not** use the green **Code > Download ZIP** button: that is the source code for
+developers, not the app.
 
 ## Install on Windows (one file, like any program)
-1. Open https://github.com/nyenz/nyenz-video-edit/releases/latest and download **NyenzEdit-Setup.exe**.
+1. Download **NyenzEdit-Setup.exe** with the link above (it has the Nyenz Edit icon).
 2. Double-click it. If Windows says "Windows protected your PC", click **More info**, then **Run anyway** (the app is free and not signed).
-3. Click **Next** until it is done. EditForge is now on your desktop and in the Start menu, with its own icon.
+3. Click **Next** until it is done. Nyenz Edit is now on your desktop and in the Start menu, with its own icon.
 
-Everything is inside: Python, FFmpeg, face tracking and automatic captions. Nothing else to install.
-EditForge opens in its own window. Close the window to stop it (a video still being made is finished first).
+Everything is inside: Python, FFmpeg, face tracking, automatic captions and sound splitting. Nothing else to install.
+Nyenz Edit opens in its own window. Close the window to stop it (a video still being made is finished first).
 
 **Updates install themselves.** About once a day the app looks for a new version. When there is one, a small **Update available**
 button shows at the top. Click it, then **Update now**: it downloads, checks the file, waits until no video is being made, then the app
