@@ -6,7 +6,7 @@ EditForge makes the video. No accounts, no cloud, no tracking, nothing is sent a
 **Version 1.5.0.** Read SELF_REVIEW.md for what was and was not tested.
 
 ## Install on Windows (one file, like any program)
-1. Open https://github.com/nyenz/Video-editing-/releases/latest and download **EditForge-Setup.exe**.
+1. Open https://github.com/nyenz/nyenz-video-edit/releases/latest and download **NyenzEdit-Setup.exe**.
 2. Double-click it. If Windows says "Windows protected your PC", click **More info**, then **Run anyway** (the app is free and not signed).
 3. Click **Next** until it is done. EditForge is now on your desktop and in the Start menu, with its own icon.
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.8.1
+* **Proper Nyenz Edit branding on Windows.** The program is now **NyenzEdit.exe** and the installer **NyenzEdit-Setup.exe**, with the
+  Nyenz Edit icon in every size Windows uses (16 to 256 px): the installer file, the program, the desktop and Start-menu icons, the
+  taskbar, and Settings > Apps (with the uninstaller). Windows shows "Nyenz Edit" by Nyenz, with the version, in Properties > Details
+  and Task Manager. The installer has Nyenz Edit pictures on its pages.
+* New installs go to `%LOCALAPPDATA%\Programs\Nyenz Edit`; an existing install is updated where it is, and your projects stay.
+  A taskbar button pinned before still works.
+* The project moved to **github.com/nyenz/nyenz-video-edit**. Older versions still update themselves (the release also carries the
+  installer under its old name).
+
 ## 1.8.0
 * **Frame panel in the Editor** (new button on the left): everything about the picture's place, like CapCut.
   * **Shape of the video:** Original, 16:9, 4:3, 2.35:1, 2:1, 1.85:1, 9:16, 3:4, 1:1, 4:5 and 5.8-inch (tall phone).

@@ -1,9 +1,9 @@
 """Automatic updates for the installed Windows app.
 
-Once a day (in the background, never slowing the window) EditForge asks GitHub for the newest release.
+Once a day (in the background, never slowing the window) Nyenz Edit asks GitHub for the newest release.
 When there is a newer version the page shows a quiet "Update" button. Clicking it downloads
-EditForge-Setup.exe, checks its size and SHA-256 fingerprint against the release, waits until no video is
-being made, then runs the installer silently: EditForge closes, updates and opens again by itself.
+NyenzEdit-Setup.exe, checks its size and SHA-256 fingerprint against the release, waits until no video is
+being made, then runs the installer silently: Nyenz Edit closes, updates and opens again by itself.
 Everything you made stays (it lives in your home folder, not in the program folder).
 
 No internet? Nothing happens and nothing breaks; it tries again the next day.
@@ -26,9 +26,10 @@ from typing import Any, Callable, Dict, Optional
 from .core.cache import atomic_write_json, home_dir
 from .version import __version__
 
-REPO = "nyenz/Video-editing-"
+REPO = "nyenz/nyenz-video-edit"
 API = f"https://api.github.com/repos/{REPO}/releases/latest"
-ASSET = "EditForge-Setup.exe"
+ASSET = "NyenzEdit-Setup.exe"
+OLD_ASSET = "EditForge-Setup.exe"          # the name before 1.8.1 (releases carry both, so older apps can still update)
 DAY = 24 * 3600
 TIMEOUT = 8
 
@@ -82,14 +83,15 @@ class Updater:
             return self.status()
         try:
             rel = json.loads(self.fetch(API).decode("utf-8"))
-            asset = next((a for a in rel.get("assets") or [] if a.get("name") == ASSET), None)
+            assets = rel.get("assets") or []
+            asset = next((a for a in assets if a.get("name") == ASSET), None) or next((a for a in assets if a.get("name") == OLD_ASSET), None)
             latest = str(rel.get("tag_name") or "").lstrip("v")
             info = {"checked": time.time(), "latest": latest, "url": "", "size": 0, "sha256": "", "notes": str(rel.get("body") or "")[:2000]}
             if asset:
                 info.update({"url": str(asset.get("browser_download_url") or ""), "size": int(asset.get("size") or 0),
                              "sha256": _sha_from_digest(asset.get("digest"))})
                 if not info["sha256"]:                                # older releases: a small .sha256 file next to it
-                    side = next((a for a in rel.get("assets") or [] if a.get("name") == ASSET + ".sha256"), None)
+                    side = next((a for a in rel.get("assets") or [] if a.get("name") == str(asset.get("name")) + ".sha256"), None)
                     if side:
                         try:
                             info["sha256"] = self.fetch(str(side.get("browser_download_url")))[:200].decode("ascii", "replace").split()[0].lower()
@@ -141,12 +143,12 @@ class Updater:
             self._set(state="failed", error="The update has no download or no fingerprint to check it, so it was not used.")
             return
         self.folder.mkdir(parents=True, exist_ok=True)
-        dest = self.folder / f"EditForge-Setup-{data.get('latest')}.exe"
+        dest = self.folder / f"NyenzEdit-Setup-{data.get('latest')}.exe"
         part = dest.with_suffix(".part")
         h = hashlib.sha256()
         got = 0
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": f"EditForge/{__version__}"})
+            req = urllib.request.Request(url, headers={"User-Agent": f"NyenzEdit/{__version__}"})
             with urllib.request.urlopen(req, timeout=60) as r, open(part, "wb") as fh:
                 total = size or int(r.headers.get("Content-Length") or 0)
                 while True:
@@ -172,7 +174,7 @@ class Updater:
             self._set(state="failed", error="The update could not be downloaded: " + str(exc)[:200])
 
     def install(self, busy: Callable[[], bool], quit_app: Callable[[], None]) -> Dict[str, Any]:
-        """Run the downloaded installer silently once no video is being made, then close EditForge."""
+        """Run the downloaded installer silently once no video is being made, then close Nyenz Edit."""
         with self._lock:
             if self.job.get("state") != "ready":
                 return dict(self.job)
@@ -195,7 +197,7 @@ class Updater:
 
     def clean(self) -> None:
         """Remove old downloaded installers (called at start)."""
-        for f in self.folder.glob("EditForge-Setup-*"):
+        for f in [*self.folder.glob("NyenzEdit-Setup-*"), *self.folder.glob("EditForge-Setup-*")]:
             try:
                 f.unlink()
             except OSError:
@@ -208,6 +210,6 @@ def _sha_from_digest(digest: Any) -> str:
 
 
 def _fetch(url: str) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": f"EditForge/{__version__}", "Accept": "application/vnd.github+json"})
+    req = urllib.request.Request(url, headers={"User-Agent": f"NyenzEdit/{__version__}", "Accept": "application/vnd.github+json"})
     with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
         return r.read(2 * 1024 * 1024)

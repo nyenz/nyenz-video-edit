@@ -1,14 +1,14 @@
-"""EditForge as a desktop app: start the local server and open it in its own app window.
+"""Nyenz Edit as a desktop app: start the local server and open it in its own app window.
 
-This is what ``EditForge.exe`` runs. It:
+This is what ``NyenzEdit.exe`` runs. It:
 
 * starts the web server on a free port, only reachable from this computer;
 * opens the page in a Microsoft Edge (or Chrome) "app" window with its own profile, so it looks like a
   normal program: no address bar, no tabs, its own icon in the taskbar;
 * stops when that window is closed (after any video still being made is finished);
-* if EditForge is already running, just opens another window of it.
+* if Nyenz Edit is already running, just opens another window of it.
 
-``EditForge.exe --selftest`` checks that everything inside the app works and prints the result.
+``NyenzEdit.exe --selftest`` checks that everything inside the app works and prints the result.
 """
 
 from __future__ import annotations
@@ -29,7 +29,8 @@ from typing import List, Optional
 from .core.cache import home_dir
 from .version import __version__
 
-APP = "EditForge"
+APP = "Nyenz Edit"
+SERVER_ID = "EditForge"          # what /api/hello answers; it stays the same so a running older version is still found
 
 
 # ------------------------------------------------------------------ small helpers
@@ -75,7 +76,7 @@ def message(title: str, text: str) -> None:
 def _hello(port: int, timeout: float = 1.5) -> bool:
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/hello", timeout=timeout) as r:
-            return json.loads(r.read().decode("utf-8")).get("app") == APP
+            return json.loads(r.read().decode("utf-8")).get("app") == SERVER_ID
     except Exception:  # noqa: BLE001
         return False
 
@@ -170,7 +171,7 @@ def run() -> int:
 
     from .core.ffmpeg import find_executable
     if not find_executable("ffmpeg") or not find_executable("ffprobe"):
-        message(APP, "FFmpeg, the video engine, is missing. Please reinstall EditForge.")
+        message(APP, "FFmpeg, the video engine, is missing. Please reinstall Nyenz Edit.")
         return 1
 
     from .web.server import make_server
@@ -182,7 +183,7 @@ def run() -> int:
         except OSError:
             continue
     if srv is None:
-        message(APP, "EditForge could not start: no free network port on this computer. Restart the computer and try again.")
+        message(APP, "Nyenz Edit could not start: no free network port on this computer. Restart the computer and try again.")
         return 1
     threading.Thread(target=srv.serve_forever, name="editforge-web", daemon=True).start()
     url = f"http://127.0.0.1:{state.port}/"
@@ -261,7 +262,7 @@ def _fallback_window(url: str) -> None:
         root = tkinter.Tk()
         root.title(APP)
         root.geometry("360x150")
-        tkinter.Label(root, text="EditForge is running.\nIt opened in your web browser.", pady=14).pack()
+        tkinter.Label(root, text="Nyenz Edit is running.\nIt opened in your web browser.", pady=14).pack()
         row = tkinter.Frame(root)
         row.pack(pady=6)
         tkinter.Button(row, text="Open again", width=12, command=lambda: webbrowser.open(url)).pack(side="left", padx=6)
@@ -380,7 +381,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return run()
     except Exception:  # noqa: BLE001 - show the problem instead of vanishing
         log(traceback.format_exc())
-        message(APP, "EditForge stopped because of a problem. Details are in:\n" + str(_log_file()))
+        message(APP, "Nyenz Edit stopped because of a problem. Details are in:\n" + str(_log_file()))
         return 1
 
 
