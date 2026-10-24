@@ -49,7 +49,7 @@ BINS = N_FFT // 2 + 1
 MODEL_ID = "sound-split-1"
 MODEL_FILE = MODEL_ID + ".onnx"
 #: where the converted model lives (a release of this project) and its fingerprint, size and credits
-MODEL_URL = "https://github.com/nyenz/Video-editing-/releases/download/sound-model-1/sound-split-1.onnx"
+MODEL_URL = "https://github.com/nyenz/nyenz-video-edit/releases/download/sound-model-1/sound-split-1.onnx"
 MODEL_SHA256 = "b43c4978c07667b2c6e6aed8c3c1ad5b263a96f8fbc8faead2cec45971646d4d"
 MODEL_SIZE = 76080146
 MODEL_CREDIT = ("BandIt Plus, a speech / music / effects separation model by Roman Solovyev (ZFTurbo), based on the BandIt "
@@ -557,7 +557,7 @@ class Splitter:
         h = hashlib.sha256()
         got = 0
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": f"EditForge/{__version__}"})
+            req = urllib.request.Request(url, headers={"User-Agent": f"NyenzEdit/{__version__}"})
             with urllib.request.urlopen(req, timeout=60) as r, open(part, "wb") as fh:
                 total = MODEL_SIZE or int(r.headers.get("Content-Length") or 0)
                 while True:

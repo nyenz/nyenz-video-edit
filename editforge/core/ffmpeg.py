@@ -39,7 +39,7 @@ def _candidates(name: str) -> List[str]:
     env = os.environ.get("EDITFORGE_" + name.upper())
     out = [env] if env else []
     exe = name + (".exe" if os.name == "nt" else "")
-    # The Windows app ships its own FFmpeg next to EditForge.exe (or inside the bundle); that one is preferred.
+    # The Windows app ships its own FFmpeg next to NyenzEdit.exe (or inside the bundle); that one is preferred.
     bundle_dirs = []
     if getattr(sys, "frozen", False):
         bundle_dirs.append(Path(sys.executable).resolve().parent)

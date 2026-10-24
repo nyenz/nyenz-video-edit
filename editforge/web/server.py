@@ -952,7 +952,7 @@ class Handler(BaseHTTPRequestHandler):
         if isinstance(exc, EditForgeError):
             self._error(400, exc.message, exc.fix, exc.line, (exc.details or "")[-1500:])
         else:
-            self._error(500, "Something unexpected went wrong.", "Try again. If it keeps happening, restart EditForge.", None, str(exc)[:300])
+            self._error(500, "Something unexpected went wrong.", "Try again. If it keeps happening, restart Nyenz Edit.", None, str(exc)[:300])
 
     def _guard(self, need_token: bool = True, query_token: bool = False) -> Optional[Dict[str, List[str]]]:
         """Check Host, Origin and token. Returns the parsed query, or None after sending an error."""
@@ -1183,7 +1183,7 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/update/install":
                 from ..updater import can_install
                 if not can_install():
-                    raise EditForgeError("Only the installed app can update itself.", "Download the new EditForge-Setup.exe from the release page.")
+                    raise EditForgeError("Only the installed app can update itself.", "Download the new NyenzEdit-Setup.exe from the release page.")
                 self._json(self.state.updater.install(lambda: _jobs_busy(self.state), self.state.quit_app))
             elif path == "/api/validate":
                 data = self._read_json()

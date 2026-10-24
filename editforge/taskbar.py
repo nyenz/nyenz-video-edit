@@ -5,7 +5,7 @@ Edge icon, and pinning it pins Edge. Here every window of EditForge's own browse
 
 * its own taskbar identity (AppUserModelID "NyenzEdit.App", the same as the Start-menu and desktop shortcuts),
   so it has its own taskbar button and is not mixed with your normal Edge windows;
-* "pin" information: pinning it pins EditForge.exe with the Nyenz Edit name and icon;
+* "pin" information: pinning it pins NyenzEdit.exe with the Nyenz Edit name and icon;
 * the Nyenz Edit icon on the window and its taskbar button.
 
 Windows only, and best effort: if anything is missing, the app works as before.

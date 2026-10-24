@@ -356,7 +356,7 @@ function uploadFile(file, onprog) {
     xhr.setRequestHeader("X-EditForge-Token", TOKEN);
     xhr.setRequestHeader("Content-Type", "application/octet-stream");
     xhr.upload.onprogress = (e) => { if (e.lengthComputable && onprog) onprog(e.loaded / e.total); };
-    xhr.onerror = () => reject(new Error("The file could not be added. Check that EditForge is still running."));
+    xhr.onerror = () => reject(new Error("The file could not be added. Check that Nyenz Edit is still running."));
     xhr.onload = () => {
       let data = {};
       try { data = JSON.parse(xhr.responseText); } catch (e) { /* not JSON */ }

@@ -1,4 +1,4 @@
-"""Start point of EditForge.exe (the desktop app)."""
+"""Start point of NyenzEdit.exe (the desktop app)."""
 import multiprocessing
 import sys
 

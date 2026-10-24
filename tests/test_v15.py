@@ -317,8 +317,8 @@ def test_steps_js_matches_python():
 
 
 # ------------------------------------------------------------------ B4: automatic updates
-def release(version, data=b"", url="https://github.com/nyenz/Video-editing-/releases/download/x/EditForge-Setup.exe", digest=True):
-    asset = {"name": "EditForge-Setup.exe", "size": len(data), "browser_download_url": url}
+def release(version, data=b"", url="https://github.com/nyenz/nyenz-video-edit/releases/download/x/NyenzEdit-Setup.exe", digest=True):
+    asset = {"name": "NyenzEdit-Setup.exe", "size": len(data), "browser_download_url": url}
     if digest:
         asset["digest"] = "sha256:" + hashlib.sha256(data).hexdigest()
     return json.dumps({"tag_name": "v" + version, "assets": [asset], "body": "notes"}).encode()
@@ -356,7 +356,7 @@ def serve_bytes(data: bytes):
             pass
     srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    return srv, f"http://127.0.0.1:{srv.server_address[1]}/EditForge-Setup.exe"
+    return srv, f"http://127.0.0.1:{srv.server_address[1]}/NyenzEdit-Setup.exe"
 
 
 def wait_job(u):

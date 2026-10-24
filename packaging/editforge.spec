@@ -26,6 +26,6 @@ for pkg in ("faster_whisper", "ctranslate2", "cv2", "onnxruntime"):
 a = Analysis([os.path.join(SPECPATH, "editforge_app.py")], pathex=[ROOT], binaries=binaries, datas=datas,
              hiddenimports=hidden, excludes=["matplotlib", "pandas", "IPython", "jupyter", "pytest"], noarchive=False)
 pyz = PYZ(a.pure)
-exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="EditForge", icon=os.path.join(SPECPATH, "editforge.ico"),
+exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="NyenzEdit", icon=os.path.join(SPECPATH, "nyenz-edit.ico"),
           console=False, upx=False, version=os.path.join(SPECPATH, "version_info.txt") if os.path.exists(os.path.join(SPECPATH, "version_info.txt")) else None)
-coll = COLLECT(exe, a.binaries, a.datas, name="EditForge", upx=False)
+coll = COLLECT(exe, a.binaries, a.datas, name="NyenzEdit", upx=False)

@@ -103,7 +103,7 @@ class JobManager:
                 self._run(job_id)
             except Exception:  # never let the worker die
                 self.store.update(job_id, status="failed", message="An unexpected error happened.",
-                                  error="An unexpected error happened inside EditForge.",
+                                  error="An unexpected error happened inside Nyenz Edit.",
                                   error_fix="Please try again. If it keeps happening, report the details below.",
                                   error_details=traceback.format_exc()[-3000:])
 

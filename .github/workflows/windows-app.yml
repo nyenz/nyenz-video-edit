@@ -1,6 +1,6 @@
 name: Windows app
 
-# Builds EditForge-Setup.exe: the one-file installer with Python, FFmpeg and the add-ons inside.
+# Builds NyenzEdit-Setup.exe: the one-file installer with Python, FFmpeg and the add-ons inside.
 # Every change is built and tested on Windows. On main, the installer is published as the release for the
 # version in editforge/version.py (for example v1.4.0); a new version number makes a new release.
 on:
@@ -60,8 +60,10 @@ jobs:
           Get-Content pytest.txt | Select-String -Pattern "^[A-Za-z]:\\.*:\d+: " | Select-Object -First 9 | ForEach-Object { Write-Output "::warning title=where::$($_.Line)" }
           exit $code
 
-      - name: Build EditForge.exe
-        run: pyinstaller packaging/editforge.spec --noconfirm --distpath dist --workpath build
+      - name: Build NyenzEdit.exe
+        run: |
+          python tools/make_version_info.py
+          pyinstaller packaging/editforge.spec --noconfirm --distpath dist --workpath build
 
       - name: Check the built app works
         shell: pwsh
@@ -70,7 +72,7 @@ jobs:
           $env:EDITFORGE_HOME = "$env:RUNNER_TEMP\efhome"
           Remove-Item Env:\PATH -ErrorAction SilentlyContinue
           $env:PATH = "C:\Windows\System32;C:\Windows"
-          $p = Start-Process dist\EditForge\EditForge.exe -ArgumentList "--selftest" -Wait -PassThru
+          $p = Start-Process dist\NyenzEdit\NyenzEdit.exe -ArgumentList "--selftest" -Wait -PassThru
           Get-Content $env:EDITFORGE_SELFTEST_OUT
           if ($p.ExitCode -ne 0) { throw "Self-test failed" }
 
@@ -88,15 +90,28 @@ jobs:
           "version=$ver" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
           & $iscc "/DMyVersion=$ver" packaging\installer.iss
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
-          Get-Item dist\EditForge-Setup.exe | Format-List Name, Length
+          Get-Item dist\NyenzEdit-Setup.exe | Format-List Name, Length
+          # The program file must carry the Nyenz Edit name and icon (Properties > Details, Task Manager, Apps list)
+          $vi = (Get-Item dist\NyenzEdit\NyenzEdit.exe).VersionInfo
+          if ($vi.ProductName -ne "Nyenz Edit" -or $vi.FileDescription -ne "Nyenz Edit") { throw "NyenzEdit.exe has no Nyenz Edit name: $($vi | Out-String)" }
+          Add-Type -AssemblyName System.Drawing
+          foreach ($f in @("dist\NyenzEdit\NyenzEdit.exe", "dist\NyenzEdit-Setup.exe")) {
+            $ic = [System.Drawing.Icon]::ExtractAssociatedIcon((Resolve-Path $f))
+            if (-not $ic) { throw "$f has no icon" }
+            $bmp = $ic.ToBitmap(); $px = $bmp.GetPixel([int]($bmp.Width / 2), [int]($bmp.Height / 2))
+            "icon of ${f}: $($bmp.Width)x$($bmp.Height), middle pixel $px"
+          }
           # a fingerprint file, so the app's updater can check the download
-          $h = (Get-FileHash dist\EditForge-Setup.exe -Algorithm SHA256).Hash.ToLower()
+          $h = (Get-FileHash dist\NyenzEdit-Setup.exe -Algorithm SHA256).Hash.ToLower()
+          "$h  NyenzEdit-Setup.exe" | Out-File -Encoding ascii -NoNewline dist\NyenzEdit-Setup.exe.sha256
+          # the same installer under its old name, so apps from before 1.8.1 (which look for EditForge-Setup.exe) can update
+          Copy-Item dist\NyenzEdit-Setup.exe dist\EditForge-Setup.exe
           "$h  EditForge-Setup.exe" | Out-File -Encoding ascii -NoNewline dist\EditForge-Setup.exe.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: EditForge-Setup
-          path: dist/EditForge-Setup.exe
+          name: NyenzEdit-Setup
+          path: dist/NyenzEdit-Setup.exe
 
       - name: Publish the release
         if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
@@ -104,12 +119,14 @@ jobs:
         with:
           tag_name: v${{ steps.installer.outputs.version }}
           target_commitish: ${{ github.sha }}
-          name: Nyenz Edit (EditForge) ${{ steps.installer.outputs.version }}
+          name: Nyenz Edit ${{ steps.installer.outputs.version }}
           make_latest: true
           files: |
+            dist/NyenzEdit-Setup.exe
+            dist/NyenzEdit-Setup.exe.sha256
             dist/EditForge-Setup.exe
             dist/EditForge-Setup.exe.sha256
           body: |
-            **Download EditForge-Setup.exe below, double-click it, and follow the steps.** It puts EditForge on your desktop and in the Start menu.
+            **Download NyenzEdit-Setup.exe below, double-click it, and follow the steps.** It puts Nyenz Edit on your desktop and in the Start menu. (EditForge-Setup.exe is the same file under its old name, for older versions that update themselves.)
             Everything is inside: no Python or FFmpeg to install. Windows may say "Windows protected your PC" the first time,
             because the app is not signed: click **More info**, then **Run anyway**.
