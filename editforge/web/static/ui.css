@@ -539,11 +539,11 @@ details.steps-all[open] > summary .chev { transform: rotate(180deg); }
 .cthumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .cliplist .clip-row .t { justify-content: center; }
 .cliplist .acts { flex-direction: column; justify-content: center; }
-.st-chip { align-self: flex-start; padding: 1px 7px; border-radius: 999px; font-size: 10.5px; font-weight: 650; background: var(--sunk); color: var(--muted); }
-.st-chip.done { background: rgba(62, 207, 142, .16); color: var(--green); }
-.st-chip.running, .st-chip.queued { background: var(--accent-soft); color: var(--accent); }
-.st-chip.failed { background: rgba(242, 85, 90, .16); color: var(--red); }
-.st-chip.old { background: rgba(245, 181, 68, .16); color: var(--amber); }
+.st-chip { align-self: flex-start; font-size: 11px; font-weight: 650; color: var(--muted); }
+.st-chip.done { color: var(--green); }
+.st-chip.running, .st-chip.queued { color: var(--accent); }
+.st-chip.failed { color: var(--red); }
+.st-chip.old { color: var(--amber); }
 .tabs { display: flex; gap: 4px; padding: 0 16px 10px; position: sticky; top: 47px; background: var(--panel); z-index: 2; border-bottom: 1px solid var(--line-soft); margin-bottom: 10px; }
 .tab { flex: 1; height: 30px; border: 0; border-radius: var(--r-s); background: transparent; color: var(--muted); cursor: pointer; font-weight: 600; }
 .tab:hover { color: var(--ink); background: var(--raised); }
@@ -581,3 +581,29 @@ label.swl.inline { padding: 0; gap: 8px; font-size: 12.5px; }
 .btns.wrap { flex-wrap: wrap; }
 .btn.sm-txt { height: 28px; padding: 0 10px; font-size: 12.5px; }
 .mask-chips { flex-wrap: wrap; }
+
+/* Clips page, stage 1: chosen part, nudge buttons, keys list, join list */
+.part-row { border: 1px solid transparent; }
+.part-row.on { border-color: var(--accent); background: var(--raised); }
+.lane-item.cliptag.cur { box-shadow: 0 0 0 2px var(--accent); z-index: 2; }
+.nudge { gap: 8px; }
+.nudge .btn { justify-content: center; }
+.nudge .btn span { white-space: nowrap; }
+.pick-list { max-height: 260px; overflow: auto; margin-top: 8px; }
+.pick-list .item { cursor: pointer; padding: 8px 10px; }
+.pick-list .item.on { border-color: var(--accent); }
+.keys { display: grid; grid-template-columns: 1fr; gap: 6px; margin-bottom: 14px; min-width: 300px; }
+.keys .krow { display: grid; grid-template-columns: 110px 1fr; gap: 12px; align-items: center; color: var(--ink-2); }
+.keys kbd { font-family: var(--mono, ui-monospace, monospace); font-size: 12px; padding: 2px 7px; border-radius: 5px; background: var(--sunk); border: 1px solid var(--line); color: var(--ink); text-align: center; }
+.transport .tr-right { gap: 6px; }
+.transport .tr-right .btn { padding: 0 10px; }
+.transport .tr-right .btn span { white-space: nowrap; }
+.side-h .btn.sm { margin-left: 2px; }
+.cliplist .clip-row .t b { white-space: normal; overflow-wrap: anywhere; line-height: 1.25; font-size: 12.5px; }
+.suite.clips .side.right .box { padding: 7px 12px; flex-direction: row; }
+.suite.clips .side.right .grid2 { gap: 10px; }
+.suite.clips .side.right .pad { gap: 12px; }
+.transport .mid { margin-right: 6px; }
+.transport .tr-right { flex-shrink: 0; }
+.suite.clips .transport .tc { min-width: 118px; }
+.suite.clips .transport { gap: 6px; padding-left: 14px; padding-right: 14px; }
