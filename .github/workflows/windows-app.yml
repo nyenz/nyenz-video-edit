@@ -108,6 +108,29 @@ jobs:
           Copy-Item dist\NyenzEdit-Setup.exe dist\EditForge-Setup.exe
           "$h  EditForge-Setup.exe" | Out-File -Encoding ascii -NoNewline dist\EditForge-Setup.exe.sha256
 
+      - name: Check the installer puts the AI models in place
+        shell: pwsh
+        run: |
+          # a quiet install (like an automatic update) downloads the models that are missing, checks them and puts them in the app's folder
+          $app = "$env:RUNNER_TEMP\installed"
+          $log = "$env:RUNNER_TEMP\setup.log"
+          function Say($level, $title, $text) { $t = ($text -replace "[\r\n]+", " | "); if ($t.Length -gt 1500) { $t = $t.Substring($t.Length - 1500) }; Write-Output "::$level title=$title::$t" }
+          $p = Start-Process dist\NyenzEdit-Setup.exe -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR=$app", "/LOG=$log" -Wait -PassThru
+          $logText = if (Test-Path $log) { (Select-String -Path $log -Pattern "model|download|Download|Exception|Error|error" | Select-Object -Last 14 | ForEach-Object { $_.Line }) -join "`n" } else { "(no log)" }
+          Say "notice" "setup log" $logText
+          $want = python -c "import json; from editforge import modelpack as m; print(json.dumps([[m.relative_path(f), f['size'], f['sha256']] for f in m.FILES]))" | ConvertFrom-Json
+          $bad = @()
+          foreach ($w in $want) {
+            $f = Join-Path "$env:USERPROFILE\.editforge" $w[0]
+            if (-not (Test-Path $f)) { $bad += "missing: $($w[0])"; continue }
+            $got = (Get-FileHash $f -Algorithm SHA256).Hash.ToLower()
+            if ((Get-Item $f).Length -ne $w[1] -or $got -ne $w[2]) { $bad += "wrong file: $($w[0])" } else { "ok  $($w[0])" }
+          }
+          if ($p.ExitCode -ne 0) { $bad += "the installer exit code was $($p.ExitCode)" }
+          if ($bad.Count) { Say "error" "models" ($bad -join "; "); exit 1 }
+          # the installed app finds the captions model there
+          python -c "from editforge import modelpack as m; print(m.local_whisper())"
+
       - uses: actions/upload-artifact@v4
         with:
           name: NyenzEdit-Setup

@@ -1,4 +1,4 @@
-; Inno Setup recipe for NyenzEdit-Setup.exe. Build with:  iscc /DMyVersion=1.11.0 packaging\installer.iss
+; Inno Setup recipe for NyenzEdit-Setup.exe. Build with:  iscc /DMyVersion=1.12.0 packaging\installer.iss
 ; It installs for the current user only, so Windows does not ask for an administrator password.
 ; The AppId never changes: a new version installs over the old one (also over the versions called EditForge).
 #ifndef MyVersion
@@ -72,7 +72,106 @@ Filename: "{app}\{#MyExe}"; Description: "Open Nyenz Edit now"; Flags: nowait po
 Filename: "{app}\{#MyExe}"; Flags: nowait runasoriginaluser; Check: Relaunch
 
 [Code]
+// The AI models (sound splitting, captions) are downloaded here, once, with a size and SHA-256 check, so nothing is downloaded
+// later. The list comes from editforge/modelpack.py (tools/make_models_iss.py writes models.iss). A model that is already in
+// place (an update) is not downloaded again. If a download fails, Nyenz Edit still installs and fetches the model when it is first used.
+#include "models.iss"
+
+var
+  ModelPage: TDownloadWizardPage;
+
 function Relaunch(): Boolean;
 begin
   Result := WizardSilent() and (Pos('/RELAUNCH', Uppercase(GetCmdTail())) > 0);
+end;
+
+function ModelHome(): String;
+begin
+  Result := ExpandConstant('{%USERPROFILE}\.editforge\');
+end;
+
+function ModelPresent(I: Integer): Boolean;
+var
+  Path: String;
+begin
+  Path := ModelHome() + ModelDest(I);
+  Result := FileExists(Path) and (CompareText(GetSHA256OfFile(Path), ModelSha(I)) = 0);
+end;
+
+function OnModelProgress(const Url, FileName: String; const Progress, ProgressMax: Int64): Boolean;
+begin
+  Result := True;
+end;
+
+procedure InitializeWizard();
+begin
+  ModelPage := CreateDownloadPage('Getting the AI models', 'Sound splitting and captions need these. They are downloaded once now, so nothing is downloaded later.', @OnModelProgress);
+  ModelPage.ShowBaseNameInsteadOfUrl := True;
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+var
+  I: Integer;
+  Need: Boolean;
+begin
+  Result := True;
+  if CurPageID <> wpReady then
+    Exit;
+  ModelPage.Clear;
+  Need := False;
+  for I := 0 to ModelCount() - 1 do
+    if not ModelPresent(I) then
+    begin
+      ModelPage.Add(ModelUrl(I), ModelTempName(I), ModelSha(I));
+      Need := True;
+    end;
+  if not Need then
+    Exit;
+  ModelPage.Show;
+  try
+    try
+      ModelPage.Download;
+    except
+      Log('Model download did not finish: ' + GetExceptionMessage);
+      if not ModelPage.AbortedByUser then
+        SuppressibleMsgBox('The AI models could not be downloaded now (' + GetExceptionMessage + '). Nyenz Edit is still installed. It downloads them the first time you use sound splitting or captions (that needs the internet then).', mbInformation, MB_OK, IDOK);
+    end;
+  finally
+    ModelPage.Hide;
+  end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  I: Integer;
+  Temp, Dest: String;
+begin
+  if (CurStep = ssInstall) and WizardSilent() then
+  begin
+    { an automatic update has no download page: get the models that are missing now (an earlier version did not have them) }
+    for I := 0 to ModelCount() - 1 do
+      if not ModelPresent(I) then
+      begin
+        try
+          DownloadTemporaryFile(ModelUrl(I), ModelTempName(I), ModelSha(I), nil);
+        except
+          Log('Model download did not finish: ' + GetExceptionMessage);
+        end;
+      end;
+  end;
+  if CurStep <> ssPostInstall then
+    Exit;
+  for I := 0 to ModelCount() - 1 do
+  begin
+    Temp := ExpandConstant('{tmp}\') + ModelTempName(I);
+    Dest := ModelHome() + ModelDest(I);
+    if FileExists(Temp) then
+    begin
+      ForceDirectories(ExtractFilePath(Dest));
+      if FileCopy(Temp, Dest, False) then
+        DeleteFile(Temp)
+      else
+        Log('Could not copy the model to ' + Dest);
+    end;
+  end;
 end;
