@@ -137,3 +137,12 @@ def test_the_mask_can_be_moved_resized_and_turned(live, page, movie_id):
     saved = live.call("GET", f"/api/projects/{page.evaluate('() => S.proj.id')}")["project"]["settings"]["frame"]["mask"]
     assert saved["rot"] == 30 and saved["shape"] == "rect"
     assert page.errors == []
+
+
+def test_the_top_bar_always_shows_the_version_and_an_update_button_when_one_is_out(live, page):
+    page.goto(f"{live.base}/")
+    page.wait_for_function("() => document.querySelector('.update-pill') && /Version /.test(document.querySelector('.update-pill').textContent)", timeout=15000)
+    assert page.is_visible(".update-pill.quiet")
+    page.evaluate("() => { Update.st = Object.assign({}, Update.st, { available: true, latest: '99.0.0' }); Update.paint(); }")
+    assert page.inner_text(".update-pill") == "Update to 99.0.0" and not page.is_visible(".update-pill.quiet")
+    assert page.errors == []

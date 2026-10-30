@@ -232,42 +232,64 @@ async function chooseFile(kind, onprog, accept) {
 // ------------------------------------------------------------------ updates: a quiet button when a new version is out
 const Update = {
   node: null, st: null,
+  // Always in the top bar: the version you have. When a newer one is out it turns into "Update to x.y.z" (one click).
   pill() {
-    this.label = el("span", { text: "Update" });
-    this.node = el("button", { type: "button", class: "update-pill", title: "A new version is ready", onclick: () => this.dialog() }, icon("up", "s"), this.label);
-    this.node.hidden = true;
+    this.label = el("span", { text: "Nyenz Edit" });
+    this.node = el("button", { type: "button", class: "update-pill quiet", title: "Check for updates", onclick: () => this.click() }, icon("up", "s"), this.label);
     setTimeout(() => this.refresh(), 1500);              // never slows the first screen
+    setInterval(() => this.refresh(), 10 * 60 * 1000);    // the app looks again every few hours; the page picks that up
     return this.node;
+  },
+  paint() {
+    const st = this.st;
+    if (!this.node || !st) return;
+    this.node.classList.toggle("quiet", !st.available);
+    this.label.textContent = st.available ? "Update to " + st.latest : "Version " + st.current;
+    this.node.title = st.available ? "Version " + st.latest + " is out. Click to update." : "You have version " + st.current + ". Click to check for a newer one.";
   },
   async refresh() {
     try { this.st = await api("/api/update"); } catch (e) { return; }
-    if (!this.node) return;
-    this.node.hidden = !this.st.available;
-    this.label.textContent = "Update available: " + this.st.latest;
+    this.paint();
+    if (this.st.available) {                             // say it once per new version
+      let seen = ""; try { seen = localStorage.getItem("ef.updateSeen") || ""; } catch (e) { /* ignore */ }
+      if (seen !== this.st.latest) { toast("Version " + this.st.latest + " is out. Click \"Update to " + this.st.latest + "\" at the top to get it."); try { localStorage.setItem("ef.updateSeen", this.st.latest); } catch (e) { /* ignore */ } }
+    }
+  },
+  async click() {
+    if (this.st && this.st.available) return this.dialog();
+    this.label.textContent = "Checking…";
+    try { this.st = await api("/api/update/check", { method: "POST", json: {} }); } catch (e) { this.paint(); toast(errText(e), true); return; }
+    this.paint();
+    if (this.st.available) return this.dialog();
+    toast(this.st.latest ? "You have the newest version (" + this.st.current + ")." : "Could not reach GitHub to check. Check your internet and try again.", !this.st.latest);
   },
   async dialog() {
     const st = this.st; if (!st) return;
     const bar = el("div", { class: "prog" }, el("i")), note = el("p", { class: "hint" });
     const body = [el("p", { class: "msg", text: "Version " + st.latest + " is ready (you have " + st.current + ")." + (st.size ? " Download: " + fmtSize(st.size) + "." : "") }),
-      el("p", { class: "hint", text: st.can_install ? "It downloads, waits until no video is being made, then the app closes, updates and opens again by itself. Your projects and videos stay." : "Updates install themselves only in the installed Windows app. Download the new installer from the release page." }), bar, note];
+      el("p", { class: "hint", text: st.can_install ? "One click: it downloads and checks the update, waits until no video is being made, then the app closes, updates and opens again by itself. Your projects and videos stay." : "Updates install themselves only in the installed Windows app. Download the new installer from the release page." }), bar, note];
     bar.hidden = true;
     let timer = null;
     const watch = async () => {
       let s; try { s = await api("/api/update"); } catch (e) { note.textContent = "Closing for the update…"; return; }
       const j = s.job; bar.hidden = j.state === "idle";
       bar.firstChild.style.width = Math.round((j.progress || 0) * 100) + "%";
-      note.textContent = { downloading: "Downloading… " + Math.round((j.progress || 0) * 100) + "%", ready: "Downloaded and checked.", waiting: "Waiting for your export to finish, then updating…", installing: "Updating: the app closes and opens again by itself…", failed: j.error }[j.state] || "";
-      if (j.state === "ready") { clearInterval(timer); await api("/api/update/install", { method: "POST", json: {} }).catch((e) => { note.textContent = errText(e); }); timer = setInterval(watch, 1000); }
+      note.textContent = { downloading: (j.note || "Downloading") + "… " + Math.round((j.progress || 0) * 100) + "%", ready: "Downloaded and checked.", waiting: "Waiting for your export to finish, then updating…", installing: "Updating: the app closes and opens again by itself…", failed: j.error }[j.state] || "";
+      if (j.state === "failed") { clearInterval(timer); closeBtn.hidden = false; }
+      if (j.state === "ready") { clearInterval(timer); await api("/api/update/install", { method: "POST", json: {} }).catch((e) => { note.textContent = errText(e); closeBtn.hidden = false; }); timer = setInterval(watch, 1000); }
     };
     const choice = await dialogBox("Update available", body, [["Skip this version", "skip", "ghost"], ["Later", null, "ghost"], [st.can_install ? "Update now" : "OK", "go", "primary"]]);
     if (choice === "skip") { await api("/api/update/skip", { method: "POST", json: { version: st.latest } }); this.refresh(); return; }
     if (choice !== "go" || !st.can_install) return;
     // keep a small progress window open while it downloads and installs
+    const scrim = el("div", { class: "scrim" });
+    const closeBtn = btn("Close", { cls: "ghost", onclick: () => { clearInterval(timer); box.remove(); scrim.remove(); } });
+    closeBtn.hidden = true;
     const box = el("div", { class: "dialog small", role: "dialog", "aria-label": "Updating" },
-      el("div", { class: "side-h" }, el("h2", { text: "Updating to " + st.latest })), el("div", { class: "pad" }, bar, note));
-    document.body.append(el("div", { class: "scrim" }), box);
+      el("div", { class: "side-h" }, el("h2", { text: "Updating to " + st.latest })), el("div", { class: "pad" }, bar, note, el("div", { class: "btns" }, closeBtn)));
+    document.body.append(scrim, box);
     bar.hidden = false;
-    try { await api("/api/update/download", { method: "POST", json: {} }); } catch (e) { note.textContent = errText(e); return; }
+    try { await api("/api/update/download", { method: "POST", json: {} }); } catch (e) { note.textContent = errText(e); closeBtn.hidden = false; return; }
     timer = setInterval(watch, 700);
   },
 };
