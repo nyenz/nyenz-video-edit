@@ -87,7 +87,7 @@ end;
 
 function ModelHome(): String;
 begin
-  Result := ExpandConstant('{userprofile}\.editforge\');
+  Result := ExpandConstant('{%USERPROFILE}\.editforge\');
 end;
 
 function ModelPresent(I: Integer): Boolean;
