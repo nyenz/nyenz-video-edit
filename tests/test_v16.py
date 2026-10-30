@@ -338,3 +338,56 @@ def test_captions_use_the_model_the_installer_put_in_place(tmp_path):
     assert modelpack.local_whisper(tmp_path) == str(folder)
     (folder / "model.bin").write_bytes(b"short")                                      # a broken copy is not used
     assert modelpack.local_whisper(tmp_path) is None
+
+
+def test_missing_models_are_downloaded_checked_and_only_then_put_in_place(tmp_path, monkeypatch):
+    import hashlib
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from editforge import modelpack
+    good, bad = b"model bytes" * 50, b"wrong bytes" * 50
+
+    class H(BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = good if self.path.endswith("good.bin") else bad
+            self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}/"
+    try:
+        monkeypatch.setattr(modelpack, "RELEASES", base)
+        sha = hashlib.sha256(good).hexdigest()
+        f1 = {"model": "t", "dir": "x", "name": "a.bin", "url": base + "good.bin", "size": len(good), "sha256": sha}
+        f2 = {"model": "t", "dir": "x", "name": "b.bin", "url": base + "bad.bin", "size": len(good), "sha256": sha}
+        monkeypatch.setattr(modelpack, "FILES", [f1, f2])
+        assert modelpack.missing(tmp_path) == [f1, f2]
+        seen = []
+        modelpack.download(f1, tmp_path, seen.append)
+        assert seen and seen[-1] == len(good) and modelpack.missing(tmp_path) == [f2]
+        with pytest.raises(ValueError):
+            modelpack.download(f2, tmp_path)                                   # wrong fingerprint: nothing is kept
+        assert not (tmp_path / "models" / "x" / "b.bin").exists() and not list((tmp_path / "models" / "x").glob("*.part"))
+        with pytest.raises(ValueError):
+            modelpack.download(dict(f1, url="http://elsewhere.example/a.bin"), tmp_path)   # only from the releases
+    finally:
+        srv.shutdown()
+
+
+def test_update_that_cannot_start_says_so_instead_of_hanging(tmp_path, monkeypatch):
+    import editforge.updater as U
+    u = U.Updater(tmp_path)
+    u.job = {"state": "ready", "progress": 1.0, "error": "", "path": str(tmp_path / "missing-setup.exe")}
+
+    def boom(*a, **k):
+        raise OSError("cannot run it")
+    monkeypatch.setattr(U.subprocess, "Popen", boom)
+    quit_called = []
+    u.install(lambda: False, lambda: quit_called.append(1))
+    for _ in range(100):
+        if u.status()["job"]["state"] == "failed":
+            break
+        time.sleep(0.02)
+    assert u.status()["job"]["state"] == "failed" and "could not be started" in u.status()["job"]["error"]
+    assert not quit_called                                                       # the app stays open

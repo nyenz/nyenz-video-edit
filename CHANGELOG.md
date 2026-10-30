@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.13.0
+* **Updates are one click and easy to see.** The top bar always shows your version. When a newer one is out, the button turns blue
+  and says **Update to x.y.z**, and a message says so once. Click it, then **Update now**: it downloads and checks the update,
+  waits until no video is being made, then the app closes, updates and opens again by itself. No downloading or unzipping by hand.
+  * Click the version any time to check right away. The app also checks each time it starts and every few hours while it is open.
+  * If an AI model is missing, the update gets it too, with the same progress bar.
+* Fixed: after an update the app could open **two** windows. Now it opens once.
+* Fixed: if the update could not start, the window kept saying "Updating" forever. Now it says what went wrong, and the app stays open.
 ## 1.12.0
 * **Setup now downloads the AI models, so nothing downloads later.** When you install Nyenz Edit, setup gets the
   **sound-splitting model** (76 MB) and the **captions model** (Whisper base, about 148 MB), checks the size and the SHA-256

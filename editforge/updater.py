@@ -1,7 +1,7 @@
 """Automatic updates for the installed Windows app.
 
-Once a day (in the background, never slowing the window) Nyenz Edit asks GitHub for the newest release.
-When there is a newer version the page shows a quiet "Update" button. Clicking it downloads
+Each time it starts (and every few hours while it is open; in the background, never slowing the window) Nyenz Edit asks
+GitHub for the newest release. The top bar always shows the version; when there is a newer one it turns into an "Update" button. Clicking it downloads
 NyenzEdit-Setup.exe, checks its size and SHA-256 fingerprint against the release, waits until no video is
 being made, then runs the installer silently: Nyenz Edit closes, updates and opens again by itself.
 Everything you made stays (it lives in your home folder, not in the program folder).
@@ -31,6 +31,7 @@ API = f"https://api.github.com/repos/{REPO}/releases/latest"
 ASSET = "NyenzEdit-Setup.exe"
 OLD_ASSET = "EditForge-Setup.exe"          # the name before 1.8.1 (releases carry both, so older apps can still update)
 DAY = 24 * 3600
+RECHECK = 3 * 3600                         # ask GitHub again after this long (at start and while the app stays open)
 TIMEOUT = 8
 
 
@@ -77,9 +78,9 @@ class Updater:
 
     # ---- checking
     def check(self, force: bool = False) -> Dict[str, Any]:
-        """Ask GitHub (at most once a day unless ``force``). Never raises."""
+        """Ask GitHub (at most every few hours unless ``force``). Never raises."""
         data = self._read()
-        if not force and time.time() - float(data.get("checked") or 0) < DAY:
+        if not force and time.time() - float(data.get("checked") or 0) < RECHECK:
             return self.status()
         try:
             rel = json.loads(self.fetch(API).decode("utf-8"))
@@ -106,7 +107,12 @@ class Updater:
         return self.status()
 
     def check_in_background(self) -> None:
-        threading.Thread(target=self.check, name="editforge-update-check", daemon=True).start()
+        """Check now, then again every few hours while the app is open."""
+        def run() -> None:
+            while True:
+                self.check()
+                time.sleep(RECHECK + 60)
+        threading.Thread(target=run, name="editforge-update-check", daemon=True).start()
 
     def status(self) -> Dict[str, Any]:
         data = self._read()
@@ -165,6 +171,7 @@ class Updater:
             if h.hexdigest() != sha:
                 raise ValueError("the download's fingerprint does not match the release")
             os.replace(part, dest)
+            self._get_models()
             self._set(state="ready", progress=1.0, path=str(dest))
         except Exception as exc:  # noqa: BLE001
             try:
@@ -172,6 +179,25 @@ class Updater:
             except OSError:
                 pass
             self._set(state="failed", error="The update could not be downloaded: " + str(exc)[:200])
+
+    def _get_models(self) -> None:
+        """A model that is missing (setup could not download it) is fetched now, with this window's progress bar,
+        so the quiet installer has nothing left to download and the app opens again quickly."""
+        if not can_install():
+            return
+        from . import modelpack
+        try:
+            todo = modelpack.missing(self.home)
+            total = sum(int(f["size"]) for f in todo) or 1
+            done = 0
+            for f in todo:
+                self._set(state="downloading", note="Getting the AI models")
+                base = done
+                modelpack.download(f, self.home, lambda n, b=base: self._set(progress=min(0.99, (b + n) / total)))
+                done += int(f["size"])
+        except Exception:  # noqa: BLE001 - not needed for the update itself: the app gets a model when it is first used
+            pass
+        self._set(note="")
 
     def install(self, busy: Callable[[], bool], quit_app: Callable[[], None]) -> Dict[str, Any]:
         """Run the downloaded installer silently once no video is being made, then close Nyenz Edit."""
@@ -186,8 +212,13 @@ class Updater:
                 time.sleep(2)
             self._set(state="installing")
             flags = 0x00000008 | 0x00000200 if os.name == "nt" else 0     # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-            subprocess.Popen([str(path), "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS",
-                              "/RESTARTAPPLICATIONS", "/RELAUNCH"], creationflags=flags, close_fds=True)
+            # /RELAUNCH opens the app again after the update. (No /RESTARTAPPLICATIONS: that would open a second window.)
+            try:
+                subprocess.Popen([str(path), "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/RELAUNCH"],
+                                 creationflags=flags, close_fds=True)
+            except OSError as exc:
+                self._set(state="failed", error="The update could not be started: " + str(exc)[:200])
+                return
             time.sleep(1.5)
             quit_app()
 

@@ -11,8 +11,10 @@ the part of the installer that downloads them). Every file has a size and a SHA-
 from __future__ import annotations
 
 import hashlib
+import os
+import urllib.request
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 
 RELEASES = "https://github.com/nyenz/nyenz-video-edit/releases/download/"
@@ -62,3 +64,44 @@ def local_whisper(home: Optional[Path] = None) -> Optional[str]:
     if all(_intact(base / str(f["name"]), int(f["size"])) for f in files):          # the size is enough here; setup checked the fingerprint
         return str(base)
     return None
+
+
+def _dest(f: Dict[str, object], home: Optional[Path]) -> Path:
+    from . import splitter
+    base = splitter.models_dir(home)
+    return (base / str(f["dir"]) if f["dir"] else base) / str(f["name"])
+
+
+def missing(home: Optional[Path] = None) -> List[Dict[str, object]]:
+    """The model files that are not in place yet (or have the wrong size)."""
+    return [f for f in FILES if not _intact(_dest(f, home), int(f["size"]))]
+
+
+def download(f: Dict[str, object], home: Optional[Path] = None, progress: Optional[Callable[[int], None]] = None) -> Path:
+    """Download one model file from GitHub, check its size and SHA-256, and only then put it in place."""
+    url = str(f["url"])
+    if not url.startswith(RELEASES):
+        raise ValueError("only model files from the Nyenz Edit releases are downloaded")
+    dest = _dest(f, home)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    part = dest.with_name(dest.name + ".part")
+    h, got = hashlib.sha256(), 0
+    try:
+        from .version import __version__
+        req = urllib.request.Request(url, headers={"User-Agent": f"NyenzEdit/{__version__}"})
+        with urllib.request.urlopen(req, timeout=60) as r, open(part, "wb") as fh:
+            for chunk in iter(lambda: r.read(1 << 20), b""):
+                fh.write(chunk)
+                h.update(chunk)
+                got += len(chunk)
+                if progress:
+                    progress(got)
+        if got != int(f["size"]) or h.hexdigest() != str(f["sha256"]):
+            raise ValueError(f"{f['name']}: the download does not match its size or fingerprint")
+        os.replace(part, dest)
+        return dest
+    finally:
+        try:
+            part.unlink()
+        except OSError:
+            pass
