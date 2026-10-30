@@ -7,6 +7,7 @@
 
 const S = {
   id: new URLSearchParams(location.search).get("p") || "",
+  mode: location.pathname.startsWith("/final") ? "final" : "edit",      // /edit: the Edit stage (sections), /final: the Final stage (sound, picture)
   proj: null, info: null, files: [], recipes: [],
   sel: new Set(), anchor: null,             // selected piece objects
   undo: [], redo: [], saveTimer: null, saving: Promise.resolve(),
@@ -533,6 +534,7 @@ function openPanel(name) {
   for (const b of document.querySelectorAll(".rail button")) b.classList.toggle("on", b.dataset.panel === name);
   for (const s of document.querySelectorAll("#left > section")) s.hidden = s.dataset.for !== name;
   if (name === "pattern") renderPattern();
+  if (name === "sections") renderVersionList();
   if (name === "text") renderTexts();
   if (name === "sound") Layers.open();
   if (name === "frame") Frame.renderPanel();
@@ -865,16 +867,15 @@ function renderInspector() {
   vol.addEventListener("change", () => onSel((p) => { p.volume = parseFloat(vol.value); p.mute = false; }));
   const muteSw = el("input", { type: "checkbox", class: "sw" }); muteSw.checked = all((p) => p.mute);
   muteSw.addEventListener("change", () => onSel((p) => { p.mute = muteSw.checked; }));
-  const basics = el("div", { class: "pad" },
-    el("div", { class: "field" }, el("span", { text: "Speed" }), chipsBox),
-    el("div", { class: "field" }, el("span", { text: "Loudness" }), vol),
-    el("label", { class: "swl" }, el("span", { text: "Mute" }), muteSw));
+  const basics = el("div", { class: "pad" }, el("div", { class: "field" }, el("span", { text: "Speed" }), chipsBox));
+  if (S.mode === "final") basics.append(el("div", { class: "field" }, el("span", { text: "Loudness" }), vol), el("label", { class: "swl" }, el("span", { text: "Mute" }), muteSw));
   if (sel.length === 1) basics.append(trimFields(sel[0]));
   basics.append(el("div", { class: "btns" },
     btn("Split", { icon: "split", onclick: splitAtPlayhead, title: "Split at the playhead (S)" }),
     btn("Duplicate", { icon: "copy", onclick: duplicateSelected }),
     btn("Remove", { icon: "trash", cls: "danger", onclick: removeSelected })));
   R.append(basics);
+  if (S.mode !== "final") { enhanceAll(R); return; }            // the Edit stage has no looks, colour, zoom or sound
   // extras, closed until wanted
   const looks = el("div", { class: "looks" });
   for (const [k, name, ic] of LOOKS) {
@@ -1013,9 +1014,10 @@ function exportDialog() {
 }
 
 // ================================================================== other projects (Media panel)
-function projItem(p) {
-  return el("div", { class: "item", onclick: () => { location.href = "/edit?p=" + p.id; } },
-    icon("layers"), el("div", { class: "t" }, el("b", { text: p.name }), el("small", { text: fmtTime(p.length, 0) + " · from " + p.source_name })), icon("chevr", "s"));
+function projItem(p, cur) {
+  const tag = p.version ? p.version.charAt(0).toUpperCase() + p.version.slice(1) + " · " : "";
+  return el("div", { class: "item" + (cur ? " on" : ""), onclick: () => { location.href = (p.stage === "final" ? "/final" : "/edit") + "?p=" + p.id; } },
+    icon("layers"), el("div", { class: "t" }, el("b", { text: p.name }), el("small", { text: tag + fmtTime(p.length, 0) + " · " + p.pieces + " sections" })), icon("chevr", "s"));
 }
 
 // ================================================================== open a project
@@ -1024,6 +1026,9 @@ async function openProject() {
   try { r = await api("/api/projects/" + S.id); }
   catch (e) { location.replace("/?msg=" + encodeURIComponent(errText(e))); return; }
   S.proj = r.project; S.info = r.info;
+  const stage = S.proj.stage === "final" ? "final" : "edit";
+  if (stage !== S.mode) { location.replace("/" + stage + "?p=" + S.id); return; }       // the project belongs to the other stage
+  applyStage();
   S.proj.pieces.forEach(fixPiece); if (!Array.isArray(S.proj.texts)) S.proj.texts = [];
   if (!Array.isArray(S.proj.steps)) S.proj.steps = [];
   for (const st of S.proj.steps) st.pieces.forEach(fixPiece);
@@ -1058,14 +1063,90 @@ async function openProject() {
   refreshAll();
   loadFiles().catch(() => {});
   api("/api/recipes").then((x) => { S.recipes = x.recipes; renderRecipes(); }).catch(() => {});
-  api("/api/projects").then(({ projects }) => { const pl = $("projList"); for (const p of projects.filter((q) => q.id !== S.id && !q.trashed && !q.missing).slice(0, 30)) pl.append(projItem(p)); if (!pl.children.length) pl.append(el("p", { class: "hint", text: "No other projects." })); }).catch(() => {});
-  openPanel(kept().length > 1 ? "pattern" : "cut");
+  api("/api/projects").then(({ projects }) => { const pl = $("projList"); for (const p of projects.filter((q) => q.id !== S.id && !q.trashed && !q.missing && (q.stage || "edit") === S.mode).slice(0, 30)) pl.append(projItem(p)); if (!pl.children.length) pl.append(el("p", { class: "hint", text: "No other projects." })); }).catch(() => {});
+  openPanel(S.mode === "edit" ? "sections" : "media");
   renderSteps();
   $("saveState").textContent = "Saved";
 }
 function banner(text, k) {
   const b = $("banner"); if (!text) { b.hidden = true; return; }
   b.hidden = false; $("bannerText").textContent = text; $("bannerBar").style.width = Math.round((k || 0) * 100) + "%";
+}
+
+// ================================================================== Edit stage: the three buttons
+async function saved() { if (S.saveTimer) saveNow(); await S.saving; }
+function secNote(t, bad) { const n = $("secNote"); n.textContent = t || ""; n.classList.toggle("bad", !!bad); }
+async function secCall(action) {
+  await saved();
+  return api("/api/projects/" + S.id + "/sections", { method: "POST", json: { action, pieces: S.proj.pieces, steps: S.proj.steps } });
+}
+/** Versions of the same clip: the clip itself and the Odd / Even versions made from it. */
+async function renderVersionList() {
+  const box = $("secVersionList");
+  try {
+    const { projects } = await api("/api/projects");
+    const root = S.proj.parent || S.id;
+    const rel = projects.filter((p) => !p.trashed && !p.missing && (p.stage || "edit") === "edit" && (p.id === root || p.parent === root));
+    box.replaceChildren();
+    if (rel.length > 1) {
+      box.append(el("p", { class: "hint", text: "Versions of this clip. Click one to edit it:" }));
+      for (const p of rel) box.append(projItem(p, p.id === S.id));
+    }
+  } catch (e) { /* the list is only a help */ }
+}
+async function secVersions() {
+  const b = $("secVersions"); b.disabled = true; secNote("Making the versions…");
+  try {
+    const r = await secCall("versions");
+    const odd = r.versions.find((v) => v.version === "odd"), even = r.versions.find((v) => v.version === "even");
+    secNote("Made '" + odd.name + "' (" + odd.sections + " sections) and '" + even.name + "' (" + even.sections + " sections). Click one below to edit it.");
+    await renderVersionList();
+  } catch (e) { secNote(errText(e), true); }
+  finally { b.disabled = false; }
+}
+async function secThin() {
+  if (locked()) { lockedNote(); return; }
+  const b = $("secThin"); b.disabled = true; secNote("Cutting…");
+  try {
+    const r = await secCall("thin");
+    r.pieces.forEach(fixPiece); r.steps.forEach((st) => st.pieces.forEach(fixPiece));
+    change(() => { S.proj.steps = r.steps; S.proj.pieces = r.pieces; S.proj.rule = r.rule; S.sel.clear(); S.t = 0; });
+    fitZoom();
+    secNote(r.sections - r.removed + " sections kept, " + r.removed + " taken out · video now " + fmtTime(finalTotal()) + ". Undo brings the old one back.");
+  } catch (e) { secNote(errText(e), true); }
+  finally { b.disabled = false; }
+}
+async function secScenes() {
+  if (locked()) { lockedNote(); return; }
+  const b = $("secScenes"), label = $("secScenesLabel"); b.disabled = true; secNote("");
+  try {
+    let r = await secCall("scenes");
+    while (r.state === "running") {
+      label.textContent = "Looking at the pictures… " + Math.round((r.progress || 0) * 100) + "%";
+      await new Promise((ok) => setTimeout(ok, 900));
+      r = await secCall("scenes");
+    }
+    r.pieces.forEach(fixPiece);
+    change(() => { S.proj.pieces = r.pieces; S.proj.rule = { interval: 0, group: 1, picks: [], action: "", hand: true }; S.sel.clear(); S.t = 0; });
+    fitZoom();
+    secNote(r.scenes + (r.scenes === 1 ? " scene" : " scenes") + " found. Each cut is at the end of a scene. Undo brings the old cut back.");
+  } catch (e) { secNote(errText(e), true); }
+  finally { b.disabled = false; label.textContent = "Separate scenes"; }
+}
+async function sendToFinal() {
+  if (!kept().length) { toast("The timeline is empty: put a section back first.", true); return; }
+  try {
+    await saved();
+    const r = await api("/api/projects/" + S.id + "/to-final", { method: "POST", json: {} });
+    toast("Sent '" + r.project.name + "' to Final. Opening it…");
+    setTimeout(() => { location.href = "/final?p=" + r.project.id; }, 500);
+  } catch (e) { toast(errText(e), true); }
+}
+/** Show only the tools of this page's stage. */
+function applyStage() {
+  for (const n of document.querySelectorAll("[data-stage]")) n.hidden = n.dataset.stage !== S.mode;
+  document.body.classList.toggle("stage-final", S.mode === "final");
+  document.body.classList.toggle("stage-edit", S.mode === "edit");
 }
 
 // ================================================================== wiring
@@ -1076,6 +1157,8 @@ function wire() {
   const chips = segmented([[1, "1 s"], [2, "2 s"], [3, "3 s"], [5, "5 s"], [10, "10 s"]], 2, (v) => { $("cutSec").value = String(v); });
   $("cutChips").append(chips);
   $("sceneCut").addEventListener("click", cutAtScenes);
+  $("secVersions").addEventListener("click", secVersions); $("secThin").addEventListener("click", secThin);
+  $("secScenes").addEventListener("click", secScenes); $("secFinal").addEventListener("click", sendToFinal);
   $("cutBtn").addEventListener("click", async () => {
     if (locked()) { lockedNote(); return; }
     const sec = parseFloat(String($("cutSec").value).replace(",", "."));
@@ -1170,9 +1253,10 @@ function wire() {
 }
 
 (async function init() {
-  topBar("/edit", [el("div", { class: "lenpill", title: "Length of the finished video" }, icon("clock", "s"), el("span", { text: "Video" }), el("b", { id: "topLen", text: "0:00.0" })),
-    btn("Export", { icon: "export", cls: "primary", onclick: () => exportDialog() })]);
+  topBar("/" + S.mode, [el("div", { class: "lenpill", title: "Length of the video" }, icon("clock", "s"), el("span", { text: "Video" }), el("b", { id: "topLen", text: "0:00.0" })),
+    S.mode === "final" ? btn("Export", { icon: "export", cls: "primary", onclick: () => exportDialog() })
+      : btn("Send to Final", { icon: "check", cls: "primary", title: "The Edit stage makes no video. Send this version on to Final.", onclick: sendToFinal })]);
   paintIcons(); enhanceAll();
-  if (!S.id) { location.replace("/"); return; }
+  if (!S.id) { location.replace("/?phase=" + S.mode); return; }
   wire(); await openProject();
 })();

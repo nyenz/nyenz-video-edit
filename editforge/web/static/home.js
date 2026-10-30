@@ -22,11 +22,17 @@ async function loadAll() {
   render();
 }
 const loadProjects = loadAll;                // older name, used by the actions below
-function itemsOf(phase) { return phase === "clips" ? H.clipsets : phase === "edit" ? H.projects : H.final; }
+const stageOf = (p) => (p.stage === "final" ? "final" : "edit");
+const pageOf = (p) => "/" + stageOf(p) + "?p=" + p.id;
+/** Edit: the edit projects. Final: the final projects, then the videos they made (their results). */
+function itemsOf(phase) {
+  return phase === "clips" ? H.clipsets : phase === "edit" ? H.projects.filter((p) => stageOf(p) === "edit")
+    : H.projects.filter((p) => stageOf(p) === "final").concat(H.final);
+}
 function shown() {
   const q = H.q.toLowerCase();
   const list = itemsOf(H.phase);
-  return list.filter((p) => (H.phase === "final" || !!p.trashed === H.trash) &&
+  return list.filter((p) => (p.job ? !H.trash : !!p.trashed === H.trash) &&
     (!q || (p.name || "").toLowerCase().includes(q) || (p.source_name || p.project_name || "").toLowerCase().includes(q)));
 }
 
@@ -46,14 +52,15 @@ function render() {
   renderPhases();
   const final = H.phase === "final";
   $("createRow").hidden = final;
+  const hasTrash = true;
   $("createTitle").textContent = H.phase === "clips" ? "New clip project" : "New edit project";
   $("createLine").textContent = H.phase === "clips" ? "Choose a movie, then mark as many clips as you like. Nothing is copied."
     : "Choose a video to cut into pieces. It is used where it is, nothing is copied.";
   $("fromClip").hidden = H.phase !== "edit";
-  const list = shown(), grid = $("grid"), all = itemsOf(H.phase), trashN = final ? 0 : all.filter((p) => p.trashed).length;
+  const list = shown(), grid = $("grid"), all = itemsOf(H.phase), trashN = all.filter((p) => p.trashed && !p.job).length;
   $("projTitle").textContent = H.trash ? "Trash" : { clips: "Clip projects", edit: "Edit projects", final: "Finished videos" }[H.phase];
   $("projCount").textContent = list.length ? String(list.length) : "";
-  $("trashBtn").hidden = final;
+  $("trashBtn").hidden = !hasTrash;
   $("trashCount").textContent = String(trashN); $("trashCount").hidden = !trashN || H.trash;
   $("trashBtn").classList.toggle("on", H.trash);
   $("trashLabel").textContent = H.trash ? "Back to projects" : "Trash";
@@ -62,13 +69,13 @@ function render() {
   grid.replaceChildren();
   if (!list.length) {
     const hint = H.trash || H.q ? "" : { clips: "Press New clip project and choose a movie.", edit: "Press New edit project, or open a made clip.",
-      final: "Videos you export from an Edit project appear here." }[H.phase];
+      final: "Press 'Send to Final' in an Edit project. Videos you export from a Final project appear here too." }[H.phase];
     grid.append(el("div", { class: "proj-empty" }, icon(H.trash ? "trash" : final ? "check" : "film", "l"),
-      el("b", { text: H.q ? "Nothing matches '" + H.q + "'." : H.trash ? "The trash is empty." : final ? "No finished videos yet." : "No projects yet." }),
+      el("b", { text: H.q ? "Nothing matches '" + H.q + "'." : H.trash ? "The trash is empty." : final ? "Nothing in Final yet." : "No projects yet." }),
       el("span", { class: "hint", text: hint })));
     return;
   }
-  for (const p of list) grid.append(H.phase === "clips" ? clipCard(p) : H.phase === "edit" ? card(p) : finalCard(p));
+  for (const p of list) grid.append(H.phase === "clips" ? clipCard(p) : p.job ? finalCard(p) : card(p));
 }
 function thumbBox(missing, extraCls) { return el("div", { class: "pthumb" + (missing ? " missing" : "") + (extraCls ? " " + extraCls : "") }); }
 function addImg(pic, url) {
@@ -110,9 +117,10 @@ function card(p) {
       p.trashed ? null : btn("Find it again", { icon: "link", cls: "sm", onclick: (e) => { e.stopPropagation(); relink(p); } }));
   } else if (p.has_video) addImg(pic, thumbUrl(p.source, p.thumb_at, true));
   else pic.append(icon("music", "l"));
+  if (p.version) pic.append(el("span", { class: "chip-tag top", text: p.version.charAt(0).toUpperCase() + p.version.slice(1) }));
   if (p.steps) pic.append(el("span", { class: "chip-tag", text: (p.steps + 1) + " steps" }));
   const edited = "Edited: " + fmtTime(p.length, 0) + " · " + p.pieces + " pieces" + (p.where ? "\n" + (p.linked ? "Used where it is: " : "Copy: ") + p.where : "");
-  const open = () => { if (H.trash) return; if (p.missing) relink(p); else location.href = "/edit?p=" + p.id; };
+  const open = () => { if (H.trash) return; if (p.missing) relink(p); else location.href = pageOf(p); };
   return cardShell(p, pic, [el("small", { class: "num", text: meta }),
     H.view === "list" ? el("small", { class: "num when", text: "Edited " + fmtTime(p.length, 0) + " · opened " + ago(p.opened) }) : null], open, edited);
 }
@@ -138,10 +146,10 @@ function ago(t) {
 
 // ------------------------------------------------------------------ the card menu
 function menuItems(p) {
-  if (H.phase === "final") {
+  if (p.job) {
     return [["Watch", "play", () => watch(p)],
       ["Save a copy", "download", () => { location.href = "/download/" + p.job + "?t=" + encodeURIComponent(TOKEN); }],
-      p.project_id ? ["Open its project", "layers", () => { location.href = "/edit?p=" + p.project_id; }] : null,
+      p.project_id ? ["Open its project", "layers", () => { location.href = "/final?p=" + p.project_id; }] : null,
       ["Edit it again", "edit", () => openInEditor(p.id)],
       ["Remove", "trash", async () => {
         if (!(await askYes("Remove '" + p.name + "'? The file is deleted from the app (copies you saved are kept).", "Remove", true))) return;
@@ -154,7 +162,7 @@ function menuItems(p) {
     return [["Open", "scissors", () => { location.href = "/clips?c=" + p.id; }], ["Rename", "edit", () => rename(base, p)],
       ["Move to trash", "trash", () => act(base, p, "trash")]];
   }
-  return [["Open", "layers", () => { if (p.missing) relink(p); else location.href = "/edit?p=" + p.id; }], ["Rename", "edit", () => rename(base, p)],
+  return [["Open", "layers", () => { if (p.missing) relink(p); else location.href = pageOf(p); }], ["Rename", "edit", () => rename(base, p)],
     ["Duplicate", "copy", () => act(base, p, "duplicate")], ["Move to trash", "trash", () => act(base, p, "trash")]];
 }
 function menu(p, anchor) {

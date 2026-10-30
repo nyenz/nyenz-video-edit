@@ -14,19 +14,46 @@
 <!-- The editing suite -->
 <div id="suite" class="suite" hidden>
   <nav class="rail" aria-label="Tools">
+    <button data-panel="sections" data-stage="edit" title="The three buttons: sections, thin out, scenes"><i data-ic="pattern"></i>Sections</button>
     <button data-panel="media" title="Video and project"><i data-ic="film"></i>Media</button>
+    <hr data-stage="edit">
+    <span class="later" data-stage="edit">More</span>
     <button data-panel="cut" title="Cut into pieces"><i data-ic="scissors"></i>Cut</button>
-    <button data-panel="pattern" title="Keep or remove by a pattern"><i data-ic="pattern"></i>Pattern</button>
-    <hr>
-    <span class="later">Finish</span>
-    <button data-panel="audio" title="Music"><i data-ic="music"></i>Audio</button>
-    <button data-panel="sound" title="Clean up the sound: noise, voices, balance"><i data-ic="sliders"></i>Sound</button>
-    <button data-panel="format" title="Shape and transitions"><i data-ic="ratio"></i>Format</button>
-    <button data-panel="frame" title="Shape, background layer, size, position, turn and mask"><i data-ic="crop"></i>Frame</button>
-    <button data-panel="text" title="Words and captions"><i data-ic="type"></i>Text</button>
+    <button data-panel="pattern" data-stage="edit" title="Keep or remove by a pattern"><i data-ic="pattern"></i>Pattern</button>
+    <hr data-stage="final">
+    <span class="later" data-stage="final">Finish</span>
+    <button data-panel="audio" data-stage="final" title="Music"><i data-ic="music"></i>Audio</button>
+    <button data-panel="sound" data-stage="final" title="Clean up the sound: noise, voices, balance"><i data-ic="sliders"></i>Sound</button>
+    <button data-panel="format" data-stage="final" title="Shape and transitions"><i data-ic="ratio"></i>Format</button>
+    <button data-panel="frame" data-stage="final" title="Shape, background layer, size, position, turn and mask"><i data-ic="crop"></i>Frame</button>
+    <button data-panel="text" data-stage="final" title="Words and captions"><i data-ic="type"></i>Text</button>
   </nav>
 
   <aside class="side left" id="left" aria-label="Tool options">
+    <!-- Sections: the Edit stage's three buttons -->
+    <section data-for="sections" hidden>
+      <div class="side-h"><h2>Sections</h2></div>
+      <div class="pad">
+        <div class="steps" data-steps></div>
+        <div class="box sec-step">
+          <p class="hint"><b>1.</b> Cut the clip into 2 second sections and make two versions: Odd (sections 1, 3, 5 …) and Even (2, 4, 6 …). Nothing is made yet: you can still move and stretch every section.</p>
+          <button id="secVersions" class="btn primary wide"><i data-ic="pattern" class="s"></i><span>Make Odd and Even versions</span></button>
+          <div id="secVersionList" class="list"></div>
+        </div>
+        <div class="box sec-step">
+          <p class="hint"><b>2.</b> On the version you have open: 1 second sections, and every 4th one taken out (1 2 3 <i>4</i> 5 6 7 <i>8</i> …). The rest is joined up.</p>
+          <button id="secThin" class="btn primary wide"><i data-ic="scissors" class="s"></i><span>1 s sections, remove every 4th</span></button>
+        </div>
+        <div class="box sec-step">
+          <p class="hint"><b>3.</b> Look at the pictures of this video, as it is now, and cut where a new scene begins. Joins that put two different scenes together count too.</p>
+          <button id="secScenes" class="btn primary wide"><i data-ic="split" class="s"></i><span id="secScenesLabel">Separate scenes</span></button>
+        </div>
+        <div id="secNote" class="note" aria-live="polite"></div>
+        <button id="secFinal" class="btn wide"><i data-ic="check" class="s"></i><span>Send this version to Final</span></button>
+        <p class="hint">Undo (Ctrl+Z) takes back any of these. Sections can be removed, moved and stretched by hand in the timeline until you send it on.</p>
+      </div>
+    </section>
+
     <!-- Media -->
     <section data-for="media">
       <div class="side-h"><h2>Media</h2></div>

@@ -607,3 +607,11 @@ label.swl.inline { padding: 0; gap: 8px; font-size: 12.5px; }
 .transport .tr-right { flex-shrink: 0; }
 .suite.clips .transport .tc { min-width: 118px; }
 .suite.clips .transport { gap: 6px; padding-left: 14px; padding-right: 14px; }
+
+/* Edit stage: the Sections panel */
+.sec-step .hint { margin: 0; }
+.sec-step .hint i { font-style: normal; color: var(--accent-2, #ffb454); font-weight: 650; }
+.note.bad { color: #ff8a7a; }
+#secNote { min-height: 18px; }
+#secVersionList:empty { display: none; }
+#secVersionList { display: flex; flex-direction: column; gap: 6px; }
