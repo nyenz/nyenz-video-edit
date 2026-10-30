@@ -14,7 +14,10 @@
 <div id="suite" class="suite clips">
   <!-- left: the clips of this project -->
   <aside class="side left" aria-label="Clips">
-    <div class="side-h"><h2>Clips</h2><span class="note num" id="clipTotals"></span></div>
+    <div class="side-h"><h2>Clips</h2><span class="note num" id="clipTotals"></span><span class="grow"></span>
+      <button class="btn ghost icon sm" id="bUndo" type="button" title="Undo (Ctrl+Z)"><i data-ic="undo"></i></button>
+      <button class="btn ghost icon sm" id="bRedo" type="button" title="Redo (Ctrl+Y)"><i data-ic="redo"></i></button>
+      <button class="btn ghost icon sm" id="bKeys" type="button" title="Keys (?)"><i data-ic="list"></i></button></div>
     <div class="pad">
       <label class="field"><span>Project name</span><input id="csName" class="input" maxlength="80"></label>
       <button class="btn wide" id="newClip" type="button" title="Start a new clip: mark a part, then press Add as new clip"><i data-ic="plus" class="s"></i><span>New clip</span></button>
@@ -23,6 +26,7 @@
     <div class="make-box" id="makeBox">
       <div class="stat"><span class="lbl" id="makeWhat">Not made yet</span><b class="num" id="makeLen"></b></div>
       <div id="makeProg" class="prog" hidden><i></i></div>
+      <div class="field" id="qualBox"><span>File size of the clips</span><div id="mQual"></div></div>
       <button class="btn primary wide" id="makeBtn" type="button"><i data-ic="export" class="s"></i><span id="makeLabel">Save &amp; make clips</span></button>
       <button class="btn wide" id="freeBtn" type="button" hidden><i data-ic="disk" class="s"></i><span>Free up the movie</span></button>
       <span id="makeNote" class="note" aria-live="polite"></span>
@@ -50,7 +54,10 @@
       </div>
       <div class="row tr-right">
         <button class="btn ghost icon" id="tMute" title="Sound on / off"><i data-ic="vol"></i></button>
-        <button class="btn" id="playClip" title="Play the chosen clip, all its parts in order (P)"><i data-ic="play" class="s"></i><span>Play clip</span></button>
+        <span class="note">Play</span>
+        <button class="btn" id="playClip" title="Play the chosen clip, all its parts in order (P)"><i data-ic="play" class="s"></i><span>Clip</span></button>
+        <button class="btn" id="playCtx" title="Play the chosen part with 3 seconds before and after it (C)"><i data-ic="play" class="s"></i><span>With context</span></button>
+        <button class="btn" id="playAll" title="Play every clip, one after the other (Shift+P)"><i data-ic="play" class="s"></i><span>All clips</span></button>
       </div>
     </div>
   </main>
@@ -75,37 +82,27 @@
       </div>
       <span id="markNote" class="note" aria-live="polite"></span>
       <div class="field" id="partsBox" hidden><span>Parts of this clip, played in this order</span><div id="parts" class="list"></div></div>
-      <p class="hint">A clip can have parts from different places in the movie, for example a scene, then a moment from later. Tip: press <b>Find scenes</b> under the timeline, then click a scene to mark it.</p>
     </div>
-    <div class="pad" data-tab="video" hidden>
-      <p class="hint" id="noClipV">Choose or add a clip first.</p>
-      <div id="videoBox">
-        <div class="field"><span>Brightness <b class="num" id="vBriV"></b></span><input type="range" id="vBri" class="rng" min="-0.5" max="0.5" step="0.01"></div>
-        <div class="field"><span>Contrast <b class="num" id="vConV"></b></span><input type="range" id="vCon" class="rng" min="0.5" max="2" step="0.01"></div>
-        <div class="field"><span>Colour <b class="num" id="vSatV"></b></span><input type="range" id="vSat" class="rng" min="0" max="2" step="0.01"></div>
-        <div class="field"><span>Speed <b class="num" id="vSpdV"></b></span><div id="vSpeed"></div></div>
-        <div class="field"><span>Shape</span><select id="vShape">
-          <option value="original">Original</option><option value="vertical">Tall 9:16 (cut to fit)</option><option value="vertical_blur">Tall 9:16 with blurred sides</option>
-          <option value="square">Square 1:1 (cut to fit)</option><option value="square_blur">Square 1:1 with blurred sides</option></select></div>
-        <button class="btn ghost" id="vReset" type="button"><i data-ic="restore" class="s"></i><span>Reset picture</span></button>
-        <p class="hint">Brightness, contrast and colour show live in the viewer. The shape shows in the made clip.</p>
-      </div>
-    </div>
-    <div class="pad" data-tab="sound" hidden>
-      <p class="hint" id="noClipS">Choose or add a clip first.</p>
-      <div id="soundBox">
-        <label class="swl">Sound off <input type="checkbox" id="aMute" class="sw"></label>
-        <div class="field"><span>Volume <b class="num" id="aVolV"></b></span><input type="range" id="aVol" class="rng" min="0" max="4" step="0.05"></div>
-        <div class="grid2">
-          <label class="field"><span>Fade in (s)</span><input id="aFin" class="input" inputmode="decimal"></label>
-          <label class="field"><span>Fade out (s)</span><input id="aFout" class="input" inputmode="decimal"></label>
+    <div class="pad" data-tab="tools" hidden>
+      <p class="hint" id="noClipT">Choose or add a clip first.</p>
+      <div id="toolsBox">
+        <div class="field"><span>Move the edges of the chosen part</span><div id="nStep"></div></div>
+        <div class="grid2 nudge">
+          <button class="btn" id="nSa" type="button" title="Start earlier: adds time before"><i data-ic="stepb" class="s"></i><span>Start earlier</span></button>
+          <button class="btn" id="nSb" type="button" title="Start later: cuts time from the front"><i data-ic="stepf" class="s"></i><span>Start later</span></button>
+          <button class="btn" id="nEa" type="button" title="End earlier: cuts time from the back"><i data-ic="stepb" class="s"></i><span>End earlier</span></button>
+          <button class="btn" id="nEb" type="button" title="End later: adds time after"><i data-ic="stepf" class="s"></i><span>End later</span></button>
         </div>
-        <div class="field"><span>Remove noise</span><div id="aNoise"></div></div>
-        <label class="swl">Clearer voices <input type="checkbox" id="aVoice" class="sw"></label>
-        <label class="swl">Even out quiet and loud <input type="checkbox" id="aComp" class="sw"></label>
-        <div class="field"><span>Bass <b class="num" id="aBassV"></b></span><input type="range" id="aBass" class="rng" min="-12" max="12" step="1"></div>
-        <div class="field"><span>Treble <b class="num" id="aTrebV"></b></span><input type="range" id="aTreb" class="rng" min="-12" max="12" step="1"></div>
-        <p class="hint">Volume up to 100% and Sound off are heard live; the rest is in the made clip.</p>
+        <span class="note" id="nNote"></span>
+        <div class="field"><span>Cut</span>
+          <button class="btn wide" id="tSplit" type="button" title="Split the clip into two clips where the playhead is (S)"><i data-ic="scissors" class="s"></i><span>Split at the playhead</span></button>
+          <button class="btn wide" id="tCutOut" type="button" title="Take the marked part out of the clip (X)"><i data-ic="trash" class="s"></i><span>Cut out the marked part</span></button>
+        </div>
+        <div class="field"><span>Combine</span>
+          <button class="btn wide" id="tJoin" type="button" title="Put another clip's parts after this clip's"><i data-ic="combine" class="s"></i><span>Join another clip to this one</span></button>
+          <button class="btn wide" id="tDup" type="button" title="Make a copy of this clip (D)"><i data-ic="copy" class="s"></i><span>Duplicate this clip</span></button>
+        </div>
+        <span class="note" id="toolNote" aria-live="polite"></span>
       </div>
     </div>
   </aside>

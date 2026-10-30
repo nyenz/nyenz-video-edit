@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.9.0
+* **Clips page made simple (stage 1).** It does one job: take clips out of a long movie. The Video and Sound tabs are gone from this
+  page (they come back in the next stages). Existing clip projects keep opening, and clips you already set up keep their settings.
+* **Clip tools** (right side, **Tools** tab): move the start or the end of a part earlier or later by 0.1, 1 or 5 seconds,
+  **Split at the playhead** (one clip becomes two), **Cut out the marked part** (the middle is taken out), **Join another clip**,
+  **Duplicate**. Pick the part you want to change in the **Parts** tab or by clicking it on the timeline.
+* **Names** come by themselves from the movie: *Movie name - Clip 01*, *Clip 02* ... Double-click a name to change it.
+* **Three ways to play:** the clip, the chosen part **with 3 seconds around it**, or **all clips** one after the other.
+* **Undo and redo** for every change (buttons at the top left, Ctrl+Z, Ctrl+Y). A list of all keys: press **?**.
+* **File size** of the made clips: Best, Good or Small. When the clips are made, the page shows how much room they take.
+* **Timeline made safer:** the pictures no longer flicker while you scroll; marks snap to a scene only when you are close
+  (about 8 pixels), so exact marks are possible when zoomed in; dragging near the edge scrolls the timeline; the mouse wheel
+  no longer stops vertical scrolling; the playhead can't be lost; a clip that ends where the movie ends plays and stops correctly;
+  after clicking a button the keys (Space, I, O ...) keep working. Tested in a real browser on a 3-minute and a 2-hour movie.
+
 ## 1.8.1
 * **Proper Nyenz Edit branding on Windows.** The program is now **NyenzEdit.exe** and the installer **NyenzEdit-Setup.exe**, with the
   Nyenz Edit icon in every size Windows uses (16 to 256 px): the installer file, the program, the desktop and Start-menu icons, the
