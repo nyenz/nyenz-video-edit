@@ -1,0 +1,53 @@
+# Copies the captions model (Whisper "base", MIT licence, from Systran/faster-whisper-base) to a release file (tag caption-model-1),
+# pinned to one exact version and checked against its known fingerprints. The Windows installer downloads these files from GitHub
+# during setup, so nothing has to be downloaded later when someone uses captions.
+name: Captions model
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/caption-model.yml
+
+permissions:
+  contents: write
+
+jobs:
+  copy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: caption-model-1
+      COMMIT: ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66
+      MODEL_SHA256: d01c3014881c9c6f3133c182f3d2887eb6ca1c789a7538c5c007196857a0a6a9
+      CONFIG_BLOB: 867cf1a0fece1394e01d55e287ba2f09a577c046
+      TOKENIZER_BLOB: 7818adb6de9fa3064d3ff81226fdd675be1f6344
+      VOCAB_BLOB: c9074644d9d1205686f16d411564729461324b75
+    steps:
+      - name: Is it already published?
+        id: have
+        run: |
+          n=$(gh release view "$TAG" --repo "${{ github.repository }}" --json assets --jq '.assets | length' 2>/dev/null || echo 0)
+          if [ "$n" -ge 5 ]; then echo "have=yes" >> "$GITHUB_OUTPUT"; else echo "have=no" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Download and check
+        if: steps.have.outputs.have == 'no'
+        run: |
+          base="https://huggingface.co/Systran/faster-whisper-base/resolve/$COMMIT"
+          for f in config.json model.bin tokenizer.json vocabulary.txt; do curl -fsSL --retry 3 -o "$f" "$base/$f"; done
+          echo "$MODEL_SHA256  model.bin" | sha256sum -c -
+          [ "$(git hash-object config.json)" = "$CONFIG_BLOB" ]
+          [ "$(git hash-object tokenizer.json)" = "$TOKENIZER_BLOB" ]
+          [ "$(git hash-object vocabulary.txt)" = "$VOCAB_BLOB" ]
+          for f in config.json model.bin tokenizer.json vocabulary.txt; do mv "$f" "whisper-base-$f"; done
+          sha256sum whisper-base-* | tee SHA256SUMS
+          ls -l whisper-base-*
+
+      - name: Publish
+        if: steps.have.outputs.have == 'no'
+        run: |
+          notes="The captions model (OpenAI Whisper base, in the faster-whisper format by Systran, MIT licence). The Nyenz Edit installer downloads these files during setup and checks each fingerprint (SHA-256). This is not an app version: there is nothing to install from here."
+          gh release create "$TAG" whisper-base-* SHA256SUMS --repo "${{ github.repository }}" --target "${{ github.event.repository.default_branch }}" --prerelease --title "Captions model 1 (used by Nyenz Edit)" --notes "$notes"
+          { echo "### Captions model published"; cat SHA256SUMS; } >> "$GITHUB_STEP_SUMMARY"
