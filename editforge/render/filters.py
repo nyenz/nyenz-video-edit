@@ -294,34 +294,78 @@ class ItemBuilder:
         g.add_raw(f"[{bg}]split=2[{bg1}][{bg2}]")
         sharp, alpha, cut, res = g.label("ks"), g.label("km"), g.label("kc"), g.label("kr")
         g.add_raw(f"[{bg1}][{fg}]overlay=x='(W-w)/2+{dx:.1f}':y='(H-h)/2+{dy:.1f}':format=auto,format=yuva420p[{sharp}]")
-        g.add_raw(f"{self.mask_source(fr['mask'], W, H, n)}[{alpha}]")
+        pcx, pcy = W / 2 + dx, H / 2 + dy
+        rect = {"l": pcx - fw / 2, "r": pcx + fw / 2, "t": pcy - fh / 2, "b": pcy + fh / 2, "W": W, "H": H,
+                "rot": rot if abs(rot) > 0.01 else 0.0, "cx": pcx, "cy": pcy, "hw": fw / 2, "hh": fh / 2}
+        g.add_raw(f"{self.mask_source(fr['mask'], W, H, n, rect)}[{alpha}]")
         g.add_raw(f"[{sharp}][{alpha}]alphamerge[{cut}]")
         g.add_raw(f"[{bg2}][{cut}]overlay=0:0:format=auto,format=yuv420p[{res}]")
         return res, Dims(W, H)
 
-    def mask_source(self, m: Dict[str, Any], W: int, H: int, n: int) -> str:
-        """A grey picture (white = the sharp picture shows) drawn ONCE and repeated for ``n`` frames."""
+    def mask_source(self, m: Dict[str, Any], W: int, H: int, n: int, rect: Optional[Dict[str, Any]] = None) -> str:
+        """A grey picture (white = the sharp picture shows) drawn ONCE and repeated for ``n`` frames.
+
+        ``rect`` is where the sharp picture sits ({l, t, r, b, rot, cx, cy, hw, hh}); with a soft edge the picture's own
+        inner borders fade out too, so no thin line is left where the picture simply stops."""
         cx, cy = float(m.get("x", 0.5)) * W, float(m.get("y", 0.5)) * H
         hw, hh = max(1.0, float(m.get("w", 0.5)) * W / 2), max(1.0, float(m.get("h", 0.3)) * H / 2)
         shape = m.get("shape")
+        turn = math.radians(float(m.get("rot", 0.0) or 0.0))
+        if abs(turn) > 1e-4:
+            c, s = math.cos(turn), math.sin(turn)
+            u = f"((X-{cx:.1f})*{c:.6f}+(Y-{cy:.1f})*{s:.6f})"
+            v = f"(-(X-{cx:.1f})*{s:.6f}+(Y-{cy:.1f})*{c:.6f})"
+        else:
+            u, v = f"(X-{cx:.1f})", f"(Y-{cy:.1f})"
         if shape == "rect":
-            e = f"lte(abs(X-{cx:.1f}),{hw:.1f})*lte(abs(Y-{cy:.1f}),{hh:.1f})"
+            e = f"lte(abs({u}),{hw:.1f})*lte(abs({v}),{hh:.1f})"
         elif shape == "circle":
-            e = f"lte(pow((X-{cx:.1f})/{hw:.1f},2)+pow((Y-{cy:.1f})/{hh:.1f},2),1)"
+            e = f"lte(pow({u}/{hw:.1f},2)+pow({v}/{hh:.1f},2),1)"
         elif shape == "split":
-            e = f"gte(Y,{cy:.1f})"
+            e = f"gte({v},0)"
         elif shape == "vstrip":
-            e = f"lte(abs(X-{cx:.1f}),{hw:.1f})"
+            e = f"lte(abs({u}),{hw:.1f})"
         else:                                                   # "strip": a band across the whole width
-            e = f"lte(abs(Y-{cy:.1f}),{hh:.1f})"
+            e = f"lte(abs({v}),{hh:.1f})"
         if m.get("invert"):
             e = f"1-{e}"
         chain = (f"color=c=black:s={W}x{H}:r={fps_str(self.F)},trim=end_frame=1,format=gray,geq=lum='255*({e})'")
         feather = float(m.get("feather", 0.0))
         if feather > 0.5:
-            chain += f",gblur=sigma={feather / 100.0 * min(W, H) * 0.08:.2f}:steps=3"
+            sigma = feather / 100.0 * min(W, H) * 0.08
+            chain += f",gblur=sigma={sigma:.2f}:steps=3"
+            if rect:
+                chain += f",geq=lum='lum(X,Y)*({self._edge_fade(rect, 2.0 * sigma)})'"
         chain += f",loop=loop={max(0, n - 1)}:size=1:start=0,setpts=N/({self.Ff:.9f}*TB)"
         return chain
+
+    @staticmethod
+    def _edge_fade(rect: Dict[str, Any], r: float) -> str:
+        """0 at the sharp picture's own border, 1 a little way inside (smooth). Sides that reach the canvas edge are left alone."""
+        r = max(1.0, r)
+        ramp = lambda d: f"(min(max({d}/{r:.2f},0),1))"
+        if rect.get("rot"):
+            c, s = math.cos(math.radians(rect["rot"])), math.sin(math.radians(rect["rot"]))
+            u = f"((X-{rect['cx']:.1f})*{c:.6f}+(Y-{rect['cy']:.1f})*{s:.6f})"
+            v = f"(-(X-{rect['cx']:.1f})*{s:.6f}+(Y-{rect['cy']:.1f})*{c:.6f})"
+            d = f"min({rect['hw']:.1f}-abs({u}),{rect['hh']:.1f}-abs({v}))"
+        else:
+            parts = []
+            if rect["l"] > 1.0:
+                parts.append(f"(X-{rect['l']:.1f})")
+            if rect["r"] < rect["W"] - 1.0:
+                parts.append(f"({rect['r']:.1f}-X)")
+            if rect["t"] > 1.0:
+                parts.append(f"(Y-{rect['t']:.1f})")
+            if rect["b"] < rect["H"] - 1.0:
+                parts.append(f"({rect['b']:.1f}-Y)")
+            if not parts:
+                return "1"
+            d = parts[0]
+            for q in parts[1:]:
+                d = f"min({d},{q})"
+        t = ramp(d)
+        return f"{t}*{t}*(3-2*{t})"
 
     def _crop(self, seg: Segment, dims: Dims) -> Optional[Tuple[int, int, int, int]]:
         c = seg.crop

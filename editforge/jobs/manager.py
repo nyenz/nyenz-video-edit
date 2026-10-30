@@ -131,7 +131,7 @@ class JobManager:
                 from ..project import plan_project
                 self.store.update(job_id, message="Reading your project")
                 plan = plan_project(json.loads(job["script"]), job["input_path"], music_path=opts.get("music_path"),
-                                    captions_path=opts.get("captions_path"),
+                                    layers=opts.get("layers"), captions_path=opts.get("captions_path"),
                                     preview=bool(opts.get("preview")), output_path=job["output_path"] or None, cancel=cancel,
                                     log=lambda t: self.store.update(job_id, message=t), stems_home=opts.get("stems_home"))
             else:
@@ -154,7 +154,12 @@ class JobManager:
                                   max_memory_mb=float(opts.get("max_memory_mb") or default_memory_mb()), resume=True, cancel=cancel,
                                   on_progress=on_progress, log=lambda t: self.store.update(job_id, message=t))
             result = render(plan, ropts)
-            self.store.update(job_id, status="done", progress=1.0, phase="done", message="Finished", eta=0.0, result=result.to_dict(),
+            done = result.to_dict()
+            if opts.get("kind") == "project":                    # the real loudness of the finished file, measured from the file itself
+                from ..analysis.loudness import measure_file
+                self.store.update(job_id, message="Measuring the loudness")
+                done["loudness"] = measure_file(result.output_path, cancel=cancel)
+            self.store.update(job_id, status="done", progress=1.0, phase="done", message="Finished", eta=0.0, result=done,
                               output_path=result.output_path)
         except Cancelled:
             self.store.update(job_id, status="cancelled", message="Cancelled. Finished pieces are kept, so Resume continues where it stopped.")

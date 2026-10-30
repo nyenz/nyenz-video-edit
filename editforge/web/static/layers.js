@@ -72,6 +72,23 @@ const Layers = (() => {
     r.mute.replaceChildren(icon(g === 0 ? "mute" : "vol", "s"));
     r.row.classList.toggle("off", g === 0);
   }
+  /** An honest report of how clean the split is: how the sound is shared, how well the layers add back, and what an AI split cannot promise. */
+  function paintQuality(info) {
+    const box = $("lyQuality"); box.replaceChildren();
+    if (!info) return;
+    const q = info.split && info.split.quality;
+    box.append(el("b", { text: "How clean is this split?" }));
+    if (q) {
+      const rate = q.rebuild_db >= 20 ? ["good", "The three layers add back to the original very closely."]
+        : q.rebuild_db >= 12 ? ["ok", "The layers add back to the original, with small differences."]
+          : ["warn", "The layers do not add back cleanly. Listen to each one before you use it."];
+      box.append(el("div", { class: "ly-share" }, ...NAMES.map((n) => el("span", { class: "ly-chip" }, el("i", { class: "ly-" + n }), el("small", { text: TITLE[n] + " " + Math.round(q.share[n]) + "%" })))));
+      box.append(el("p", { class: "note " + rate[0], text: rate[1] + " (" + q.rebuild_db.toFixed(0) + " dB)" }));
+      const tiny = NAMES.filter((n) => q.share[n] < 3);
+      if (tiny.length) box.append(el("p", { class: "note", text: tiny.map((n) => TITLE[n]).join(" and ") + (tiny.length > 1 ? " hold" : " holds") + " almost nothing: there probably was none in this part." }));
+    } else box.append(el("p", { class: "note", text: "This split was made before the check existed. Press Split again to get the report." }));
+    box.append(el("p", { class: "note", text: info.quality_note || "" }));
+  }
   function paint() {
     if (!S.proj) return;
     const ready = !!(L.info && L.info.split);
@@ -83,6 +100,7 @@ const Layers = (() => {
       const r = L.rows[n]; if (!r) continue;
       r.slider.value = String(Math.round(gainOf(n) * 100)); r.val.textContent = pct(gainOf(n)); paintRange(r.slider); paintMute(n);
     }
+    paintQuality(ready ? L.info : null);
     const g = NAMES.map(gainOf);
     for (const c of $("lyPresets").children) { const p = PRESETS.find(([l]) => l === c.textContent); c.classList.toggle("on", !!p && p[1].every((v, i) => Math.abs(v - g[i]) < 0.001)); }
     const info = L.info;

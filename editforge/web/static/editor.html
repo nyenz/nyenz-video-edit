@@ -114,11 +114,11 @@
       <div class="side-h"><h2>Audio</h2></div>
       <div class="pad">
         <label class="swl">Keep the video's own sound <input type="checkbox" id="sOrig" class="sw"></label>
-        <div class="field"><span>Music</span><select id="sMusic"></select></div>
-        <button id="musicAdd" class="btn"><i data-ic="upload" class="s"></i><span>Add a music file</span></button>
+        <div class="field"><span>Music layers</span></div>
+        <div id="musicLayers" class="mlayers"></div>
+        <button id="musicAdd" class="btn"><i data-ic="upload" class="s"></i><span>Add music</span></button>
         <div id="musicProg" class="prog" hidden><i></i></div>
-        <div class="field"><span>Music loudness</span><input type="range" id="sMusicVol" class="rng" min="0" max="1" step="0.05"></div>
-        <label class="swl">Music gets quieter when someone talks <input type="checkbox" id="sDuck" class="sw"></label>
+        <p class="hint">Each layer has its own loudness, mute (M) and solo (S). The finished video is always set to YouTube's standard at the very end, on everything together, so the layers set how loud things are next to each other. Music never gets quieter by itself when someone talks.</p>
         <div id="audioNote" class="note" aria-live="polite"></div>
       </div>
       <details class="sec"><summary><i data-ic="music"></i>Cut on the beat<i data-ic="chev" class="chev"></i></summary>
@@ -134,6 +134,11 @@
     <section data-for="sound" hidden>
       <div class="side-h"><h2>Sound</h2></div>
       <div class="pad">
+          <div class="box loud-box">
+            <div class="row"><i data-ic="sliders" class="s"></i><b>Final loudness</b></div>
+            <p class="hint">Every finished video is set to YouTube's standard: <b>-14 LUFS</b>, with no peak above <b>-1 dB</b>. This is done last, on everything together: the video's sound and all your music layers. The exact number measured from the finished file is shown after the export, and a live meter runs while you watch it.</p>
+            <button id="checkMix" class="btn wide" type="button"><i data-ic="eye" class="s"></i><span>Check the mix (quick preview)</span></button>
+          </div>
           <div class="layers" id="lyBox">
             <div class="layers-head"><i data-ic="layers"></i><b>Voices, music and effects</b></div>
             <p class="hint" id="lyHint"></p>
@@ -147,6 +152,7 @@
               <div class="ly-prog-row"><span class="note" id="lyProgNote"></span><button class="btn ghost" id="lyCancel" type="button">Cancel</button></div>
             </div>
             <div id="lyMix" hidden>
+              <div id="lyQuality" class="ly-quality"></div>
               <div class="chips" id="lyPresets"></div>
               <div id="lyRows"></div>
               <button class="btn ghost" id="lyAgain" type="button"><i data-ic="restore" class="s"></i><span>Split again</span></button>
@@ -156,7 +162,6 @@
           <div class="field"><span>Voices</span><select id="sVocals"><option value="keep">Keep as they are</option><option value="remove">Remove voices (keep the music)</option><option value="voice">Voices only (drop the music)</option></select></div>
           <label class="swl">Make voices clearer <input type="checkbox" id="sBoost" class="sw"></label>
           <label class="swl">Balance quiet and loud parts <input type="checkbox" id="sComp" class="sw"></label>
-          <label class="swl">Make the loudness even (like TV and YouTube) <input type="checkbox" id="sLoud" class="sw"></label>
           <div class="field"><span>Bass <b class="num" id="sBassV"></b></span><input type="range" id="sBass" class="rng" min="-12" max="12" step="1" aria-label="Bass"></div>
           <div class="field"><span>Treble <b class="num" id="sTrebleV"></b></span><input type="range" id="sTreble" class="rng" min="-12" max="12" step="1" aria-label="Treble"></div>
           <p class="hint">You hear these in Quick preview and in the export (the live viewer plays the plain sound). Removing voices works on stereo sound.</p>

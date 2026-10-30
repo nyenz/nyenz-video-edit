@@ -615,3 +615,37 @@ label.swl.inline { padding: 0; gap: 8px; font-size: 12.5px; }
 #secNote { min-height: 18px; }
 #secVersionList:empty { display: none; }
 #secVersionList { display: flex; flex-direction: column; gap: 6px; }
+
+/* loudness meter */
+.lmeter { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-top: 1px solid var(--line-soft); }
+.lmeter .lhead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; }
+.lmeter .lhead small { font-size: 12px; } .lmeter .good, .facts.good { color: #52d58a; } .lmeter .warn, .facts.warn { color: #ffb454; }
+.lbar { position: relative; height: 8px; border-radius: 4px; background: var(--sunk); overflow: hidden; }
+.lbar .fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: #6b7a86; transition: width .08s linear; }
+.lbar .fill.on { background: #52d58a; } .lbar .fill.hot { background: #ff6a5c; }
+.lbar .mark { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--ink); opacity: .85; }
+.lmeter .lrow { display: flex; align-items: baseline; gap: 4px; font-size: 12px; color: var(--muted); }
+.lmeter .lrow b { color: var(--ink); font-size: 14px; }
+
+/* music layers */
+.mlayers { display: flex; flex-direction: column; gap: 8px; }
+.ly-solo, .ly-del { width: 26px; height: 26px; border-radius: 7px; border: 0; background: var(--sunk); color: var(--muted); cursor: pointer; font-weight: 700; font-size: 12px; display: grid; place-items: center; }
+.ly-solo:hover, .ly-del:hover { color: var(--ink); }
+.ly-solo.on { background: #ffb454; color: #1a1305; }
+.ly-row.off { opacity: .55; }
+.lane-item.music.off { opacity: .45; }
+.loud-box .row { display: flex; align-items: center; gap: 8px; }
+.loud-box .hint { margin: 0; }
+
+/* split quality report */
+.ly-quality { display: flex; flex-direction: column; gap: 6px; padding: 10px; border-radius: var(--r-s); background: var(--sunk); }
+.ly-quality p { margin: 0; }
+.ly-quality .good { color: #52d58a; } .ly-quality .warn { color: #ffb454; }
+.ly-share { display: flex; gap: 8px; flex-wrap: wrap; }
+.ly-chip { display: inline-flex; align-items: center; gap: 5px; }
+.ly-chip i { width: 9px; height: 9px; border-radius: 3px; background: #6b7a86; }
+.ly-chip i.ly-voices { background: #35d0e6; } .ly-chip i.ly-music { background: #b48cff; } .ly-chip i.ly-effects { background: #ffb454; }
+
+/* Frame handles on the viewer */
+.frame .frame-ov { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 3; pointer-events: none; touch-action: none; }
+.frame .frame-ov.editing { pointer-events: auto; }
