@@ -78,7 +78,7 @@ def versioned(html: str) -> str:
 BROWSER_VIDEO = {"h264", "vp8", "vp9", "av1"}
 BROWSER_AUDIO = {"aac", "mp3", "opus", "vorbis", "flac"}
 BROWSER_CONTAINERS = {".mp4", ".m4v", ".mov", ".webm"}
-PAGES = {"/": "home.html", "/clips": "workshop.html", "/edit": "editor.html", "/combine": "combine.html", "/advanced": "index.html"}
+PAGES = {"/": "home.html", "/clips": "workshop.html", "/edit": "editor.html", "/final": "editor.html", "/combine": "combine.html", "/advanced": "index.html"}
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wma"}
 SUBTITLE_EXTS = {".srt", ".vtt"}
 MAX_SUBTITLE_BYTES = 5 * 1024 * 1024
@@ -397,6 +397,9 @@ class AppState:
                      "opened": float(old.get("opened") or time.time()), "trashed": float(old.get("trashed") or 0),
                      "src": {"name": Path(src).name, "size": os.path.getsize(src), "duration": round(info.duration, 3),
                              "has_video": info.has_video, "path": self.link_path(proj["source"]) or ""}})
+        for key in project_mod.META_KEYS:                       # the page never sends these: they stay as they were
+            if key in old:
+                proj[key] = old[key]
         atomic_write_json(self.project_path(pid), proj)
         return proj
 
@@ -437,6 +440,8 @@ class AppState:
                             "trashed": d.get("trashed") or 0, "missing": missing, "size": size, "duration": dur,
                             "length": round(project_mod.step_length(project_mod.clean_project(d, 1e9)["pieces"]), 3),
                             "steps": len(d.get("steps") or []), "has_video": bool(src.get("has_video", True)),
+                            "stage": d.get("stage") if d.get("stage") in project_mod.STAGES else "edit",
+                            "parent": str(d.get("parent") or ""), "version": str(d.get("version") or ""),
                             "linked": str(d["source"]).startswith("l/"), "where": self.link_path(str(d["source"])) or path,
                             "thumb_at": _thumb_time(pieces, dur)})
             except (KeyError, TypeError, ValueError):
@@ -1219,6 +1224,11 @@ class Handler(BaseHTTPRequestHandler):
                 if data is None:
                     return
                 self._json({"project": self.state.fork_project(path.split("/")[3], int(_float(data.get("step"), 1)))}, 201)
+            elif re.fullmatch(rf"/api/projects/{PROJECT_ID}/(sections|to-final)", path):
+                data = self._read_json()
+                if data is None:
+                    return
+                self._json(self._sections(path.split("/")[3], path.split("/")[4], data))
             elif path == "/api/clipsets":
                 data = self._read_json()
                 if data is None:
@@ -1367,6 +1377,72 @@ class Handler(BaseHTTPRequestHandler):
         info["where"] = self.state.link_path(proj["source"]) or ""
         return {"project": proj, "info": info}
 
+    # ---- Edit stage: the three buttons, and the way on to Final -----------------------------------------
+    def _sections(self, pid: str, what: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        st = self.state
+        proj = st.load_project(pid)
+        src = st.resolve_input(str(proj.get("source") or ""))
+        info = probe_media(src)
+        if what == "to-final":
+            return self._to_final(proj)
+        action = str(data.get("action") or "")
+        # the page sends what it is showing (it may not be saved yet)
+        cur = project_mod.clean_project({"source": proj["source"], "pieces": data.get("pieces", proj.get("pieces")),
+                                         "steps": data.get("steps", proj.get("steps"))}, info.duration)
+        pieces, steps = cur["pieces"], cur["steps"]
+        if not any(not p.get("off") for p in pieces):
+            raise EditForgeError("There is nothing left in the timeline.", "Put a section back first (Undo).")
+        if action == "versions":
+            odd, even = project_mod.odd_even(pieces)
+            base = " ".join(str(proj.get("name") or "Clip").split())[:68]
+            taken = {str(d.get("name")) for d in st.all_projects() if d.get("parent") == pid}
+            made = []
+            for label, plist in (("Odd", odd), ("Even", even)):
+                name, k = f"{base} - {label}", 2
+                while name in taken:
+                    name, k = f"{base} - {label} {k}", k + 1
+                taken.add(name)
+                new = st.save_project(uuid.uuid4().hex[:12], {"name": name, "source": proj["source"], "pieces": plist, "settings": proj.get("settings"),
+                                                              "stage": "edit", "parent": pid, "version": label.lower()})
+                made.append({"id": new["id"], "name": new["name"], "version": label.lower(), "sections": len(plist)})
+            return {"versions": made}
+        if action == "thin":
+            if len(steps) + 1 >= project_mod.MAX_STEPS:
+                raise EditForgeError("This version has too many steps.", "Start from a fresh version.")
+            new = project_mod.thin_pieces(pieces)
+            gone = sum(1 for p in new if p.get("off"))
+            kept_first = [dict(p) for p in pieces]
+            steps = steps + [{"pieces": kept_first, "rule": proj.get("rule") if isinstance(proj.get("rule"), dict) else None,
+                              "length": round(project_mod.step_length(kept_first), 3)}]
+            rule = {"interval": project_mod.THIN_SECTION, "group": project_mod.THIN_EVERY, "picks": [project_mod.THIN_EVERY], "action": "remove", "hand": False}
+            return {"pieces": new, "steps": steps, "rule": rule, "removed": gone, "sections": len(new)}
+        if action == "scenes":
+            from ..analysis import shots
+            if not shots.available():
+                raise EditForgeError("Finding scenes needs the 'numpy' add-on.", "Install the newest version of Nyenz Edit.")
+            status = st.scenes.start(src, info.duration, info.has_video)
+            if status["state"] == "failed":
+                raise EditForgeError(status.get("error") or "The scenes could not be found.", "Try again.")
+            feats = st.scenes.features(src) if status["state"] == "ready" else None
+            if status["state"] != "ready" or feats is None:
+                return {"state": "running", "progress": status.get("progress", 0.0)}
+            new, count = shots.separate(pieces, status["scenes"], feats)
+            if len(new) > project_mod.MAX_PIECES:
+                raise EditForgeError("That would make too many sections.", "Remove some sections first.")
+            return {"state": "ready", "pieces": new, "scenes": count, "cuts": len(status["scenes"])}
+        raise EditForgeError("I don't know that action.", "Reload the page and try again.")
+
+    def _to_final(self, proj: Dict[str, Any]) -> Dict[str, Any]:
+        """Send an Edit version on to Final: a Final project that starts from the same plan (nothing is rendered)."""
+        st = self.state
+        if (proj.get("stage") or "edit") == "final":
+            raise EditForgeError("This one is already in Final.", "Open it from the Final tab.")
+        new = st.save_project(uuid.uuid4().hex[:12], {"name": proj.get("name"), "source": proj["source"], "pieces": proj.get("pieces"),
+                                                      "steps": proj.get("steps"), "rule": proj.get("rule"), "settings": proj.get("settings"),
+                                                      "texts": proj.get("texts"), "stage": "final", "parent": proj["id"],
+                                                      "version": proj.get("version") or ""})
+        return {"project": {"id": new["id"], "name": new["name"]}}
+
     def _new_clipset(self, data: Dict[str, Any]) -> Dict[str, Any]:
         src_id = str(data.get("source") or "")
         if not src_id:
@@ -1458,7 +1534,8 @@ class Handler(BaseHTTPRequestHandler):
             interval = 0.0
         pieces = project_mod.slice_pieces(info.duration, interval) if interval > 0 else project_mod.slice_pieces(info.duration, info.duration + 1)
         name = str(data.get("name") or Path(src).stem)
-        proj = self.state.save_project(uuid.uuid4().hex[:12], {"name": name, "source": src_id, "pieces": pieces, "settings": {}})
+        proj = self.state.save_project(uuid.uuid4().hex[:12], {"name": name, "source": src_id, "pieces": pieces, "settings": {},
+                                                               "stage": "final" if data.get("stage") == "final" else "edit"})
         return self._project_view(proj)
 
     def _render_project(self, pid: str, preview: bool) -> str:

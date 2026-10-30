@@ -21,7 +21,7 @@ import math
 import re
 import threading
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from .analysis import follow as follow_mod
 from .analysis.faces import make_face_provider
@@ -260,8 +260,30 @@ def clean_project(raw: Any, duration: float) -> Dict[str, Any]:
             continue
         sp = [p for p in (clean_piece(x, duration) for x in st["pieces"]) if p is not None]
         steps.append({"pieces": sp, "rule": clean_rule(st.get("rule")), "length": round(step_length(sp), 3)})
-    return {"name": name, "source": str(raw.get("source") or "")[:300], "pieces": pieces, "settings": clean_settings(raw.get("settings")),
-            "texts": clean_texts(raw.get("texts")), "steps": steps, "rule": clean_rule(raw.get("rule"))}
+    out = {"name": name, "source": str(raw.get("source") or "")[:300], "pieces": pieces, "settings": clean_settings(raw.get("settings")),
+           "texts": clean_texts(raw.get("texts")), "steps": steps, "rule": clean_rule(raw.get("rule"))}
+    out.update(clean_meta(raw))
+    return out
+
+
+STAGES = ("edit", "final")
+_PARENT = re.compile(r"^[0-9a-f]{12}$")
+META_KEYS = ("stage", "parent", "version")
+
+
+def clean_meta(raw: Any) -> Dict[str, str]:
+    """Where a project belongs in the work: its stage (edit or final), the project it was made from, and which version of it."""
+    if not isinstance(raw, dict):
+        return {}
+    out: Dict[str, str] = {}
+    if raw.get("stage") in STAGES:
+        out["stage"] = raw["stage"]
+    if _PARENT.match(str(raw.get("parent") or "")):
+        out["parent"] = str(raw["parent"])
+    version = " ".join(str(raw.get("version") or "").split())[:24]
+    if version:
+        out["version"] = version
+    return out
 
 
 # ------------------------------------------------------------------ steps: stacked patterns on the same parent video
@@ -395,6 +417,38 @@ def slice_at(duration: float, times: List[float]) -> List[Dict[str, Any]]:
     if len(edges) - 1 > MAX_PIECES:
         raise EditForgeError(f"That would make more than {MAX_PIECES:,} pieces.", "Cut on every 2nd or 4th beat instead.")
     return [p for p in (clean_piece({"start": a, "end": b}, duration) for a, b in zip(edges, edges[1:])) if p]
+
+
+# ------------------------------------------------------------------ Edit stage: the three buttons
+SECTION = 2.0          # button 1: seconds in a section
+THIN_EVERY = 4         # button 2: remove every 4th section ...
+THIN_SECTION = 1.0     # ... of one second
+
+
+def _plain(p: Dict[str, Any]) -> Dict[str, Any]:
+    q = {k: v for k, v in p.items() if k != "unit"}
+    q["off"] = False
+    return q
+
+
+def odd_even(pieces: Sequence[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Button 1: cut the video into 2 s sections, and make two versions: the odd sections (1, 3, 5 ...) and the even ones
+    (2, 4, 6 ...). Nothing is rendered: each section is only a note 'from here to there' of the clip, so a section can
+    still be extended into the gap the other version uses."""
+    sections = recut(pieces, SECTION)
+    num = units(sections)
+    odd = [_plain(p) for p, k in zip(sections, num) if k % 2 == 0]
+    even = [_plain(p) for p, k in zip(sections, num) if k % 2 == 1]
+    if not even:
+        raise EditForgeError("This clip is too short for two versions.", "Use a clip that is longer than 2 seconds.")
+    return odd, even
+
+
+def thin_pieces(pieces: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Button 2: cut the version (as one new video) into 1 s sections and take out every 4th: 1 2 3 [4] 5 6 7 [8] ...
+    The taken-out sections stay in the list as removed, so they can be put back."""
+    out = recut(pieces, THIN_SECTION)
+    return apply_pattern(out, THIN_EVERY, [THIN_EVERY], "remove")
 
 
 class _ProjectPlanner(Planner):

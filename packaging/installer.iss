@@ -1,4 +1,4 @@
-; Inno Setup recipe for NyenzEdit-Setup.exe. Build with:  iscc /DMyVersion=1.9.0 packaging\installer.iss
+; Inno Setup recipe for NyenzEdit-Setup.exe. Build with:  iscc /DMyVersion=1.10.0 packaging\installer.iss
 ; It installs for the current user only, so Windows does not ask for an administrator password.
 ; The AppId never changes: a new version installs over the old one (also over the versions called EditForge).
 #ifndef MyVersion

@@ -133,10 +133,16 @@ def clip_project(clipset: Dict[str, Any], clip: Dict[str, Any], duration: float)
 
 
 # ------------------------------------------------------------------------------------------------ scenes
-class SceneFinder:
-    """Finds the scene changes of a video once (in the background) and keeps them in <home>/scenes/<fingerprint>.json."""
+SCENE_VERSION = 2          # raise it when the scene finder gets better: older saved results are then found again
 
-    THRESHOLD = 0.3
+
+class SceneFinder:
+    """Finds the scene changes of a video once (in the background) and keeps them in <home>/scenes/<fingerprint>.json.
+
+    Next to the list of changes it keeps a small picture fingerprint of every sampled frame (<fingerprint>.npz), so a
+    project can later compare the pictures on both sides of any join without reading the video again."""
+
+    THRESHOLD = 0.3        # only used when numpy is missing (FFmpeg's own score)
     MIN_SCENE = 0.6
 
     def __init__(self, folder: Path, fingerprint: Callable[[str], str]):
@@ -153,13 +159,24 @@ class SceneFinder:
         f = self._file(src)
         try:
             data = json.loads(f.read_text(encoding="utf-8"))
-            return {"state": "ready", "progress": 1.0, "scenes": data["scenes"], "error": ""}
+            if int(data.get("v") or 1) >= SCENE_VERSION:
+                return {"state": "ready", "progress": 1.0, "scenes": data["scenes"], "kinds": data.get("kinds") or [], "error": ""}
         except (OSError, ValueError, KeyError, TypeError):
             pass
         with self._lock:
             job = dict(self._jobs.get(str(f)) or {"state": "none", "progress": 0.0, "error": ""})
         job["scenes"] = []
         return job
+
+    def features(self, src: str) -> Any:
+        """The saved picture fingerprints (None when there are none: numpy missing, or not found yet)."""
+        try:
+            import numpy as np
+            from .analysis.shots import Features
+            z = np.load(str(self._file(src).with_suffix(".npz")))
+            return Features(float(z["fps"]), z["thumbs"], z["hist"])
+        except Exception:  # noqa: BLE001 - no file, or not readable
+            return None
 
     def start(self, src: str, duration: float, has_video: bool) -> Dict[str, Any]:
         if not has_video:
@@ -174,16 +191,27 @@ class SceneFinder:
         return self.status(src)
 
     def _run(self, src: str, duration: float, f: Path) -> None:
-        from .analysis.scenes import detect_scene_scores, scenes_from_scores
+        from .analysis import shots
         from .core.cache import atomic_write_json
 
-        def prog(t: float) -> None:
+        def prog(k: float) -> None:
             with self._lock:
-                self._jobs[str(f)]["progress"] = round(min(0.99, t / max(duration, 0.1)), 3)
+                self._jobs[str(f)]["progress"] = round(min(0.99, k), 3)
         try:
-            scores = detect_scene_scores(src, 0.08, progress=prog)
-            scenes = scenes_from_scores(scores, self.THRESHOLD, self.MIN_SCENE, duration)
-            atomic_write_json(f, {"scenes": scenes, "duration": duration, "when": time.time()})
+            if shots.available():
+                feats = shots.extract_features(src, duration, progress=lambda t: prog(0.85 * t / max(duration, 0.1)))
+                cuts = shots.refine_all(src, shots.find_cuts(feats), progress=lambda k: prog(0.85 + 0.14 * k))
+                import numpy as np
+                tmp = f.with_suffix(".tmp.npz")
+                np.savez_compressed(str(tmp), fps=feats.fps, thumbs=feats.thumbs, hist=feats.hist)
+                tmp.replace(f.with_suffix(".npz"))
+                atomic_write_json(f, {"v": SCENE_VERSION, "scenes": [round(float(c.t), 4) for c in cuts], "kinds": [c.kind for c in cuts],
+                                      "duration": duration, "when": time.time()})
+            else:
+                from .analysis.scenes import detect_scene_scores, scenes_from_scores
+                scores = detect_scene_scores(src, 0.08, progress=lambda t: prog(t / max(duration, 0.1)))
+                scenes = scenes_from_scores(scores, self.THRESHOLD, self.MIN_SCENE, duration)
+                atomic_write_json(f, {"v": SCENE_VERSION, "scenes": scenes, "kinds": [], "duration": duration, "when": time.time()})
             with self._lock:
                 self._jobs.pop(str(f), None)
         except Exception as exc:  # noqa: BLE001 - shown to the person

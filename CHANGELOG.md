@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.10.0
+* **Edit stage (stage 2) with three buttons.** Open a clip in **Edit** and use the **Sections** tab. Nothing is made (rendered) in this stage.
+  1. **Make Odd and Even versions:** cuts the clip into 2 second sections and makes two versions, named from the clip
+     (*Clip 01 - Odd* has sections 1, 3, 5 ...; *Clip 01 - Even* has 2, 4, 6 ...). They show under the button: click one to edit it.
+     Every section can still be moved, removed or stretched into the gap next to it (never over the next section of the same version).
+  2. **1 s sections, remove every 4th:** on the version you have open: 1 second sections with the 4th, 8th, 12th ... taken out
+     (1 2 3 *4* 5 6 7 *8* ...), the rest joined. The taken-out sections can be put back. The last short section is kept.
+  3. **Separate scenes:** works on the video as it is now (after button 2 or after your own changes). It cuts at the end of each scene and numbers the scenes.
+     Joins count too: when removing sections puts two different scenes next to each other, that join is a scene change.
+* **A much better scene finder.** It looks at the pictures on both sides of every possible cut instead of only at FFmpeg's score.
+  A single flash, a hand across the lens, a dip to black inside one scene, a line of text being typed or a fast zoom are not cuts any more.
+  It also finds dissolves and fades through black, and puts each hard cut on the exact frame. Tested on a real 82-second film clip
+  (all five known cuts in a fast stretch found to the frame) and on made-up cases for each look-alike. The result is saved once per video.
+* **Stage 3 is now its own page: Final.** **Send this version to Final** (top right of the Edit stage) makes a Final project from the version.
+  Final has the Audio, Sound, Format, Frame and Text tools; the Edit stage no longer shows them. Home has Clips, Edit and Final, and Final
+  lists the Final projects and the videos they made. Older projects open in Edit as before.
+* The Edit stage's side panel shows only what belongs there (no sound, colour, effects, zoom or follow); the old Cut and Pattern tools are under **More**.
+
 ## 1.9.0
 * **Clips page made simple (stage 1).** It does one job: take clips out of a long movie. The Video and Sound tabs are gone from this
   page (they come back in the next stages). Existing clip projects keep opening, and clips you already set up keep their settings.

@@ -163,7 +163,7 @@ function toast(text, bad) {
 
 // ------------------------------------------------------------------ top bar (same on every page)
 const APP_NAME = "Nyenz Edit";
-const PAGES = [["/", "Home", "home"], ["/clips", "Clips", "scissors"], ["/edit", "Editor", "layers"], ["/combine", "Combine", "combine"], ["/advanced", "Advanced", "code"]];
+const PAGES = [["/", "Home", "home"], ["/clips", "Clips", "scissors"], ["/edit", "Edit", "layers"], ["/final", "Final", "check"], ["/combine", "Combine", "combine"], ["/advanced", "Advanced", "code"]];
 function topBar(active, extra) {
   const nav = el("nav", { class: "nav", "aria-label": "Pages" });
   for (const [href, name, ic] of PAGES.slice(1)) nav.append(el("a", { href, class: active === href ? "on" : "" }, icon(ic, "s"), el("span", { text: name })));
