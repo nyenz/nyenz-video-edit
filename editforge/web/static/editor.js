@@ -169,7 +169,7 @@ function dress(v, p) {
   if (p.color.contrast !== 1) f.push("contrast(" + p.color.contrast + ")");
   if (p.color.saturation !== 1) f.push("saturate(" + p.color.saturation + ")");
   v.style.filter = f.join(" ");
-  v.muted = S.mutedAll || p.mute || !S.proj.settings.original_sound || Layers.on();     // with the three layers on, they carry the sound
+  v.muted = S.mutedAll || p.mute || !ownSoundOn() || Layers.on();     // with the three layers on, they carry the sound
   v.volume = clamp(p.volume, 0, 1);
   v.playbackRate = clamp(p.speed, 0.0625, 16);
 }
@@ -213,7 +213,7 @@ function play() {
 }
 function pause() {
   S.playing = false; setPlayIcon();
-  V.a.pause(); V.b.pause(); $("music").pause(); Layers.pause();
+  V.a.pause(); V.b.pause(); musicPause(); Layers.pause();
   cancelAnimationFrame(V.raf);
 }
 function togglePlay() { if (S.playing) pause(); else play(); }
@@ -246,17 +246,31 @@ function seek(t) {
   if (S.playing) { pause(); play(); } else showFrame();
   musicSync();
 }
-// music in the viewer
-function musicPlay() {
-  const m = $("music"), st = S.proj.settings;
-  if (!st.music) { m.pause(); return; }
-  const url = mediaUrl(st.music, false);
-  if (m.dataset.src !== url) { m.src = url; m.dataset.src = url; }
-  m.volume = clamp(st.music_volume, 0, 1); m.muted = S.mutedAll;
-  musicSync();
-  const pr = m.play(); if (pr && pr.catch) pr.catch(() => {});
+// music in the viewer: one player for every music layer that is heard (muted layers, and everything but soloed ones, are not)
+const MUSIC = new Map();
+function layers() { return S.proj.settings.layers || []; }
+function soloOn() { return layers().some((x) => x.solo); }
+function heard(x) { return !x.mute && (!soloOn() || x.solo); }
+function ownSoundOn() { return S.proj.settings.original_sound && !soloOn(); }
+function musicPlayer(file) {
+  let a = MUSIC.get(file);
+  if (!a) { a = new Audio(mediaUrl(file, false)); a.preload = "auto"; MUSIC.set(file, a); }
+  return a;
 }
-function musicSync() { const m = $("music"); if (m.duration) m.currentTime = S.t % m.duration; }
+function musicPlay() {
+  const on = new Set();
+  for (const x of layers()) {
+    if (!heard(x)) continue;
+    const m = musicPlayer(x.file); on.add(x.file);
+    m.volume = clamp(x.volume, 0, 1); m.muted = S.mutedAll;
+    if (m.duration) m.currentTime = S.t % m.duration;
+    const pr = m.play(); if (pr && pr.catch) pr.catch(() => {});
+  }
+  for (const [f, m] of MUSIC) if (!on.has(f)) m.pause();
+}
+function musicPause() { for (const m of MUSIC.values()) m.pause(); }
+function musicMute() { for (const m of MUSIC.values()) m.muted = S.mutedAll; }
+function musicSync() { for (const m of MUSIC.values()) if (m.duration) m.currentTime = S.t % m.duration; }
 // words on the picture, drawn over the viewer
 function renderOverlay() {
   const box = $("over"); box.replaceChildren();
@@ -364,10 +378,10 @@ function renderTimeline() {
     d.style.left = px(t.start) + "px"; d.style.width = Math.max(20, px(end) - px(t.start) - 2) + "px"; lt.append(d);
   });
   // music lane
-  const lm = $("laneM"); lm.replaceChildren(); lm.hidden = !S.proj.settings.music;
-  if (S.proj.settings.music) {
-    const name = (S.files.find((f) => f.id === S.proj.settings.music) || { name: S.proj.settings.music.split("/").pop() }).name;
-    const d = el("div", { class: "lane-item music", onclick: () => openPanel("audio") }, icon("music", "s"), el("span", { text: name }));
+  const lm = $("laneM"); lm.replaceChildren(); lm.hidden = !layers().length;
+  for (const x of layers()) {
+    const name = (S.files.find((f) => f.id === x.file) || { name: x.file.split("/").pop() }).name;
+    const d = el("div", { class: "lane-item music" + (heard(x) ? "" : " off"), onclick: () => openPanel("audio") }, icon("music", "s"), el("span", { text: name }));
     d.style.left = px(0) + "px"; d.style.width = Math.max(40, px(total) - px(0)) + "px"; lm.append(d);
   }
   renderPlayhead();
@@ -537,6 +551,7 @@ function openPanel(name) {
   if (name === "sections") renderVersionList();
   if (name === "text") renderTexts();
   if (name === "sound") Layers.open();
+  Frame.setEditing(name === "frame");
   if (name === "frame") Frame.renderPanel();
   if (name === "format") renderShape();
 }
@@ -731,20 +746,49 @@ function useRecipe(r) {
 }
 
 // --- Audio
+/** The music layers: name, loudness, mute, solo, remove. */
+function renderMusicLayers() {
+  const box = $("musicLayers"); if (!box) return;
+  box.replaceChildren();
+  const set = (i, patch, keepVideo) => { change(() => { S.proj.settings.layers = layers().map((x, k) => (k === i ? Object.assign({}, x, patch) : x)); }, { keepVideo: true }); if (keepVideo !== false) { renderMusicLayers(); if (S.playing) musicPlay(); } };
+  layers().forEach((x, i) => {
+    const name = (S.files.find((f) => f.id === x.file) || { name: x.file.split("/").pop() + " (missing)" }).name;
+    const slider = el("input", { type: "range", class: "rng", min: "0", max: "200", step: "5", value: String(Math.round(x.volume * 100)), "aria-label": "Loudness of " + name });
+    const val = el("b", { class: "num ly-val", text: Math.round(x.volume * 100) + "%" });
+    slider.addEventListener("input", () => { val.textContent = slider.value + "%"; paintRange(slider); const m = MUSIC.get(x.file); if (m) m.volume = clamp(slider.value / 100, 0, 1); });
+    slider.addEventListener("change", () => set(i, { volume: slider.value / 100 }, false));
+    const mute = el("button", { class: "ly-mute" + (x.mute ? " on" : ""), type: "button", title: "Mute this layer", "aria-label": "Mute " + name, "aria-pressed": String(!!x.mute), onclick: () => set(i, { mute: !x.mute }) }, icon(x.mute ? "mute" : "vol", "s"));
+    const solo = el("button", { class: "ly-solo" + (x.solo ? " on" : ""), type: "button", title: "Hear only this layer (and other soloed ones)", "aria-label": "Solo " + name, "aria-pressed": String(!!x.solo), onclick: () => set(i, { solo: !x.solo }), text: "S" });
+    const del = el("button", { class: "ly-del", type: "button", title: "Remove this music", "aria-label": "Remove " + name, onclick: () => { change(() => { S.proj.settings.layers = layers().filter((_, k) => k !== i); }, { keepVideo: true }); renderMusicLayers(); musicPlay(); if (!S.playing) musicPause(); } }, icon("x", "s"));
+    box.append(el("div", { class: "ly-row" + (heard(x) ? "" : " off") },
+      el("span", { class: "ly-ic" }, icon("music")),
+      el("div", { class: "ly-main" }, el("div", { class: "ly-top" }, el("b", { class: "ellip", text: name })), el("div", { class: "ly-ctl" }, slider, val)),
+      mute, solo, del));
+    paintRange(slider);
+  });
+  if (!layers().length) box.append(el("p", { class: "hint", text: "No music yet." }));
+  const note = $("audioNote");
+  if (note) note.textContent = soloOn() ? "Solo is on: the video's own sound and the other layers are not heard." : "";
+  renderTimeline();
+}
+/** A small, fast version to check the whole mix; the result shows in Exports with the live meter and the measured loudness. */
+async function quickPreview() {
+  if (!kept().length) { toast("The timeline is empty: put a piece back first.", true); return; }
+  try {
+    await saveNow();
+    await api("/api/projects/" + S.id + "/render", { method: "POST", json: { preview: true } });
+    toast("Making a quick preview of the mix"); Exports.show();
+  } catch (e) { toast(errText(e), true); }
+}
 function fillFileSelects() {
-  const m = $("sMusic"), cur = S.proj.settings.music;
-  m.replaceChildren(el("option", { value: "", text: "No music" }));
-  for (const f of S.files.filter((x) => x.audio)) m.append(el("option", { value: f.id, text: f.name }));
-  if (cur && ![...m.options].some((o) => o.value === cur)) m.append(el("option", { value: cur, text: cur.split("/").pop() + " (missing)" }));
-  m.value = cur;
+  renderMusicLayers();
   const c = $("sCap"), cc = S.proj.settings.captions;
   c.replaceChildren(el("option", { value: "off", text: "Off" }), el("option", { value: "auto", text: "Automatic (listen to the speech)" }));
   for (const f of S.files.filter((x) => x.subtitles)) c.append(el("option", { value: f.id, text: "From " + f.name }));
   if (![...c.options].some((o) => o.value === cc)) c.append(el("option", { value: cc, text: cc.split("/").pop() + " (missing)" }));
   c.value = cc;
 }
-const BINDS = [["sOrig", "original_sound", "check"], ["sDuck", "duck", "check"], ["sLoud", "even_loudness", "check"], ["sMusicVol", "music_volume", "num"],
-  ["sMusic", "music", "str"], ["sTrans", "transition", "str"], ["sTransS", "transition_s", "num"], ["sFadeIn", "fade_in", "num"], ["sFadeOut", "fade_out", "num"],
+const BINDS = [["sOrig", "original_sound", "check"], ["sTrans", "transition", "str"], ["sTransS", "transition_s", "num"], ["sFadeIn", "fade_in", "num"], ["sFadeOut", "fade_out", "num"],
   ["sCap", "captions", "str"], ["sCapStyle", "caption_style", "str"], ["sCapPos", "caption_position", "str"], ["sCapSize", "caption_size", "str"],
   ["sNoise", "noise", "str"], ["sVocals", "vocals", "str"], ["sBoost", "voice_boost", "check"], ["sComp", "compress", "check"], ["sBass", "bass", "num"], ["sTreble", "treble", "num"]];
 function soundLabels() {
@@ -764,7 +808,6 @@ function bindSettings() {
       const v = kind === "check" ? n.checked : kind === "num" ? parseFloat(n.value) : n.value;
       soundLabels();
       change(() => { S.proj.settings[key] = v; }, { keepVideo: true });
-      if (key === "music" || key === "music_volume") { if (S.playing) musicPlay(); }
       if (key === "original_sound") showFrame();
     });
   }
@@ -782,7 +825,7 @@ async function loadFiles() { S.files = (await api("/api/files")).files; fillFile
 async function beatCut() {
   if (locked()) { lockedNote(); return; }
   if (S.proj.steps.length) { $("beatNote").textContent = "Cutting on the beat works in step 1 (on the whole video). Undo the steps first, or cut by time here."; return; }
-  const every = Math.round(parseFloat($("beatEvery").value)), music = S.proj.settings.music;
+  const every = Math.round(parseFloat($("beatEvery").value)), music = layers().length ? layers()[0].file : "";
   if (!music) { $("beatNote").textContent = "Choose the music first, above."; return; }
   if (!(every >= 1)) { $("beatNote").textContent = "Write a whole number of beats, for example 4."; return; }
   $("beatNote").textContent = "Listening for the beat…";
@@ -1032,6 +1075,9 @@ async function openProject() {
   S.proj.pieces.forEach(fixPiece); if (!Array.isArray(S.proj.texts)) S.proj.texts = [];
   if (!Array.isArray(S.proj.steps)) S.proj.steps = [];
   for (const st of S.proj.steps) st.pieces.forEach(fixPiece);
+  const st0 = S.proj.settings;                                  // a single old music file becomes the first music layer
+  if (!Array.isArray(st0.layers)) st0.layers = [];
+  if (st0.music && !st0.layers.length) { st0.layers = [{ file: st0.music, volume: st0.music_volume === undefined ? 0.25 : st0.music_volume, mute: false, solo: false }]; st0.music = ""; S.migrated = true; }
   $("suite").hidden = false;
   $("projName").value = S.proj.name;
   $("srcName").textContent = S.proj.source.split("/").pop();
@@ -1066,6 +1112,7 @@ async function openProject() {
   api("/api/projects").then(({ projects }) => { const pl = $("projList"); for (const p of projects.filter((q) => q.id !== S.id && !q.trashed && !q.missing && (q.stage || "edit") === S.mode).slice(0, 30)) pl.append(projItem(p)); if (!pl.children.length) pl.append(el("p", { class: "hint", text: "No other projects." })); }).catch(() => {});
   openPanel(S.mode === "edit" ? "sections" : "media");
   renderSteps();
+  if (S.migrated) { S.migrated = false; scheduleSave(); }
   $("saveState").textContent = "Saved";
 }
 function banner(text, k) {
@@ -1182,8 +1229,11 @@ function wire() {
   // audio, text, format
   $("musicAdd").addEventListener("click", () => addFileThen("audio", "musicProg", (d) => {
     if (d.has_video) { toast("That is a video. Choose a music file such as an MP3.", true); return; }
-    change(() => { S.proj.settings.music = d.id; }, { keepVideo: true }); fillFileSelects();
+    if (layers().length >= 8) { toast("That is the most: 8 music layers.", true); return; }
+    change(() => { S.proj.settings.layers = layers().concat([{ file: d.id, volume: 0.5, mute: false, solo: false }]); }, { keepVideo: true });
+    renderMusicLayers(); if (S.playing) musicPlay();
   }));
+  $("checkMix").addEventListener("click", () => quickPreview());
   $("beatBtn").addEventListener("click", beatCut);
   for (const id of ["sBass", "sTreble"]) $(id).addEventListener("input", soundLabels);
   $("capAdd").addEventListener("click", () => addFileThen("subtitles", "musicProg", (d) => {
@@ -1202,7 +1252,7 @@ function wire() {
   const frame = () => 1 / (S.info.fps_float || 25);
   $("tBack").addEventListener("click", () => seek(S.t - frame()));
   $("tFwd").addEventListener("click", () => seek(S.t + frame()));
-  $("tMute").addEventListener("click", () => { S.mutedAll = !S.mutedAll; $("tMute").replaceChildren(icon(S.mutedAll ? "mute" : "vol")); showFrame(); $("music").muted = S.mutedAll; });
+  $("tMute").addEventListener("click", () => { S.mutedAll = !S.mutedAll; $("tMute").replaceChildren(icon(S.mutedAll ? "mute" : "vol")); showFrame(); musicMute(); });
   $("frame").addEventListener("click", (e) => { if (e.target.closest("#drawLayer")) return; togglePlay(); });
   // timeline
   $("tlScroll").addEventListener("pointerdown", (e) => { if (e.target.closest("#ruler")) onRulerDown(e); else onLaneDown(e); });

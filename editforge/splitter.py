@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -247,10 +248,11 @@ class Cancelled(Exception):
 
 def split_sound(source: str, start: float, end: float, out_dir: Path, engine: Callable, *,
                 progress: Optional[Callable[[float], None]] = None, cancel: Optional[threading.Event] = None,
-                mode: str = "fast") -> float:
+                mode: str = "fast", stats: Optional[Dict[str, Any]] = None) -> float:
     """Split ``source`` from ``start`` to ``end`` seconds into ``out_dir/<layer>.flac``. Returns the seconds it took.
 
     ``engine`` takes a (2, CHUNK) float array (and ``fast=``) and returns (3, 2, CHUNK). Raises :class:`Cancelled` when stopped.
+    When ``stats`` is given it is filled with how clean the split is (see :func:`quality`).
     """
     import numpy as np
     t0 = time.time()
@@ -271,6 +273,7 @@ def split_sound(source: str, start: float, end: float, out_dir: Path, engine: Ca
     eof = False
     done = 0                                  # samples written
     first = True
+    energy = {"in": 0.0, "res": 0.0, **{k: 0.0 for k in LAYERS}}
     try:
         while True:
             if cancel is not None and cancel.is_set():
@@ -305,6 +308,10 @@ def split_sound(source: str, start: float, end: float, out_dir: Path, engine: Ca
             np.clip(final, -1.0, 1.0, out=final)
             for k, name in enumerate(LAYERS):
                 writers[name].write(np.ascontiguousarray(final[k].T, dtype=np.float32))
+                energy[name] += float(np.sum(final[k].astype(np.float64) ** 2))
+            heard = inbuf[:, :emit].astype(np.float64)
+            energy["in"] += float(np.sum(heard ** 2))
+            energy["res"] += float(np.sum((heard - final.sum(axis=0)[:, : heard.shape[1]]) ** 2))
             done += emit
             if progress:
                 progress(min(0.999, done / max(total, 1)))
@@ -322,6 +329,8 @@ def split_sound(source: str, start: float, end: float, out_dir: Path, engine: Ca
             raise EditForgeError("There is no sound to split in that part of the video.", err or "Choose a part that has sound.")
         for name in LAYERS:
             os.replace(parts[name], str(out_dir / (name + ".flac")))
+        if stats is not None:
+            stats.update(quality(energy))
     except BaseException:
         reader.close()
         for w_ in writers.values():
@@ -333,6 +342,27 @@ def split_sound(source: str, start: float, end: float, out_dir: Path, engine: Ca
                 pass
         raise
     return time.time() - t0
+
+
+def quality(energy: Dict[str, float]) -> Dict[str, Any]:
+    """How clean a split is, from sums of squares gathered while splitting.
+
+    * ``share``: how much of the sound each layer holds (percent, adding up to about 100).
+    * ``rebuild_db``: how well the three layers add back to the original (higher is better; 20+ is a faithful split).
+    These are honest checks that need no 'right answer'. They cannot tell how much of the music is left inside the voices,
+    which is why the page also says plainly that an AI split is never perfect (see ``QUALITY_NOTE``).
+    """
+    total = sum(energy[k] for k in LAYERS)
+    share = {k: round(100.0 * energy[k] / total, 1) if total > 0 else 0.0 for k in LAYERS}
+    res, e_in = energy.get("res", 0.0), energy.get("in", 0.0)
+    rebuild = round(10.0 * math.log10(e_in / max(res, 1e-12)), 1) if e_in > 0 else 0.0
+    return {"share": share, "rebuild_db": max(0.0, min(60.0, rebuild)), "benchmark_sdr": BENCHMARK_SDR}
+
+
+#: the score its makers measured for this model on the standard test set (decibels of 'signal to distortion'; higher is cleaner)
+BENCHMARK_SDR = 11.47
+QUALITY_NOTE = ("An AI split is never perfect: a little music can stay in the voices, and the other way round. "
+                "On the standard test set this model scores about 11.5 dB (10 dB and up sounds clearly separated, 20 dB would be perfect for the ear).")
 
 
 # --------------------------------------------------------------------------------------------- the store and the job
@@ -359,6 +389,7 @@ class SplitStore:
             if a <= start + 0.01 and b >= end - 0.01 and all((d / (k + ".flac")).is_file() for k in LAYERS):
                 if best is None or (b - a) < (best["end"] - best["start"]):
                     best = {"start": a, "end": b, "dir": str(d), "id": f"{fp}/{d.name}", "mode": meta.get("mode", "fast"),
+                            "quality": meta.get("quality") if isinstance(meta.get("quality"), dict) else None,
                             "files": {k: str(d / (k + ".flac")) for k in LAYERS}}
         return best
 
@@ -407,9 +438,9 @@ class SplitStore:
         except (OSError, ValueError):
             return None
 
-    def write_meta(self, d: Path, start: float, end: float, seconds: float, mode: str) -> None:
+    def write_meta(self, d: Path, start: float, end: float, seconds: float, mode: str, quality: Optional[Dict[str, Any]] = None) -> None:
         atomic_write_json(Path(d) / "split.json", {"model": MODEL_ID, "start": start, "end": end, "seconds": round(seconds, 2),
-                                                   "mode": mode, "when": int(time.time()), "version": __version__})
+                                                   "mode": mode, "when": int(time.time()), "version": __version__, "quality": quality or None})
 
 
 class Splitter:
@@ -450,7 +481,8 @@ class Splitter:
         fp = file_fingerprint(source)
         hit = self.store.find(fp, start, end)
         out: Dict[str, Any] = {"available": available(), "model": self.model_ready(), "model_mb": round(MODEL_SIZE / 1e6) if MODEL_SIZE else 76,
-                               "split": hit and {"id": hit["id"], "start": hit["start"], "end": hit["end"]}, "job": self.status()}
+                               "split": hit and {"id": hit["id"], "start": hit["start"], "end": hit["end"], "quality": hit.get("quality")},
+                               "quality_note": QUALITY_NOTE, "job": self.status()}
         secs = max(0.0, end - start)
         out["estimate_s"] = int(round(secs / self.speed("fast")))
         out["estimate_best_s"] = int(round(secs / self.speed("best")))
@@ -511,9 +543,10 @@ class Splitter:
             self._set(state="running", progress=0.0, t0=time.time())
             if self._engine is None:
                 self._engine = self.engine_factory(str(self.model_path))
+            stats: Dict[str, Any] = {}
             seconds = split_sound(source, start, end, out_dir, self._engine, progress=lambda p: self._set(progress=p), cancel=self._cancel,
-                                  mode=mode)
-            self.store.write_meta(out_dir, start, end, seconds, mode)
+                                  mode=mode, stats=stats)
+            self.store.write_meta(out_dir, start, end, seconds, mode, stats)
             self._remember_speed(mode, (end - start) / max(seconds, 0.01))
             self._set(state="ready", progress=1.0, error="", id=f"{fp}/{out_dir.name}")
         except Cancelled:

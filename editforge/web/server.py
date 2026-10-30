@@ -705,7 +705,8 @@ class AppState:
             pid = str(opts.get("project_id") or "")
             out.append({"id": fid, "job": job["id"], "name": f.name, "size": f.stat().st_size, "duration": float(res.get("duration") or 0),
                         "when": float(job.get("updated") or job.get("created") or 0),
-                        "project_id": pid if pid in names else "", "project_name": names.get(pid) or ""})
+                        "project_id": pid if pid in names else "", "project_name": names.get(pid) or "",
+                        "loudness": res.get("loudness") if isinstance(res.get("loudness"), dict) else None})
         return out
 
     def fork_project(self, pid: str, step: int) -> Dict[str, Any]:
@@ -1548,6 +1549,12 @@ class Handler(BaseHTTPRequestHandler):
                 music_path = self.state.resolve_input(proj["settings"]["music"])
             except EditForgeError:
                 raise EditForgeError("The music file of this project is gone.", "Choose the music again in the Music box, or choose 'No music'.")
+        layers = []
+        for x in proj["settings"]["layers"]:
+            try:
+                layers.append({"path": self.state.resolve_input(x["file"]), "volume": x["volume"], "mute": x["mute"], "solo": x["solo"]})
+            except EditForgeError:
+                raise EditForgeError("A music file of this project is gone.", "Open Audio and remove that music, or add it again.")
         captions_path = None
         cap = proj["settings"]["captions"]
         if cap not in ("off", "auto"):
@@ -1561,9 +1568,9 @@ class Handler(BaseHTTPRequestHandler):
                 raise EditForgeError("Automatic captions need the free 'faster-whisper' add-on, which is not installed.",
                                      "Install it with:  pip install faster-whisper   -- or add a subtitle file (.srt) instead.")
         else:                                                    # fail early with a clear message (speech recognition is too slow to try here)
-            project_mod.plan_project(proj, src, music_path=music_path, captions_path=captions_path, preview=preview,
+            project_mod.plan_project(proj, src, music_path=music_path, layers=layers, captions_path=captions_path, preview=preview,
                                      stems_home=str(self.state.home))
-        opts = {"kind": "project", "preview": preview, "music_path": music_path, "captions_path": captions_path, "project_id": pid,
+        opts = {"kind": "project", "preview": preview, "music_path": music_path, "layers": layers, "captions_path": captions_path, "project_id": pid,
                 "output_dir": str(self.state.outputs), "stems_home": str(self.state.home),
                 "output_name": project_mod.output_stem(proj, src, preview)}
         return self.state.manager.submit(json.dumps(proj), src, "", opts)

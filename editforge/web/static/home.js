@@ -129,11 +129,12 @@ function finalCard(v) {
   const pic = thumbBox(false);
   addImg(pic, thumbUrl(v.id, Math.min(1, (v.duration || 2) / 2), true));
   pic.append(el("span", { class: "chip-tag", text: fmtTime(v.duration, 0) }));
+  if (v.loudness) pic.append(el("span", { class: "chip-tag top" + (v.loudness.ok ? " good" : ""), text: v.loudness.lufs.toFixed(1) + " LUFS" }));
   const open = () => watch(v);
   return cardShell(v, pic, [el("small", { class: "num", text: fmtShort(v.size) + " | " + (v.project_name ? "from " + v.project_name : "made " + ago(v.when)) })], open, v.name);
 }
 function watch(v) {
-  const box = el("div", { class: "watch" }, miniPlayer(mediaUrl(v.id, false)));
+  const box = el("div", { class: "watch" }, miniPlayer(mediaUrl(v.id, false), { meter: !!v.loudness, loudness: v.loudness }));
   dialogBox(v.name, [box], [["Close", null, "ghost"]], (done, dlg) => dlg.classList.add("wide"));
 }
 function ago(t) {

@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.11.0
+* **Final stage: sound.** The Final page has real sound tools now.
+  * **Remove noise**, **Split the sound** (Voices, Music, Effects) and **Fix loudness** in the Sound tab.
+  * **Your own music layers** (Audio tab): add as many as you like (up to 8). Each has its own volume, mute and solo.
+    Music never lowers itself under the voice; you set the levels.
+  * **YouTube loudness, always.** The finished mix (your video's sound plus every music layer) is set last to **-14 LUFS**
+    with a true peak under **-1 dB**, so it is never too loud or too quiet. The viewer shows a live meter, and after the export the
+    **measured** number is shown on the finished video (Home, Exports) with a clear OK / not OK.
+  * **Honest sound split.** After splitting, the page says how clean the split really is (how much of one layer still leaks into the others) instead of promising perfect.
+* **Final stage: picture (like CapCut).**
+  * **Move, resize and turn the picture with the mouse** in the viewer: drag it to move, drag a square corner to resize,
+    drag the round knob to turn. It snaps to the middle and the edges with dashed guide lines, and turns snap at 0, 45 and 90 degrees.
+  * **Grid and edge distances:** a switch shows a grid and how far the picture is from each edge, in pixels of the finished video.
+  * **Masks can turn,** and you can drag, resize and turn the mask on the viewer too (choose **Mask** under *Drag on the viewer*).
+  * **Seamless soft edges.** The sharp picture on top of the blurred picture now fades out where it stops, so no thin line is left.
+    The viewer and the export draw the same thing.
+
 ## 1.10.0
 * **Edit stage (stage 2) with three buttons.** Open a clip in **Edit** and use the **Sections** tab. Nothing is made (rendered) in this stage.
   1. **Make Odd and Even versions:** cuts the clip into 2 second sections and makes two versions, named from the clip

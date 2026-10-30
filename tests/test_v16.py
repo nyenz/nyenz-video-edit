@@ -290,3 +290,17 @@ def test_split_endpoints_and_storage(web, film):
     c.json("POST", "/api/storage/clean", {"what": "stems"})
     assert S.SplitStore(state.home).resolve(film["split"])         # the one a project uses stays
     assert S.SplitStore(state.home).resolve(film["split"].split("/")[0] + "/000002000-000004000") is None   # the unused one is removed
+
+
+# ---------------------------------------------------------------------------------------- how clean the split is (honest report)
+def test_split_quality_reports_the_shares_and_how_well_the_layers_add_back(tmp_path):
+    src = tmp_path / "mix.wav"
+    run(["-f", "lavfi", "-i", "sine=frequency=330:duration=8", "-ac", "2", str(src)])
+    good = {}
+    S.split_sound(str(src), 0.0, 8.0, tmp_path / "good", scalar_engine, stats=good)
+    assert good["rebuild_db"] >= 40                                       # 50 + 30 + 20 adds back to the original
+    assert good["share"]["voices"] > good["share"]["music"] > good["share"]["effects"]
+    assert abs(sum(good["share"].values()) - 100) < 0.5 and good["benchmark_sdr"] == S.BENCHMARK_SDR
+    lossy = {}
+    S.split_sound(str(src), 0.0, 8.0, tmp_path / "lossy", lambda chunk, fast=True: np.stack([chunk * 0.3, chunk * 0.1, chunk * 0.1]), stats=lossy)
+    assert 4 <= lossy["rebuild_db"] <= 8                                  # half the amplitude is missing: about 6 dB

@@ -435,6 +435,8 @@ const Exports = {
     }
     const v = j.result && j.result.verify;
     if (j.status === "done" && j.result) node.append(el("div", { class: "facts", text: fmtTime(j.result.duration) + " long" + (v && v.width ? " · " + v.width + "×" + v.height : "") + (v && v.size_bytes ? " · " + fmtSize(v.size_bytes) : "") + (j.preview ? " · quick preview" : "") }));
+    const ld = j.status === "done" && j.result && j.result.loudness;
+    if (ld) node.append(el("div", { class: "facts " + (ld.ok ? "good" : "warn"), text: "Loudness " + ld.lufs.toFixed(1) + " LUFS · peak " + ld.true_peak.toFixed(1) + " dBTP · " + (ld.ok ? "meets the YouTube standard" : "outside the YouTube standard") }));
     for (const w of j.warnings || []) node.append(el("div", { class: "facts warn", text: w }));
     if (j.error) node.append(el("div", { class: "facts err", text: j.error + (j.error_fix ? " " + j.error_fix : "") }));
     const acts = el("div", { class: "btns" });
@@ -453,7 +455,7 @@ const Exports = {
       this.openIds.delete(j.id); await api("/api/jobs/" + j.id, { method: "DELETE" }); if (this.onFiles) this.onFiles(); this.refresh(true);
     } }));
     node.append(acts);
-    if (j.status === "done" && j.file_id && this.openIds.has(j.id)) node.append(miniPlayer(mediaUrl(j.file_id, false)));
+    if (j.status === "done" && j.file_id && this.openIds.has(j.id)) node.append(miniPlayer(mediaUrl(j.file_id, false), { meter: j.options && j.options.kind === "project" || !!(j.result && j.result.loudness), loudness: j.result && j.result.loudness }));
     return node;
   },
   show() {
@@ -477,7 +479,64 @@ const Exports = {
   },
 };
 /** A small custom video player: picture, play, a seek bar, time, sound and full screen. */
-function miniPlayer(url) {
+// ------------------------------------------------------------------ loudness meter (live, on a playing video)
+/** Shows the loudness of what you hear, the way YouTube measures it: K-weighted, over the last 3 seconds (short-term LUFS),
+ *  and the highest peak. The target (-14) is marked. The whole-video number measured from the file is shown above it. */
+function loudnessMeter(v, measured) {
+  const LO = -32, HI = 0, TARGET = -14;
+  const pos = (x) => Math.max(0, Math.min(100, (x - LO) / (HI - LO) * 100));
+  const fill = el("i", { class: "fill" }), mark = el("i", { class: "mark", title: "YouTube target: -14 LUFS" });
+  mark.style.left = pos(TARGET) + "%";
+  const bar = el("div", { class: "lbar" }, fill, mark);
+  const live = el("b", { class: "num", text: "–" }), peak = el("span", { class: "num", text: "–" });
+  const head = el("div", { class: "lhead" });
+  if (measured) {
+    head.append(icon(measured.ok ? "check" : "info", "s"), el("span", { class: "lnum", text: "Whole video: " + measured.lufs.toFixed(1) + " LUFS · peak " + measured.true_peak.toFixed(1) + " dBTP" }),
+      el("small", { class: measured.ok ? "good" : "warn", text: measured.ok ? "meets the YouTube standard" : "outside the YouTube standard" }));
+  } else head.append(icon("sliders", "s"), el("span", { class: "lnum", text: "Loudness while it plays" }));
+  const box = el("div", { class: "lmeter" }, head, bar, el("div", { class: "lrow" }, el("span", { text: "Now " }), live, el("span", { text: " LUFS" }), el("span", { class: "grow" }), el("span", { text: "Peak " }), peak, el("span", { text: " dB" })));
+  let ctx = null, timer = 0, ring = [], hold = -99;
+  const start = () => {
+    if (ctx) { if (ctx.state === "suspended") ctx.resume(); return; }
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    try {
+      ctx = new AC();
+      const src = ctx.createMediaElementSource(v);
+      const shelf = ctx.createBiquadFilter(); shelf.type = "highshelf"; shelf.frequency.value = 1681.97; shelf.gain.value = 4;
+      const hp = ctx.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = 38.14; hp.Q.value = 0.5;
+      const split = ctx.createChannelSplitter(2), merge = ctx.createChannelMerger(2);
+      const an = [0, 1].map(() => { const a = ctx.createAnalyser(); a.fftSize = 4096; return a; });
+      const raw = ctx.createAnalyser(); raw.fftSize = 4096;
+      src.connect(ctx.destination); src.connect(raw);
+      src.connect(shelf); shelf.connect(hp); hp.connect(split);
+      split.connect(an[0], 0); split.connect(an[1], 1);
+      void merge;
+      const buf = new Float32Array(4096), rbuf = new Float32Array(4096);
+      timer = setInterval(() => {
+        if (v.paused) return;
+        let ms = 0;
+        an.forEach((a, k) => { a.getFloatTimeDomainData(buf); let s = 0; for (let i = 0; i < buf.length; i++) s += buf[i] * buf[i]; ms += s / buf.length; if (k === 1 && ms === 0) ms = 0; });
+        ring.push(ms); if (ring.length > 30) ring.shift();
+        raw.getFloatTimeDomainData(rbuf); let pk = 0; for (let i = 0; i < rbuf.length; i++) pk = Math.max(pk, Math.abs(rbuf[i]));
+        const avg = ring.reduce((a, b) => a + b, 0) / ring.length;
+        const lufs = avg > 1e-10 ? -0.691 + 10 * Math.log10(avg) : -99;
+        const pdb = pk > 1e-6 ? 20 * Math.log10(pk) : -99;
+        hold = Math.max(hold, pdb);
+        live.textContent = lufs > -90 ? lufs.toFixed(1) : "–"; peak.textContent = hold > -90 ? hold.toFixed(1) : "–";
+        fill.style.width = pos(lufs) + "%";
+        fill.classList.toggle("hot", lufs > TARGET + 1.5); fill.classList.toggle("on", lufs >= TARGET - 2 && lufs <= TARGET + 1.5);
+      }, 100);
+    } catch (e) { ctx = null; }
+  };
+  v.addEventListener("play", start);
+  v.addEventListener("seeked", () => { ring = []; });
+  const observer = new MutationObserver(() => { if (!box.isConnected) { clearInterval(timer); try { ctx && ctx.close(); } catch (e) { /* closed */ } observer.disconnect(); } });
+  setTimeout(() => observer.observe(document.body, { childList: true, subtree: true }), 0);
+  return box;
+}
+
+function miniPlayer(url, opts) {
   const v = el("video", { preload: "metadata", src: url, playsinline: "" });
   const playB = btn("", { icon: "play", cls: "icon ghost", title: "Play" });
   const bar = el("input", { type: "range", class: "rng", min: "0", max: "1000", value: "0", "aria-label": "Position" });
@@ -485,6 +544,7 @@ function miniPlayer(url) {
   const muteB = btn("", { icon: "vol", cls: "icon ghost", title: "Sound on/off" });
   const fullB = btn("", { icon: "fit", cls: "icon ghost", title: "Full screen" });
   const box = el("div", { class: "mini" }, v, el("div", { class: "mini-bar" }, playB, bar, time, muteB, fullB));
+  if (opts && opts.meter) box.append(loudnessMeter(v, opts.loudness));
   paintRange(bar);
   const show = () => {
     const d = v.duration || 0;

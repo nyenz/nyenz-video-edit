@@ -12,7 +12,7 @@ from ..core.model import AudioSpec, MusicSpec, Timeline
 from .filters import Graph
 from .pieces import filter_script_args
 
-LIMITER = "alimiter=limit=0.891:attack=5:release=60:level=disabled"
+LIMITER = "alimiter=limit=0.841:attack=5:release=60:level=disabled"
 
 
 def concat_list(names: Sequence[str]) -> str:

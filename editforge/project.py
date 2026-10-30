@@ -71,10 +71,16 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "noise": "off", "vocals": "keep", "voice_boost": False, "compress": False, "bass": 0.0, "treble": 0.0,
     # the three sound layers (voices / music / effects) of a split video: which split to use, and how loud each layer is
     "mix_split": "", "mix_voices": 1.0, "mix_music": 1.0, "mix_effects": 1.0,
+    # extra music layers: [{"file": id, "volume": 0..2, "mute": bool, "solo": bool}], and which of the video's own layers are muted / soloed
+    "layers": [], "mute": [], "solo": [],
     # the frame: canvas shape, background layer, move / scale / turn, mask (see clean_frame)
     "frame": None,
 }
 MIX_LAYERS = ("voices", "music", "effects")
+SOUND_KEYS = ("original",) + MIX_LAYERS          # the video's own sound (as one piece), or its three layers once split
+MAX_LAYERS = 8
+#: the final mix of every video meets the YouTube standard: -14 LUFS, and no peak above -1 dB (true peak)
+FINAL_LOUDNESS = {"target": -14.0, "true_peak": -1.5, "lra": 11.0}
 #: the canvas shapes (CapCut's list); "5.8in" is a tall phone screen
 FRAME_RATIOS: Dict[str, Optional[tuple]] = {"original": None, "16:9": (16, 9), "4:3": (4, 3), "2.35:1": (2.35, 1), "2:1": (2, 1),
                                              "1.85:1": (1.85, 1), "9:16": (9, 16), "3:4": (3, 4), "1:1": (1, 1), "4:5": (4, 5),
@@ -82,7 +88,7 @@ FRAME_RATIOS: Dict[str, Optional[tuple]] = {"original": None, "16:9": (16, 9), "
 FRAME_BGS = ("black", "white", "blur")
 MASK_SHAPES = ("none", "strip", "vstrip", "rect", "circle", "split")
 DEFAULT_FRAME: Dict[str, Any] = {"ratio": "original", "bg": "blur", "blur": 50.0, "scale": 1.0, "x": 0.0, "y": 0.0, "rotate": 0.0,
-                                 "mask": {"shape": "none", "x": 0.5, "y": 0.5, "w": 1.0, "h": 0.35, "feather": 20.0, "invert": False}}
+                                 "mask": {"shape": "none", "x": 0.5, "y": 0.5, "w": 1.0, "h": 0.35, "feather": 20.0, "invert": False, "rot": 0.0}}
 SPLIT_ID = re.compile(r"^[0-9a-f]{32}/\d{9}-\d{9}$")
 NOISE_LEVELS = {"off": 0.0, "light": 10.0, "medium": 18.0, "strong": 28.0}
 VOCALS = ("keep", "remove", "voice")
@@ -202,6 +208,14 @@ def clean_settings(raw: Any) -> Dict[str, Any]:
             s[key] = bool(raw[key])
     s["bass"] = round(_num(raw.get("bass"), 0.0, -12.0, 12.0), 1)
     s["treble"] = round(_num(raw.get("treble"), 0.0, -12.0, 12.0), 1)
+    layers = []
+    for x in (raw.get("layers") if isinstance(raw.get("layers"), list) else [])[:MAX_LAYERS]:
+        if isinstance(x, dict) and str(x.get("file") or ""):
+            layers.append({"file": str(x["file"])[:300], "volume": round(_num(x.get("volume"), 0.5, 0.0, 2.0), 3),
+                           "mute": bool(x.get("mute")), "solo": bool(x.get("solo"))})
+    s["layers"] = layers
+    for key in ("mute", "solo"):
+        s[key] = [k for k in SOUND_KEYS if k in (raw.get(key) if isinstance(raw.get(key), list) else [])]
     sid = str(raw.get("mix_split") or "")
     s["mix_split"] = sid if SPLIT_ID.match(sid) else ""
     for layer in MIX_LAYERS:
@@ -225,7 +239,8 @@ def clean_frame(raw: Any) -> Dict[str, Any]:
             "mask": {"shape": m_raw.get("shape") if m_raw.get("shape") in MASK_SHAPES else "none",
                      "x": round(_num(m_raw.get("x"), dm["x"], 0.0, 1.0), 4), "y": round(_num(m_raw.get("y"), dm["y"], 0.0, 1.0), 4),
                      "w": round(_num(m_raw.get("w"), dm["w"], 0.02, 2.0), 4), "h": round(_num(m_raw.get("h"), dm["h"], 0.02, 2.0), 4),
-                     "feather": round(_num(m_raw.get("feather"), dm["feather"], 0.0, 100.0), 1), "invert": bool(m_raw.get("invert"))}}
+                     "feather": round(_num(m_raw.get("feather"), dm["feather"], 0.0, 100.0), 1), "invert": bool(m_raw.get("invert")),
+                     "rot": round(_num(m_raw.get("rot"), 0.0, -180.0, 180.0), 2)}}
 
 
 def frame_active(fr: Optional[Dict[str, Any]]) -> bool:
@@ -533,10 +548,18 @@ def remap_words(words: Sequence[Word], segments: Sequence[Segment], fps: float) 
     return fixed
 
 
+def _solo_any(st: Dict[str, Any], layers: Optional[Sequence[Dict[str, Any]]] = None) -> bool:
+    """Is anything soloed? (then only the soloed things are heard)"""
+    return bool(st["solo"]) or any(x.get("solo") for x in (layers if layers is not None else st["layers"]))
+
+
 def _layer_mix(st: Dict[str, Any], live: List[Dict[str, Any]], src_path: str, planner: Any,
                stems_home: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """The sound-layer mix (see splitter.py) when the person changed a layer's loudness, else None (= the original sound)."""
     gains = {layer: float(st["mix_" + layer]) for layer in MIX_LAYERS}
+    for layer in MIX_LAYERS:
+        if layer in st["mute"] or (_solo_any(st) and layer not in st["solo"]):
+            gains[layer] = 0.0
     if not st["mix_split"] or all(abs(g - 1.0) < 0.001 for g in gains.values()):
         return None
     from .splitter import SplitStore
@@ -552,14 +575,15 @@ def _layer_mix(st: Dict[str, Any], live: List[Dict[str, Any]], src_path: str, pl
     return {"id": info["id"], "start": info["start"], "end": info["end"], "files": info["files"], "gain": gains}
 
 
-def plan_project(project: Dict[str, Any], src_path: str, *, music_path: Optional[str] = None, captions_path: Optional[str] = None,
+def plan_project(project: Dict[str, Any], src_path: str, *, music_path: Optional[str] = None, layers: Optional[Sequence[Dict[str, Any]]] = None,
+                 captions_path: Optional[str] = None,
                  preview: bool = False,
                  output_path: Optional[str] = None, cancel: Optional[threading.Event] = None,
                  log: Optional[Callable[[str], None]] = None, stems_home: Optional[str] = None) -> Plan:
     """Turn a project into a render :class:`Plan`.
 
     ``project`` must already be cleaned with :func:`clean_project`. ``music_path`` is the real path of the
-    music file (the page only knows file ids). ``preview=True`` gives a small, fast 480p version.
+    music file and ``layers`` the real paths of the extra music layers ([{"path", "volume", "mute", "solo"}]); the page only knows file ids. ``preview=True`` gives a small, fast 480p version.
     """
     media: MediaInfo = probe_media(src_path)
     st = project["settings"]
@@ -587,7 +611,11 @@ def plan_project(project: Dict[str, Any], src_path: str, *, music_path: Optional
     analyzer = Analyzer(media, None, cancel, log)
     planner = _ProjectPlanner(load_script(""), media, analyzer, out, FileResolver(), face_provider=make_face_provider(analyzer))
     reframe = ReframeSpec(aspect, "face" if follow else "center") if aspect and planner.has_video else None
-    silent = not st["original_sound"]
+    layers = list(layers or [])
+    solo = _solo_any(st, layers)
+    # the video's own sound is silent when switched off, muted, or when something else is soloed
+    silent = (not st["original_sound"] or "original" in st["mute"] or (solo and "original" not in st["solo"] and not st["mix_split"])
+              or (solo and bool(st["mix_split"]) and not (set(st["solo"]) & set(MIX_LAYERS))))
     face_path: List[follow_mod.Point] = []
     wants_face = [p for p in live if p["follow"]["mode"] == "face"]
     if wants_face and planner.has_video and reframe is None:
@@ -623,13 +651,16 @@ def plan_project(project: Dict[str, Any], src_path: str, *, music_path: Optional
     if planner.total < 1:
         raise ScriptError("The finished video would be empty.", "Put a piece back, or make a piece longer.")
     audio = AudioSpec()
-    if music_path:
-        if not probe_media(music_path).has_audio:
-            raise ScriptError("The music file has no sound.", "Choose an audio file (mp3, wav, m4a ...).")
-        audio.music.append(MusicSpec(music_path, float(st["music_volume"]), bool(st["duck"]) and not silent and media.has_audio,
-                                     0.0, None, True, 0.5, 1.5))
-    if st["even_loudness"] and (music_path or (media.has_audio and not silent)):
-        audio.loudnorm = {"target": -14.0, "true_peak": -1.5, "lra": 11.0}
+    tracks = ([{"path": music_path, "volume": float(st["music_volume"]), "mute": False, "solo": False}] if music_path else []) + layers
+    for t in tracks:
+        if t.get("mute") or (solo and not t.get("solo")):
+            continue
+        if not probe_media(t["path"]).has_audio:
+            raise ScriptError("A music file has no sound.", "Choose an audio file (mp3, wav, m4a ...).")
+        # music never ducks under speech: its loudness is whatever you set
+        audio.music.append(MusicSpec(t["path"], float(t["volume"]), False, 0.0, None, True, 0.5, 1.5))
+    if audio.music or (media.has_audio and not silent):
+        audio.loudnorm = dict(FINAL_LOUDNESS)             # always last, on the whole mix (video sound + every music layer)
     if media.has_audio and not silent:
         if st["noise"] != "off":
             audio.denoise = {"amount": NOISE_LEVELS[st["noise"]], "highpass": True}

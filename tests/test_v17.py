@@ -310,3 +310,37 @@ def test_frame_tall_canvas_blurred_background_and_a_sharp_masked_strip(web, tmp_
     p = v["project"]; p["settings"]["frame"] = {"ratio": "original"}
     _, s = c.json("PUT", "/api/projects/" + p["id"], p)
     assert s["settings"]["frame"] is None
+
+
+def test_frame_soft_edge_leaves_no_seam_where_the_picture_stops_and_the_mask_can_turn(web, tmp_path):
+    c, state = web
+    src = tmp_path / "ramp.mp4"
+    subprocess.run([FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=black:s=640x360:r=25:d=1", "-f", "lavfi", "-i", "sine=duration=1",
+                    "-vf", "geq=lum='255-0.7*Y':cb=128:cr=128", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(src)], check=True)
+    fid = c.upload(str(src))
+
+    def biggest_step(out):
+        rows = _gray(out, 0.5, 360, 640)
+        col = [rows[y][180] for y in range(640)]
+        return max(abs(col[y + 1] - col[y]) for y in range(200, 270))            # around the picture's top edge (row ~219)
+
+    # the picture is 360 x 202 on the tall canvas (rows 219..421); the strip's soft edge reaches past it
+    soft = {"ratio": "9:16", "bg": "blur", "blur": 60, "mask": {"shape": "strip", "y": 0.5, "h": 0.4, "feather": 40}}
+    hard = {"ratio": "9:16", "bg": "blur", "blur": 60, "mask": {"shape": "strip", "y": 0.5, "h": 0.4, "feather": 0}}
+    _, out_soft = _render(c, fid, soft)
+    _, out_hard = _render(c, fid, hard)
+    assert biggest_step(out_soft) < 12, biggest_step(out_soft)
+    assert biggest_step(out_hard) > 3 * biggest_step(out_soft)                   # it really is the soft edge that removes the line
+    # the middle of the strip is the sharp picture, untouched
+    _, out_plain = _render(c, fid, {"ratio": "9:16", "bg": "blur", "blur": 60})
+    a, b = _gray(out_soft, 0.5, 360, 640), _gray(out_plain, 0.5, 360, 640)
+    assert abs(a[320][180] - b[320][180]) <= 3
+    # a turned mask is stored and tilts the strip: far left of the middle the band sits higher than on the straight one
+    straight = {"ratio": "9:16", "bg": "black", "mask": {"shape": "strip", "y": 0.5, "h": 0.1, "feather": 0}}
+    turned = {"ratio": "9:16", "bg": "black", "mask": {"shape": "strip", "y": 0.5, "h": 0.1, "feather": 0, "rot": 30}}
+    _, out_a = _render(c, fid, straight)
+    saved, out_b = _render(c, fid, turned)
+    assert saved["settings"]["frame"]["mask"]["rot"] == 30
+    ra, rb = _gray(out_a, 0.5, 360, 640), _gray(out_b, 0.5, 360, 640)
+    assert ra[228][20] < 10 and rb[228][20] > 60                                  # (20, 228) is only inside the tilted band
+    assert ra[320][180] > 60 and rb[320][180] > 60                                # the middle is in both
