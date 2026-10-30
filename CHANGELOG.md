@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.12.0
+* **Setup now downloads the AI models, so nothing downloads later.** When you install Nyenz Edit, setup gets the
+  **sound-splitting model** (76 MB) and the **captions model** (Whisper base, about 148 MB), checks the size and the SHA-256
+  fingerprint of every file, and puts them in place. The scene finder needs no model file.
+  * A model that is already there is not downloaded again, so updates are quick.
+  * An automatic update from an older version gets the missing models too.
+  * If there is no internet at setup, Nyenz Edit still installs and gets the model the first time you use it, as before.
+  * Captions use the downloaded model, so the first caption run no longer waits for a download.
 ## 1.11.0
 * **Final stage: sound.** The Final page has real sound tools now.
   * **Remove noise**, **Split the sound** (Voices, Music, Effects) and **Fix loudness** in the Sound tab.

@@ -304,3 +304,37 @@ def test_split_quality_reports_the_shares_and_how_well_the_layers_add_back(tmp_p
     lossy = {}
     S.split_sound(str(src), 0.0, 8.0, tmp_path / "lossy", lambda chunk, fast=True: np.stack([chunk * 0.3, chunk * 0.1, chunk * 0.1]), stats=lossy)
     assert 4 <= lossy["rebuild_db"] <= 8                                  # half the amplitude is missing: about 6 dB
+
+
+# ------------------------------------------------------------------ 1.12: the installer downloads the AI models
+def test_model_list_is_complete_and_the_installer_include_is_up_to_date(tmp_path):
+    from editforge import modelpack
+    import importlib.util
+    root = Path(__file__).resolve().parent.parent
+    names = {(f["model"], f["name"]) for f in modelpack.FILES}
+    assert ("sound", "sound-split-1.onnx") in names
+    assert {n for m, n in names if m == "captions"} == {"config.json", "model.bin", "tokenizer.json", "vocabulary.txt"}
+    sound = next(f for f in modelpack.FILES if f["model"] == "sound")
+    assert (sound["url"], sound["size"], sound["sha256"]) == ("https://github.com/nyenz/nyenz-video-edit/releases/download/sound-model-1/sound-split-1.onnx", 76080146, "b43c4978c07667b2c6e6aed8c3c1ad5b263a96f8fbc8faead2cec45971646d4d")
+    import editforge.splitter as sp_
+    assert sp_.MODEL_URL == sound["url"] and sp_.MODEL_SHA256 == sound["sha256"]
+    for f in modelpack.FILES:
+        assert str(f["url"]).startswith("https://github.com/nyenz/nyenz-video-edit/releases/download/")
+        assert len(str(f["sha256"])) == 64 and int(f["size"]) > 0
+    spec = importlib.util.spec_from_file_location("make_models_iss", root / "tools" / "make_models_iss.py")
+    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+    assert (root / "packaging" / "models.iss").read_text(encoding="utf-8") == mod.build()    # run tools/make_models_iss.py if this fails
+    assert '#include "models.iss"' in (root / "packaging" / "installer.iss").read_text(encoding="utf-8")
+
+
+def test_captions_use_the_model_the_installer_put_in_place(tmp_path):
+    from editforge import modelpack
+    assert modelpack.local_whisper(tmp_path) is None                                  # nothing there yet: the first use downloads it
+    folder = tmp_path / "models" / modelpack.WHISPER_DIR
+    folder.mkdir(parents=True)
+    for f in modelpack.FILES:
+        if f["model"] == "captions":
+            (folder / str(f["name"])).write_bytes(b"x" * int(f["size"]))
+    assert modelpack.local_whisper(tmp_path) == str(folder)
+    (folder / "model.bin").write_bytes(b"short")                                      # a broken copy is not used
+    assert modelpack.local_whisper(tmp_path) is None

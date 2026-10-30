@@ -147,6 +147,12 @@ def transcribe(path: str, *, language: str = "auto", model: str = "base", device
                 dev = "cuda"
         except Exception:
             dev = "cpu"
+    if model == "base":                                  # the model the installer put on this computer: no download needed
+        try:
+            from .. import modelpack
+            model = modelpack.local_whisper() or model
+        except Exception:  # noqa: BLE001
+            pass
     try:
         wm = WhisperModel(model, device=dev, compute_type="float16" if dev == "cuda" else "int8")
     except Exception as exc:
