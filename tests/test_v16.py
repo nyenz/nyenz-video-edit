@@ -391,3 +391,35 @@ def test_update_that_cannot_start_says_so_instead_of_hanging(tmp_path, monkeypat
         time.sleep(0.02)
     assert u.status()["job"]["state"] == "failed" and "could not be started" in u.status()["job"]["error"]
     assert not quit_called                                                       # the app stays open
+
+
+def test_the_light_copy_pass_also_makes_one_timeline_picture_per_second(tmp_path):
+    from editforge.web.preview import PreviewMaker
+    src = tmp_path / "six.mp4"
+    subprocess.run([FFMPEG_EXE(), "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=25:duration=6", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(src)], check=True)
+    pm = PreviewMaker(tmp_path / "previews", tmp_path / "thumbs")
+    pm.start(str(src))
+    for _ in range(300):
+        if pm.status(str(src))["state"] in ("ready", "failed"):
+            break
+        time.sleep(0.1)
+    assert pm.status(str(src))["state"] == "ready" and pm.strip_done(str(src))
+    pics = sorted((tmp_path / "thumbs").glob("*_s0*.jpg"))
+    assert 6 <= len(pics) <= 7
+    assert pm.strip_picture(str(src), 3.0) is not None and pm.strip_picture(str(src), 3.0).name.endswith("_s000003.jpg")
+    # an older light copy without pictures gets them in a quick second pass
+    for p in pics:
+        p.unlink()
+    next((tmp_path / "thumbs").glob("*_s.done")).unlink()
+    pm.ensure_strip(str(src))
+    for _ in range(200):
+        if pm.strip_done(str(src)):
+            break
+        time.sleep(0.1)
+    assert pm.strip_done(str(src)) and pm.strip_picture(str(src), 5.0) is not None
+    pm.shutdown()
+
+
+def FFMPEG_EXE():
+    from editforge.core import ffmpeg as ff
+    return ff.find_executable("ffmpeg")

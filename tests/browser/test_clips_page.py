@@ -14,8 +14,9 @@ def movie_id(live, movie):
 
 def test_page_opens_with_only_the_clip_tools(live, page, movie_id):
     open_clips(live, page, movie_id)
-    labels = page.eval_on_selector_all("#clipTabs .tab", "els => els.map(e => e.textContent.trim())")
-    assert labels == ["Parts", "Tools"]                      # no Video / Sound tabs here any more
+    # marking sits right under the picture; the right side is the chosen clip, with no tabs
+    assert page.is_visible(".markbar #setStart") and page.is_visible(".markbar #addNew")
+    assert page.query_selector("#clipTabs") is None and page.is_visible("#noClipT")
     for gone in ("vBri", "aVol", "vShape", "aNoise"):
         assert page.query_selector("#" + gone) is None
     assert page.errors == []

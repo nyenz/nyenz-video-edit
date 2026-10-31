@@ -271,7 +271,7 @@ function renderMarks() {
   $("playSel").disabled = !ok; $("addNew").disabled = !ok || !canEdit();
   $("addPart").disabled = !ok || !c || !canEdit();
   $("tCutOut").disabled = !ok || !c || !canEdit();
-  $("addPartLabel").textContent = c ? "Add part to " + c.name : "Add part to this clip";
+  $("addPartLabel").textContent = "Add to clip"; $("addPart").title = c ? "Add the marked part to " + c.name + " (A)" : "Choose a clip on the left first";
   $("markNote").textContent = s !== null && e !== null && e <= s ? "The end must come after the start." : "";
   const m = $("markSel");
   m.hidden = s === null;
@@ -535,7 +535,8 @@ function setQuality(v) {
 
 // ------------------------------------------------------------------ the chosen clip (right)
 function renderTabs() {
-  const tabs = $("clipTabs"); tabs.replaceChildren();
+  const tabs = $("clipTabs"); if (!tabs) return;             // the clip panel has no tabs any more: everything is on one page
+  tabs.replaceChildren();
   for (const [k, label] of [["parts", "Parts"], ["tools", "Tools"]]) {
     tabs.append(el("button", { class: "tab" + (C.tab === k ? " on" : ""), type: "button", role: "tab", onclick: () => { C.tab = k; renderSide(); } }, el("span", { text: label })));
   }
@@ -621,7 +622,8 @@ function renderStrip() {
   for (let k = first; k <= last; k++) {
     const t0 = k * w / C.pps; if (t0 >= dur() || have.has(k)) continue;
     const at = Math.min(dur() - 0.05, t0 + w / C.pps / 2);
-    const img = el("img", { alt: "", draggable: "false", decoding: "async", "data-k": String(k), src: thumbUrl(C.cs.source, Math.max(0, Math.floor(at * 2) / 2)) });
+    const img = lazyThumb(thumbUrl(C.cs.source, Math.max(0, Math.floor(at))));
+    img.dataset.k = String(k);
     img.style.left = (k * w) + "px"; img.style.width = w + "px"; strip.append(img);
   }
 }

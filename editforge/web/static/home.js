@@ -3,8 +3,8 @@
 //   1 Clips: take many clips out of a movie.   2 Edit: cut, patterns, sound, look.   3 Final: finished videos.
 const PHASES = [
   ["clips", "Clips", "scissors", "Take clips out of a movie"],
-  ["edit", "Edit", "layers", "Cut, patterns, sound and look"],
-  ["final", "Final", "check", "Your finished videos"],
+  ["edit", "Edit", "layers", "Versions, sections and scenes"],
+  ["final", "Final", "check", "Sound, picture and export"],
 ];
 const H = { phase: "clips", clipsets: [], projects: [], final: [], trash: false, view: "grid", q: "" };
 try {

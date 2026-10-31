@@ -126,6 +126,30 @@ function errText(e) { return e.message + (e.fix ? " " + e.fix : ""); }
 /** preview: false = the original, true = the 480p light copy, "q" = the quick copy (picture as it is, sound made playable). */
 function mediaUrl(id, preview) { return "/media?id=" + encodeURIComponent(id) + (preview ? "&preview=" + (preview === "q" ? "q" : "1") : "") + "&t=" + encodeURIComponent(TOKEN); }
 function thumbUrl(id, at, big) { return "/thumb?id=" + encodeURIComponent(id) + "&at=" + Math.max(0, at).toFixed(2) + (big ? "&h=240" : "") + "&t=" + encodeURIComponent(TOKEN); }
+/** Timeline and strip pictures: at most 3 load at once and the newest (on screen) first, so a button press never waits
+ *  behind a pile of pictures (a browser only talks to the app over 6 lines at a time). Pictures seen before show at once. */
+const Thumbs = { q: [], busy: 0, max: 3, seen: new Set(), timer: 0 };
+function lazyThumb(url, cls, first) {
+  const img = el("img", { alt: "", class: cls || "", draggable: "false" });
+  if (Thumbs.seen.has(url)) { img.src = url; return img; }
+  img.dataset.src = url;
+  if (first) Thumbs.urgent = (Thumbs.urgent || []).concat([img]); else Thumbs.q.push(img);
+  if (Thumbs.q.length > 4000) Thumbs.q.splice(0, Thumbs.q.length - 4000);
+  if (!Thumbs.timer) Thumbs.timer = setTimeout(pumpThumbs, 0);           // after the picture is on the page
+  return img;
+}
+function pumpThumbs() {
+  Thumbs.timer = 0;
+  while (Thumbs.busy < Thumbs.max && (Thumbs.q.length || (Thumbs.urgent || []).length)) {
+    const img = (Thumbs.urgent || []).length ? Thumbs.urgent.shift() : Thumbs.q.pop();
+    if (!img.isConnected || img.src) continue;                             // redrawn or scrolled away: not needed any more
+    Thumbs.busy++;
+    const url = img.dataset.src;
+    const done = (ok) => { Thumbs.busy--; img.onload = img.onerror = null; if (ok) Thumbs.seen.add(url); if (!Thumbs.timer) Thumbs.timer = setTimeout(pumpThumbs, 0); };
+    img.onload = () => done(true); img.onerror = () => done(false);
+    img.src = url;
+  }
+}
 function fmtSize(b) { return b > 1e9 ? (b / 1e9).toFixed(1) + " GB" : (b / 1e6).toFixed(1) + " MB"; }
 /** CapCut-style short size: 320.8M, 1.4G, 553.8K. */
 function fmtShort(b) { return b >= 1e9 ? (b / 1e9).toFixed(1) + "G" : b >= 1e6 ? (b / 1e6).toFixed(1) + "M" : (b / 1e3).toFixed(1) + "K"; }
@@ -165,8 +189,17 @@ function toast(text, bad) {
 const APP_NAME = "Nyenz Edit";
 const PAGES = [["/", "Home", "home"], ["/clips", "Clips", "scissors"], ["/edit", "Edit", "layers"], ["/final", "Final", "check"], ["/combine", "Combine", "combine"], ["/advanced", "Advanced", "code"]];
 function topBar(active, extra) {
+  // the three stages in order; Combine and Advanced wait under More
   const nav = el("nav", { class: "nav", "aria-label": "Pages" });
-  for (const [href, name, ic] of PAGES.slice(1)) nav.append(el("a", { href, class: active === href ? "on" : "" }, icon(ic, "s"), el("span", { text: name })));
+  PAGES.slice(1, 4).forEach(([href, name, ic], i) => nav.append(el("a", { href, class: active === href ? "on" : "", title: ["Stage 1: take clips out of a movie", "Stage 2: sections, versions and scenes", "Stage 3: sound, picture and export"][i] },
+    el("span", { class: "n", text: String(i + 1) }), icon(ic, "s"), el("span", { text: name }))));
+  const more = el("div", { class: "navmore" + (PAGES.slice(4).some(([h]) => h === active) ? " here" : "") });
+  const menu = el("div", { class: "menu", role: "menu" });
+  const notes = { "/combine": "Put two videos together", "/advanced": "Write an edit as text" };
+  for (const [href, name, ic] of PAGES.slice(4)) menu.append(el("a", { href, class: active === href ? "on" : "", role: "menuitem" }, icon(ic, "s"), el("span", {}, el("span", { text: name }), el("small", { text: notes[href] || "" }))));
+  more.append(el("button", { type: "button", "aria-haspopup": "menu", onclick: (e) => { e.stopPropagation(); more.classList.toggle("open"); } }, icon("more", "s"), el("span", { text: PAGES.slice(4).find(([h]) => h === active) ? PAGES.slice(4).find(([h]) => h === active)[1] : "More" }), icon("chev", "s")), menu);
+  document.addEventListener("click", () => more.classList.remove("open"));
+  nav.append(more);
   const bar = el("header", { class: "top" },
     el("a", { class: "brand", href: "/", title: "Home" }, el("img", { src: "/static/logo.svg", alt: "" }), el("span", { text: APP_NAME })),
     nav, el("div", { class: "grow" }), Update.pill());

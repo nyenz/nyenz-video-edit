@@ -182,7 +182,7 @@ class AppState:
             d.mkdir(parents=True, exist_ok=True)
         self.uploads, self.outputs, self.media = self.uploads.resolve(), self.outputs.resolve(), self.media.resolve()
         self.store = JobStore(self.home / "jobs.sqlite3")
-        self.previews = PreviewMaker(self.home / "previews")
+        self.previews = PreviewMaker(self.home / "previews", self.home / "thumbs")
         self.projects = self.home / "projects"
         self.thumbs = self.home / "thumbs"
         self.clipsets = self.home / "clipsets"
@@ -347,6 +347,8 @@ class AppState:
         info.pop("path", None)
         info["plays_in_browser"], info["playback_note"] = playback_check(src, info)
         info["preview"] = self.previews.status(src) if info["has_video"] else {"state": "none", "progress": 0.0, "error": ""}
+        if info["has_video"] and info["preview"]["state"] == "ready":
+            self.previews.ensure_strip(src)
         return info
 
     def thumbnail(self, src: str, at: float, height: int = 96) -> Optional[Path]:
@@ -355,6 +357,10 @@ class AppState:
         out = self.thumbs / (f"{self.fingerprint(src)}_{ms}.jpg" if height == 96 else f"{self.fingerprint(src)}_{ms}_h{height}.jpg")
         if out.is_file() and out.stat().st_size > 0:
             return out
+        if height == 96 and abs(at - round(at)) < 0.01:          # whole seconds come from the picture strip (made in one pass)
+            strip = self.previews.strip_picture(src, at)
+            if strip is not None:
+                return strip
         light = self.previews.path_for(src)          # the light copy decodes many times faster than a big original
         if light.is_file() and light.stat().st_size > 0:
             src = str(light)
@@ -753,6 +759,8 @@ class AppState:
                 if f.name not in busy:
                     n += _unlink(f)
         elif what == "thumbs":
+            for f in self.thumbs.glob("*_s.done"):    # first the markers, so the picture strips are made again later
+                _unlink(f)
             for f in self.thumbs.glob("*.jpg"):
                 n += _unlink(f)
         elif what == "uploads":                  # copies of videos sent in by dragging, that no project uses

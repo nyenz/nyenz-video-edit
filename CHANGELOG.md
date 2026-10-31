@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.14.0
+* **Each stage has its own screen now** (before, Edit and Final were the same screen with different buttons).
+  * **Clips (1):** marking sits right under the video: **Start**, **End**, the two times, **Add as new clip**. The right side is the
+    chosen clip with everything you can do to it on one page (longer / shorter, split, cut out, join, duplicate). No tabs.
+  * **Edit (2):** the steps run across the top in order: **1 Odd / Even versions → 2 Remove every 4th second → 3 Separate scenes →
+    Send to Final**. Each step shows when it is done (for example "75 seconds taken out", "9 scenes"). The versions of the clip are cards
+    on the left (click one to work on it). Click a section and the right side has **Start earlier / End later / Start later / End sooner**
+    (0.1, 0.5 or 1 s), never over the next section. Cut and Pattern wait in dropdowns on the left.
+  * **Final (3):** three tabs on the left: **Sound** (Loudness always on, Remove noise, Split the sound, your music layers),
+    **Picture** (shape, blurred background, size and position, mask, transitions) and **Text**. The right side is the chosen piece.
+    The timeline has track names, and every music layer has its own row with **mute** and **solo**.
+  * The top bar shows the three stages in order (1 Clips, 2 Edit, 3 Final); Combine and Advanced are under **More**.
+* **No more freezing.**
+  * The timelines asked for hundreds of small pictures at once, and every button had to wait behind them (17 seconds for
+    "Remove every 4th" on a 10-minute clip). Now at most three pictures load at a time and buttons answer at once (0.3 seconds).
+  * The small pictures are now made in the same pass as the smooth-playback copy, one per second, so they appear quickly.
+  * Background work (the smooth-playback copy and the pictures) runs at low priority, so the app and the computer stay quick.
+  * The live blurred background in Final cost about 64 ms per frame (the page stuttered while playing). Now about 10 ms.
 ## 1.13.0
 * **Updates are one click and easy to see.** The top bar always shows your version. When a newer one is out, the button turns blue
   and says **Update to x.y.z**, and a message says so once. Click it, then **Update now**: it downloads and checks the update,

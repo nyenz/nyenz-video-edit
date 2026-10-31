@@ -4,148 +4,99 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="ef-token" content="{{TOKEN}}">
-<title>Editor · Nyenz Edit</title>
+<title>Nyenz Edit</title>
 <link rel="icon" href="/static/logo.svg" type="image/svg+xml">
 <link rel="icon" href="/static/logo.png" type="image/png" sizes="256x256">
 <link rel="stylesheet" href="/static/ui.css">
 </head>
 <body>
 
-<!-- The editing suite -->
+<!-- The editing suite. One engine, two different screens:
+     Edit (stage 2): the three steps across the top, the versions on the left, the selected sections on the right.
+     Final (stage 3): Sound, Picture and Text tabs on the left, the selected piece on the right, layers in the timeline. -->
 <div id="suite" class="suite" hidden>
-  <nav class="rail" aria-label="Tools">
-    <button data-panel="sections" data-stage="edit" title="The three buttons: sections, thin out, scenes"><i data-ic="pattern"></i>Sections</button>
-    <button data-panel="media" title="Video and project"><i data-ic="film"></i>Media</button>
-    <hr data-stage="edit">
-    <span class="later" data-stage="edit">More</span>
-    <button data-panel="cut" title="Cut into pieces"><i data-ic="scissors"></i>Cut</button>
-    <button data-panel="pattern" data-stage="edit" title="Keep or remove by a pattern"><i data-ic="pattern"></i>Pattern</button>
-    <hr data-stage="final">
-    <span class="later" data-stage="final">Finish</span>
-    <button data-panel="audio" data-stage="final" title="Music"><i data-ic="music"></i>Audio</button>
-    <button data-panel="sound" data-stage="final" title="Clean up the sound: noise, voices, balance"><i data-ic="sliders"></i>Sound</button>
-    <button data-panel="format" data-stage="final" title="Shape and transitions"><i data-ic="ratio"></i>Format</button>
-    <button data-panel="frame" data-stage="final" title="Shape, background layer, size, position, turn and mask"><i data-ic="crop"></i>Frame</button>
-    <button data-panel="text" data-stage="final" title="Words and captions"><i data-ic="type"></i>Text</button>
-  </nav>
 
-  <aside class="side left" id="left" aria-label="Tool options">
-    <!-- Sections: the Edit stage's three buttons -->
-    <section data-for="sections" hidden>
-      <div class="side-h"><h2>Sections</h2></div>
+  <!-- ===== Edit: the steps, in order ===== -->
+  <div class="stepbar" id="stepbar" data-stage="edit" aria-label="Steps">
+    <button id="secVersions" class="stepcard" type="button"><span class="n">1</span><span class="t"><b>Odd / Even versions</b><small id="stepNote1">2 s sections, two versions</small></span></button>
+    <i data-ic="chevr" class="arrow"></i>
+    <button id="secThin" class="stepcard" type="button"><span class="n">2</span><span class="t"><b>Remove every 4th second</b><small id="stepNote2">keep 1 2 3, cut 4 …</small></span></button>
+    <i data-ic="chevr" class="arrow"></i>
+    <button id="secScenes" class="stepcard" type="button"><span class="n">3</span><span class="t"><b id="secScenesLabel">Separate scenes</b><small id="stepNote3">cut where each scene ends</small></span></button>
+    <i data-ic="chevr" class="arrow"></i>
+    <button id="secFinal" class="stepcard go" type="button"><span class="n"><i data-ic="check" class="s"></i></span><span class="t"><b>Send to Final</b><small>sound, picture, export</small></span></button>
+    <div id="secNote" class="stepnote" aria-live="polite"></div>
+  </div>
+
+  <aside class="side left" id="left" aria-label="Tools">
+    <!-- ===== Edit: versions and more tools ===== -->
+    <section class="edit-left" data-stage="edit">
+      <div class="side-h"><h2>Versions</h2><span class="note" id="verCount"></span></div>
       <div class="pad">
-        <div class="steps" data-steps></div>
-        <div class="box sec-step">
-          <p class="hint"><b>1.</b> Cut the clip into 2 second sections and make two versions: Odd (sections 1, 3, 5 …) and Even (2, 4, 6 …). Nothing is made yet: you can still move and stretch every section.</p>
-          <button id="secVersions" class="btn primary wide"><i data-ic="pattern" class="s"></i><span>Make Odd and Even versions</span></button>
-          <div id="secVersionList" class="list"></div>
-        </div>
-        <div class="box sec-step">
-          <p class="hint"><b>2.</b> On the version you have open: 1 second sections, and every 4th one taken out (1 2 3 <i>4</i> 5 6 7 <i>8</i> …). The rest is joined up.</p>
-          <button id="secThin" class="btn primary wide"><i data-ic="scissors" class="s"></i><span>1 s sections, remove every 4th</span></button>
-        </div>
-        <div class="box sec-step">
-          <p class="hint"><b>3.</b> Look at the pictures of this video, as it is now, and cut where a new scene begins. Joins that put two different scenes together count too.</p>
-          <button id="secScenes" class="btn primary wide"><i data-ic="split" class="s"></i><span id="secScenesLabel">Separate scenes</span></button>
-        </div>
-        <div id="secNote" class="note" aria-live="polite"></div>
-        <button id="secFinal" class="btn wide"><i data-ic="check" class="s"></i><span>Send this version to Final</span></button>
-        <p class="hint">Undo (Ctrl+Z) takes back any of these. Sections can be removed, moved and stretched by hand in the timeline until you send it on.</p>
+        <div id="secVersionList" class="list versions"></div>
+        <p class="hint" id="verHint">Step 1 makes an Odd and an Even version of this clip. Each one is its own video (nothing is rendered). Click a version to work on it.</p>
       </div>
-    </section>
-
-    <!-- Media -->
-    <section data-for="media">
-      <div class="side-h"><h2>Media</h2></div>
-      <div class="pad">
-        <label class="field"><span>Project name</span><input id="projName" class="input" maxlength="80"></label>
-        <div class="box">
-          <div class="row"><img id="srcThumb" class="thumb" alt=""><div class="t"><b id="srcName" class="ellip"></b><div id="srcFacts" class="note"></div></div></div>
-          <p id="srcWhere" class="hint where"></p>
-        </div>
-        <div class="btns"><a class="btn" href="/?phase=edit"><i data-ic="home" class="s"></i><span>All projects</span></a></div>
-      </div>
-      <details class="sec"><summary><i data-ic="folder"></i>Other projects<i data-ic="chev" class="chev"></i></summary><div class="pad"><div id="projList" class="list"></div></div></details>
-    </section>
-
-    <!-- Cut -->
-    <section data-for="cut" hidden>
-      <div class="side-h"><h2>Cut into pieces</h2></div>
-      <div class="pad">
-        <div class="steps" data-steps></div>
-        <p class="hint">Chop the video into equal pieces (in step 2 and later: the pinned step before). Then keep or remove them by a pattern, or work on them by hand in the timeline.</p>
-        <div class="field"><span>Length of each piece</span><div id="cutChips"></div></div>
-        <div class="row"><input id="cutSec" class="input short" value="2" inputmode="decimal" aria-label="Seconds per piece"><span class="lbl">seconds</span><span class="grow"></span><button id="cutBtn" class="btn primary"><i data-ic="scissors" class="s"></i><span>Cut</span></button></div>
-        <div id="cutNote" class="note" aria-live="polite"></div>
-        <div class="box scene-box">
-          <p class="hint"><b>Cut at scene changes:</b> a piece for every scene (camera change) of the video. Then use Pattern on scenes.</p>
+      <details class="sec" data-sec="cut"><summary><i data-ic="scissors"></i><span>Cut into equal pieces</span><i data-ic="chev" class="chev"></i></summary>
+        <div class="pad">
+          <p class="hint">Chop the video into equal pieces (from step 2 on: the pinned step before).</p>
+          <div class="field"><span>Length of each piece</span><div id="cutChips"></div></div>
+          <div class="row"><input id="cutSec" class="input short" value="2" inputmode="decimal" aria-label="Seconds per piece"><span class="lbl">seconds</span><span class="grow"></span><button id="cutBtn" class="btn primary"><i data-ic="scissors" class="s"></i><span>Cut</span></button></div>
+          <div id="cutNote" class="note" aria-live="polite"></div>
           <button id="sceneCut" class="btn wide"><i data-ic="split" class="s"></i><span id="sceneCutLabel">Cut at scene changes</span></button>
+          <p class="hint">By hand: move the red playhead and press <span class="kbd">S</span>.</p>
         </div>
-        <div class="box"><p class="hint"><b>Cut by hand:</b> move the red playhead and press <span class="kbd">S</span> (or the scissors in the timeline) to split the piece under it.</p></div>
-      </div>
-    </section>
-
-    <!-- Pattern -->
-    <section data-for="pattern" hidden>
-      <div class="side-h"><h2>Pattern</h2></div>
-      <div class="pad">
-        <div class="steps" data-steps></div>
-        <div class="field"><span>In every group of</span><div id="patGroup"></div></div>
-        <div class="field"><span>Pick piece number</span><div id="patPicks" class="chips"></div></div>
-        <div id="patPreview" class="patprev" aria-hidden="true"></div>
-        <div class="field">
-          <button id="patRemove" class="btn primary wide"><i data-ic="trash" class="s"></i><span>Remove these</span></button>
-          <button id="patKeep" class="btn wide"><i data-ic="check" class="s"></i><span>Keep only these</span></button>
-          <button id="patSelect" class="btn ghost wide"><i data-ic="pattern" class="s"></i><span>Just select them</span></button>
-        </div>
-        <div id="patNote" class="note" aria-live="polite"></div>
-      </div>
-      <details class="sec"><summary><i data-ic="bookmark"></i>Saved patterns<i data-ic="chev" class="chev"></i></summary>
+      </details>
+      <details class="sec" data-sec="pattern"><summary><i data-ic="pattern"></i><span>Keep or remove by a pattern</span><i data-ic="chev" class="chev"></i></summary>
         <div class="pad">
-          <div id="recipeList" class="list"></div>
+          <div class="field"><span>In every group of</span><div id="patGroup"></div></div>
+          <div class="field"><span>Pick piece number</span><div id="patPicks" class="chips"></div></div>
+          <div id="patPreview" class="patprev" aria-hidden="true"></div>
+          <div class="field">
+            <button id="patRemove" class="btn primary wide"><i data-ic="trash" class="s"></i><span>Remove these</span></button>
+            <button id="patKeep" class="btn wide"><i data-ic="check" class="s"></i><span>Keep only these</span></button>
+            <button id="patSelect" class="btn ghost wide"><i data-ic="pattern" class="s"></i><span>Just select them</span></button>
+          </div>
+          <div id="patNote" class="note" aria-live="polite"></div>
+          <div class="field"><span>Saved patterns</span><div id="recipeList" class="list"></div></div>
           <button id="recipeSave" class="btn wide"><i data-ic="plus" class="s"></i><span>Save this pattern</span></button>
-          <p class="hint">Saves the pattern above with the effects of the first selected piece, to use on any project.</p>
         </div>
+      </details>
+      <details class="sec" data-sec="steps"><summary><i data-ic="bookmark"></i><span>Pinned steps</span><i data-ic="chev" class="chev"></i></summary>
+        <div class="pad"><div class="steps" data-steps></div></div>
       </details>
     </section>
 
-    <!-- Audio -->
-    <section data-for="audio" hidden>
-      <div class="side-h"><h2>Audio</h2></div>
-      <div class="pad">
-        <label class="swl">Keep the video's own sound <input type="checkbox" id="sOrig" class="sw"></label>
-        <div class="field"><span>Music layers</span></div>
-        <div id="musicLayers" class="mlayers"></div>
-        <button id="musicAdd" class="btn"><i data-ic="upload" class="s"></i><span>Add music</span></button>
-        <div id="musicProg" class="prog" hidden><i></i></div>
-        <p class="hint">Each layer has its own loudness, mute (M) and solo (S). The finished video is always set to YouTube's standard at the very end, on everything together, so the layers set how loud things are next to each other. Music never gets quieter by itself when someone talks.</p>
-        <div id="audioNote" class="note" aria-live="polite"></div>
-      </div>
-      <details class="sec"><summary><i data-ic="music"></i>Cut on the beat<i data-ic="chev" class="chev"></i></summary>
-        <div class="pad">
-          <p class="hint">Re-cuts the pieces so every cut lands on a beat of the music above. This starts the pieces over (Undo brings them back).</p>
-          <div class="row"><span class="lbl">Every</span><input id="beatEvery" class="input short" value="4" inputmode="numeric" aria-label="Beats per piece"><span class="lbl">beats</span><span class="grow"></span><button id="beatBtn" class="btn">Cut on the beat</button></div>
-          <div id="beatNote" class="note" aria-live="polite"></div>
-        </div>
-      </details>
-    </section>
+    <!-- ===== Final: Sound, Picture, Text tabs ===== -->
+    <div class="ftabs" data-stage="final" role="tablist">
+      <button type="button" data-panel="sound" role="tab"><i data-ic="sliders" class="s"></i>Sound</button>
+      <button type="button" data-panel="frame" role="tab"><i data-ic="crop" class="s"></i>Picture</button>
+      <button type="button" data-panel="text" role="tab"><i data-ic="type" class="s"></i>Text</button>
+    </div>
 
-    <!-- Sound clean-up -->
-    <section data-for="sound" hidden>
-      <div class="side-h"><h2>Sound</h2></div>
+    <!-- Sound: the three jobs first, then the mix -->
+    <section data-for="sound" data-stage="final" hidden>
       <div class="pad">
-          <div class="box loud-box">
-            <div class="row"><i data-ic="sliders" class="s"></i><b>Final loudness</b></div>
-            <p class="hint">Every finished video is set to YouTube's standard: <b>-14 LUFS</b>, with no peak above <b>-1 dB</b>. This is done last, on everything together: the video's sound and all your music layers. The exact number measured from the finished file is shown after the export, and a live meter runs while you watch it.</p>
+        <div class="jobs">
+          <div class="job loud-box">
+            <div class="job-h"><span class="job-ic"><i data-ic="sliders" class="s"></i></span><b>Loudness</b><span class="pill good">Always on</span></div>
+            <p class="hint">Every export ends at YouTube's level: <b>-14 LUFS</b>, peaks under <b>-1 dB</b>, on everything together.</p>
             <button id="checkMix" class="btn wide" type="button"><i data-ic="eye" class="s"></i><span>Check the mix (quick preview)</span></button>
           </div>
-          <div class="layers" id="lyBox">
-            <div class="layers-head"><i data-ic="layers"></i><b>Voices, music and effects</b></div>
+          <div class="job">
+            <div class="job-h"><span class="job-ic"><i data-ic="sparkles" class="s"></i></span><b>Remove noise</b></div>
+            <p class="hint">Hiss, hum and wind.</p>
+            <div id="noiseSeg"></div>
+            <select id="sNoise" hidden data-enhanced="1" aria-label="Remove noise"><option value="off">Off</option><option value="light">Light</option><option value="medium">Medium</option><option value="strong">Strong</option></select>
+          </div>
+          <div class="job layers" id="lyBox">
+            <div class="job-h layers-head"><span class="job-ic"><i data-ic="layers" class="s"></i></span><b>Split the sound</b></div>
             <p class="hint" id="lyHint"></p>
             <div id="lySplit">
-              <div class="field"><span>Part to split</span><select id="lyPart"><option value="use">The part I use</option><option value="all">The whole video</option></select></div>
-              <div class="field"><span>Quality</span><select id="lyMode"><option value="fast">Fast (recommended)</option><option value="best">Best (a few times slower)</option></select></div>
-              <button class="btn primary wide" id="lyBtn" type="button"><i data-ic="split" class="s"></i><span>Split the sound</span></button>
+              <div class="grid2">
+                <div class="field"><span>Part</span><select id="lyPart"><option value="use">The part I use</option><option value="all">The whole video</option></select></div>
+                <div class="field"><span>Quality</span><select id="lyMode"><option value="fast">Fast</option><option value="best">Best (slower)</option></select></div>
+              </div>
+              <button class="btn primary wide" id="lyBtn" type="button"><i data-ic="split" class="s"></i><span>Split into voices, music, effects</span></button>
             </div>
             <div id="lyProg" hidden>
               <div class="prog"><i></i></div>
@@ -158,46 +109,65 @@
               <button class="btn ghost" id="lyAgain" type="button"><i data-ic="restore" class="s"></i><span>Split again</span></button>
             </div>
           </div>
-          <div class="field"><span>Remove noise (hiss, hum, wind)</span><select id="sNoise"><option value="off">Off</option><option value="light">Light</option><option value="medium">Medium</option><option value="strong">Strong</option></select></div>
+        </div>
+      </div>
+      <!-- the mix: the video's own sound and your music layers -->
+      <div class="side-h sub"><h2>Music layers</h2><button id="musicAdd" class="btn"><i data-ic="plus" class="s"></i><span>Add music</span></button></div>
+      <div class="pad">
+        <label class="swl">Keep the video's own sound <input type="checkbox" id="sOrig" class="sw"></label>
+        <div id="musicLayers" class="mlayers"></div>
+        <div id="musicProg" class="prog" hidden><i></i></div>
+        <div id="audioNote" class="note" aria-live="polite"></div>
+      </div>
+      <details class="sec"><summary><i data-ic="vol"></i><span>Voices and tone</span><i data-ic="chev" class="chev"></i></summary>
+        <div class="pad">
           <div class="field"><span>Voices</span><select id="sVocals"><option value="keep">Keep as they are</option><option value="remove">Remove voices (keep the music)</option><option value="voice">Voices only (drop the music)</option></select></div>
           <label class="swl">Make voices clearer <input type="checkbox" id="sBoost" class="sw"></label>
           <label class="swl">Balance quiet and loud parts <input type="checkbox" id="sComp" class="sw"></label>
           <div class="field"><span>Bass <b class="num" id="sBassV"></b></span><input type="range" id="sBass" class="rng" min="-12" max="12" step="1" aria-label="Bass"></div>
           <div class="field"><span>Treble <b class="num" id="sTrebleV"></b></span><input type="range" id="sTreble" class="rng" min="-12" max="12" step="1" aria-label="Treble"></div>
-          <p class="hint">You hear these in Quick preview and in the export (the live viewer plays the plain sound). Removing voices works on stereo sound.</p>
+          <p class="hint">Heard in Quick preview and in the export (the live viewer plays the plain sound).</p>
         </div>
+      </details>
+      <details class="sec"><summary><i data-ic="music"></i><span>Cut on the beat</span><i data-ic="chev" class="chev"></i></summary>
+        <div class="pad">
+          <p class="hint">Re-cuts the pieces so every cut lands on a beat of the first music layer. Undo brings them back.</p>
+          <div class="row"><span class="lbl">Every</span><input id="beatEvery" class="input short" value="4" inputmode="numeric" aria-label="Beats per piece"><span class="lbl">beats</span><span class="grow"></span><button id="beatBtn" class="btn">Cut on the beat</button></div>
+          <div id="beatNote" class="note" aria-live="polite"></div>
+        </div>
+      </details>
     </section>
 
-    <!-- Format -->
-    <section data-for="format" hidden>
-      <div class="side-h"><h2>Format</h2></div>
-      <div class="pad">
-        <div class="field"><span>Shape</span><div id="shapeCards" class="shapes"></div></div>
-        <div class="field"><span>Fill the frame</span><div id="shapeFill"></div></div>
-        <div class="field"><span>Between pieces</span><select id="sTrans">
-          <option value="none">Straight cut</option><option value="fade">Crossfade</option><option value="fadeblack">Dip to black</option>
-          <option value="fadewhite">Dip to white</option><option value="slideleft">Slide</option><option value="wipeleft">Wipe</option>
-          <option value="circleopen">Circle</option><option value="pixelize">Pixels</option><option value="zoomin">Zoom</option></select></div>
-        <div class="field"><span>Transition length</span><select id="sTransS"><option value="0.2">0.2 s</option><option value="0.3">0.3 s</option><option value="0.5">0.5 s</option><option value="1">1 s</option></select></div>
-        <div class="grid2">
-          <div class="field"><span>Fade in</span><select id="sFadeIn"><option value="0">None</option><option value="0.5">0.5 s</option><option value="1">1 s</option><option value="2">2 s</option></select></div>
-          <div class="field"><span>Fade out</span><select id="sFadeOut"><option value="0">None</option><option value="0.5">0.5 s</option><option value="1">1 s</option><option value="2">2 s</option></select></div>
-        </div>
-        <p class="hint">The viewer shows the shape right away. Transitions and fades appear in the exported video.</p>
-      </div>
-    </section>
-
-    <!-- Frame: canvas shape, background layer, transform, mask -->
-    <section data-for="frame" hidden>
-      <div class="side-h"><h2>Frame</h2></div>
+    <!-- Picture: ratio, background, position, mask, then joins and fades -->
+    <section data-for="frame" data-stage="final" hidden>
       <div class="pad" id="framePanel"></div>
+      <details class="sec"><summary><i data-ic="film"></i><span>Between pieces and fades</span><i data-ic="chev" class="chev"></i></summary>
+        <div class="pad">
+          <div class="field"><span>Between pieces</span><select id="sTrans">
+            <option value="none">Straight cut</option><option value="fade">Crossfade</option><option value="fadeblack">Dip to black</option>
+            <option value="fadewhite">Dip to white</option><option value="slideleft">Slide</option><option value="wipeleft">Wipe</option>
+            <option value="circleopen">Circle</option><option value="pixelize">Pixels</option><option value="zoomin">Zoom</option></select></div>
+          <div class="field"><span>Transition length</span><select id="sTransS"><option value="0.2">0.2 s</option><option value="0.3">0.3 s</option><option value="0.5">0.5 s</option><option value="1">1 s</option></select></div>
+          <div class="grid2">
+            <div class="field"><span>Fade in</span><select id="sFadeIn"><option value="0">None</option><option value="0.5">0.5 s</option><option value="1">1 s</option><option value="2">2 s</option></select></div>
+            <div class="field"><span>Fade out</span><select id="sFadeOut"><option value="0">None</option><option value="0.5">0.5 s</option><option value="1">1 s</option><option value="2">2 s</option></select></div>
+          </div>
+        </div>
+      </details>
+      <details class="sec"><summary><i data-ic="face"></i><span>Tall or square that follows faces</span><i data-ic="chev" class="chev"></i></summary>
+        <div class="pad">
+          <p class="hint">An automatic tall or square video that keeps faces in the picture. Used when the frame above is at its start (Reset the frame).</p>
+          <div class="field"><div id="shapeCards" class="shapes"></div></div>
+          <div class="field"><span>Fill the frame</span><div id="shapeFill"></div></div>
+        </div>
+      </details>
     </section>
 
     <!-- Text -->
-    <section data-for="text" hidden>
-      <div class="side-h"><h2>Text</h2><button id="addText" class="btn"><i data-ic="plus" class="s"></i><span>Add words</span></button></div>
+    <section data-for="text" data-stage="final" hidden>
+      <div class="side-h sub"><h2>Words on screen</h2><button id="addText" class="btn"><i data-ic="plus" class="s"></i><span>Add words</span></button></div>
       <div class="pad"><div id="texts" class="list"></div></div>
-      <details class="sec"><summary><i data-ic="type"></i>Captions<i data-ic="chev" class="chev"></i></summary>
+      <details class="sec"><summary><i data-ic="type"></i><span>Captions</span><i data-ic="chev" class="chev"></i></summary>
         <div class="pad">
           <div class="field"><span>Captions</span><select id="sCap"></select></div>
           <button id="capAdd" class="btn"><i data-ic="upload" class="s"></i><span>Add a subtitle file (.srt)</span></button>
@@ -210,6 +180,17 @@
         </div>
       </details>
     </section>
+
+    <!-- The project (both stages, at the bottom) -->
+    <details class="sec proj-sec"><summary><i data-ic="folder"></i><span>This project</span><i data-ic="chev" class="chev"></i></summary>
+      <div class="pad">
+        <label class="field"><span>Name</span><input id="projName" class="input" maxlength="80"></label>
+        <div class="row"><img id="srcThumb" class="thumb" alt=""><div class="t"><b id="srcName" class="ellip"></b><div id="srcFacts" class="note"></div></div></div>
+        <p id="srcWhere" class="hint where"></p>
+        <div class="field"><span>Other projects</span><div id="projList" class="list"></div></div>
+        <a class="btn" href="/"><i data-ic="home" class="s"></i><span>All projects</span></a>
+      </div>
+    </details>
   </aside>
 
   <main class="view" aria-label="Viewer">
