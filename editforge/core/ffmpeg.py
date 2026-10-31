@@ -169,13 +169,23 @@ class RunResult:
         return self.returncode == 0 and not self.cancelled
 
 
+def _nice() -> None:  # pragma: no cover - runs in the child process
+    try:
+        os.nice(10)
+    except OSError:
+        pass
+
+
 def run_ffmpeg(args: Sequence[str], *, cwd: Optional[str] = None, cancel: Optional[threading.Event] = None,
                on_progress: Optional[Callable[[Dict[str, str]], None]] = None,
                on_stdout_line: Optional[Callable[[str], None]] = None,
                on_stderr_line: Optional[Callable[[str], None]] = None,
                loglevel: str = "error", tail_bytes: int = 6000, timeout: Optional[float] = None,
-               threads: Optional[int] = None) -> RunResult:
+               threads: Optional[int] = None, low_priority: bool = False) -> RunResult:
     """Run FFmpeg, streaming its output so memory use stays tiny.
+
+    ``low_priority``: background work (light copies, picture strips) runs below normal priority, so the app and the
+    rest of the computer stay quick while it works.
 
     Only the last ``tail_bytes`` of error text are kept. The process is killed if
     ``cancel`` is set or ``timeout`` seconds pass.
@@ -188,8 +198,10 @@ def run_ffmpeg(args: Sequence[str], *, cwd: Optional[str] = None, cancel: Option
     popen_kwargs = {}
     if os.name == "posix":
         popen_kwargs["start_new_session"] = True
+        if low_priority:
+            popen_kwargs["preexec_fn"] = _nice
     elif os.name == "nt":  # pragma: no cover - Windows only
-        popen_kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
+        popen_kwargs["creationflags"] = 0x08000000 | (0x00004000 if low_priority else 0)  # CREATE_NO_WINDOW (+ BELOW_NORMAL_PRIORITY_CLASS)
     start = time.time()
     proc = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, bufsize=0, **popen_kwargs)

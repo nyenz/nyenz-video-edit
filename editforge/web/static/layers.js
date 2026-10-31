@@ -118,8 +118,7 @@ const Layers = (() => {
       const j = info.job;
       hint.textContent = j.state === "downloading" ? "Getting the sound helper (once, " + info.model_mb + " MB)…" : "Splitting the sound. You can keep editing; the viewer plays the plain sound until it is done.";
     } else {
-      hint.textContent = "Pull a movie's sound apart: people talking, music, and effects like gunshots. Then make each louder, quieter or off." +
-        " It runs on your computer. " + (info.model ? "" : "The first time it downloads a " + info.model_mb + " MB helper. ") + "Time for " + ($("lyPart").value === "all" ? "the whole video" : "the part you use") + ": " + span($("lyMode").value === "best" ? info.estimate_best_s : info.estimate_s) + ".";
+      hint.textContent = "Voices, music and effects (like gunshots) as three layers you can turn up, down or off. It takes " + span($("lyMode").value === "best" ? info.estimate_best_s : info.estimate_s) + " for " + ($("lyPart").value === "all" ? "the whole video" : "the part you use") + "." + (info.model ? "" : " First time: downloads a " + info.model_mb + " MB helper.");
     }
     if (running) {
       const j = info.job, p = Math.round((j.progress || 0) * 100);

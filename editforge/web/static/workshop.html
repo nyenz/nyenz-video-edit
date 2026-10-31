@@ -43,6 +43,20 @@
           <div class="btns" id="emptyBtns"></div></div>
       </div>
     </div>
+    <!-- marking happens right under the picture: start, end, add -->
+    <div class="markbar" aria-label="Mark a part">
+      <button class="btn" id="setStart" title="Mark the start here (I)"><i data-ic="inp" class="s"></i><span>Start</span></button>
+      <input id="startIn" class="input tin" inputmode="decimal" autocomplete="off" placeholder="0:00" aria-label="Start">
+      <span class="dash">–</span>
+      <input id="endIn" class="input tin" inputmode="decimal" autocomplete="off" placeholder="0:00" aria-label="End">
+      <button class="btn" id="setEnd" title="Mark the end here (O)"><i data-ic="outp" class="s"></i><span>End</span></button>
+      <span class="mlen"><span class="lbl">Marked</span> <b id="selLen" class="num">–</b></span>
+      <button class="btn ghost icon" id="playSel" title="Play the marked part"><i data-ic="play" class="s"></i></button>
+      <span class="grow"></span>
+      <button class="btn" id="addPart" title="Add the marked part to the chosen clip (A)"><i data-ic="split" class="s"></i><span id="addPartLabel">Add to clip</span></button>
+      <button class="btn primary" id="addNew" title="Make a new clip from the marked part (Enter)"><i data-ic="plus" class="s"></i><span>Add as new clip</span></button>
+    </div>
+    <div class="marknote"><span id="markNote" class="note" aria-live="polite"></span></div>
     <div class="transport">
       <div class="tc"><b id="tNow">0:00.0</b> <span class="note">/</span> <span id="tTotal">0:00.0</span></div>
       <div class="mid">
@@ -62,48 +76,42 @@
     </div>
   </main>
 
-  <!-- right: the chosen clip -->
+  <!-- right: the chosen clip and everything you can do to it -->
   <aside class="side right" aria-label="Clip">
     <div class="side-h"><h2 id="clipHead">Mark a part</h2><span class="note num" id="clipLen"></span></div>
-    <div class="tabs" id="clipTabs" role="tablist"></div>
-    <div class="pad" data-tab="parts">
+    <div class="pad">
+      <div id="noClipT" class="howto">
+        <p class="hint"><b>1.</b> Drag on the movie strip below (or press <span class="kbd">I</span> and <span class="kbd">O</span>) to mark a part.</p>
+        <p class="hint"><b>2.</b> Press <b>Add as new clip</b> under the video (or <span class="kbd">Enter</span>). Clips are named from the movie.</p>
+        <p class="hint"><b>3.</b> Mark as many as you like, then <b>Save &amp; make clips</b> on the left.</p>
+      </div>
       <label class="field" id="clipNameBox" hidden><span>Clip name</span><input id="clipName" class="input" maxlength="60"></label>
-      <div class="grid2">
-        <button class="btn" id="setStart" title="Mark the start here (I)"><i data-ic="inp"></i>Start here</button>
-        <button class="btn" id="setEnd" title="Mark the end here (O)"><i data-ic="outp"></i>End here</button>
-        <label class="field"><span>Start</span><input id="startIn" class="input" inputmode="decimal" autocomplete="off" placeholder="0:00"></label>
-        <label class="field"><span>End</span><input id="endIn" class="input" inputmode="decimal" autocomplete="off" placeholder="0:00"></label>
-      </div>
-      <div class="box"><div class="stat"><span class="lbl">Marked</span><b id="selLen" class="num">–</b></div></div>
-      <div class="field">
-        <button class="btn primary wide" id="addNew" title="Make a new clip from the marked part (Enter)"><i data-ic="plus" class="s"></i><span>Add as new clip</span></button>
-        <button class="btn wide" id="addPart" title="Add the marked part to the chosen clip (A)"><i data-ic="split" class="s"></i><span id="addPartLabel">Add part to this clip</span></button>
-        <button class="btn ghost wide" id="playSel"><i data-ic="play" class="s"></i><span>Play the marked part</span></button>
-      </div>
-      <span id="markNote" class="note" aria-live="polite"></span>
       <div class="field" id="partsBox" hidden><span>Parts of this clip, played in this order</span><div id="parts" class="list"></div></div>
     </div>
-    <div class="pad" data-tab="tools" hidden>
-      <p class="hint" id="noClipT">Choose or add a clip first.</p>
-      <div id="toolsBox">
-        <div class="field"><span>Move the edges of the chosen part</span><div id="nStep"></div></div>
-        <div class="grid2 nudge">
-          <button class="btn" id="nSa" type="button" title="Start earlier: adds time before"><i data-ic="stepb" class="s"></i><span>Start earlier</span></button>
-          <button class="btn" id="nSb" type="button" title="Start later: cuts time from the front"><i data-ic="stepf" class="s"></i><span>Start later</span></button>
-          <button class="btn" id="nEa" type="button" title="End earlier: cuts time from the back"><i data-ic="stepb" class="s"></i><span>End earlier</span></button>
-          <button class="btn" id="nEb" type="button" title="End later: adds time after"><i data-ic="stepf" class="s"></i><span>End later</span></button>
+    <div id="toolsBox">
+      <details class="sec" open><summary><i data-ic="fit"></i><span>Longer or shorter</span><i data-ic="chev" class="chev"></i></summary>
+        <div class="pad">
+          <div id="nStep"></div>
+          <div class="grid2 nudge">
+            <button class="btn" id="nSa" type="button" title="Start earlier: adds time before"><i data-ic="stepb" class="s"></i><span>Start earlier</span></button>
+            <button class="btn" id="nEb" type="button" title="End later: adds time after"><i data-ic="stepf" class="s"></i><span>End later</span></button>
+            <button class="btn ghost" id="nSb" type="button" title="Start later: cuts time from the front"><i data-ic="stepf" class="s"></i><span>Start later</span></button>
+            <button class="btn ghost" id="nEa" type="button" title="End earlier: cuts time from the back"><i data-ic="stepb" class="s"></i><span>End earlier</span></button>
+          </div>
+          <span class="note" id="nNote"></span>
         </div>
-        <span class="note" id="nNote"></span>
-        <div class="field"><span>Cut</span>
-          <button class="btn wide" id="tSplit" type="button" title="Split the clip into two clips where the playhead is (S)"><i data-ic="scissors" class="s"></i><span>Split at the playhead</span></button>
-          <button class="btn wide" id="tCutOut" type="button" title="Take the marked part out of the clip (X)"><i data-ic="trash" class="s"></i><span>Cut out the marked part</span></button>
+      </details>
+      <details class="sec" open><summary><i data-ic="scissors"></i><span>Cut and combine</span><i data-ic="chev" class="chev"></i></summary>
+        <div class="pad">
+          <div class="grid2">
+            <button class="btn" id="tSplit" type="button" title="Split the clip into two clips where the playhead is (S)"><i data-ic="scissors" class="s"></i><span>Split here</span></button>
+            <button class="btn" id="tCutOut" type="button" title="Take the marked part out of the clip (X)"><i data-ic="trash" class="s"></i><span>Cut out marked</span></button>
+            <button class="btn" id="tJoin" type="button" title="Put another clip's parts after this clip's"><i data-ic="combine" class="s"></i><span>Join a clip</span></button>
+            <button class="btn" id="tDup" type="button" title="Make a copy of this clip (D)"><i data-ic="copy" class="s"></i><span>Duplicate</span></button>
+          </div>
+          <span class="note" id="toolNote" aria-live="polite"></span>
         </div>
-        <div class="field"><span>Combine</span>
-          <button class="btn wide" id="tJoin" type="button" title="Put another clip's parts after this clip's"><i data-ic="combine" class="s"></i><span>Join another clip to this one</span></button>
-          <button class="btn wide" id="tDup" type="button" title="Make a copy of this clip (D)"><i data-ic="copy" class="s"></i><span>Duplicate this clip</span></button>
-        </div>
-        <span class="note" id="toolNote" aria-live="polite"></span>
-      </div>
+      </details>
     </div>
   </aside>
 

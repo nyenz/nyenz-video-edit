@@ -24,13 +24,16 @@ from ..core.fingerprint import file_fingerprint
 from ..core.media import probe_media
 
 PREVIEW_HEIGHT = 480
+STRIP_HEIGHT = 96            # the timeline pictures: one per second of the video, made in the same pass as the light copy
 
 
 class PreviewMaker:
     """Makes preview copies in background threads and remembers their progress."""
 
-    def __init__(self, folder: Path):
+    def __init__(self, folder: Path, strips: Optional[Path] = None):
         self.folder = Path(folder)
+        self.strips = Path(strips) if strips else None
+        self._strip_running: set = set()
         self.folder.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._jobs: Dict[str, Dict[str, Any]] = {}
@@ -81,6 +84,62 @@ class PreviewMaker:
         threading.Thread(target=self._both, args=(source, out, info.duration, info.has_audio, quick), name="editforge-preview", daemon=True).start()
         return {"state": "running", "progress": 0.0, "error": ""}
 
+    # ---- the picture strip: <fingerprint>_s000000.jpg = second 0, _s000001.jpg = second 1 ...
+    def strip_pattern(self, source: str) -> Optional[str]:
+        return str(self.strips / (file_fingerprint(source) + "_s%06d.jpg")) if self.strips else None
+
+    def strip_done(self, source: str) -> bool:
+        return bool(self.strips) and (self.strips / (file_fingerprint(source) + "_s.done")).is_file()
+
+    def strip_picture(self, source: str, at: float) -> Optional[Path]:
+        """The strip picture for second ``at`` once it is safely written, else None."""
+        if not self.strips:
+            return None
+        k = max(0, int(round(at)))
+        fp = file_fingerprint(source)
+        p = self.strips / f"{fp}_s{k:06d}.jpg"
+        if not p.is_file():
+            return None
+        done = (self.strips / f"{fp}_s.done").is_file()
+        if done or (self.strips / f"{fp}_s{k + 2:06d}.jpg").is_file():     # while it is being made, the newest file may be half written
+            return p
+        return None
+
+    def ensure_strip(self, source: str) -> None:
+        """Old light copies were made without the strip: make it now from the light copy (small, so quick)."""
+        if not self.strips or self.strip_done(source):
+            return
+        light = self.path_for(source)
+        key = str(light)
+        if not (light.is_file() and light.stat().st_size > 0):
+            return                                   # the light copy pass will make it
+        with self._lock:
+            if key in self._strip_running or self._jobs.get(key, {}).get("state") == "running":
+                return
+            self._strip_running.add(key)
+
+        def run() -> None:
+            try:
+                res = run_ffmpeg(["-y", "-i", str(light)] + self._strip_args(source), cancel=self._cancel, low_priority=True, threads=2)
+                if res.ok:
+                    self._mark_strip(source)
+            except Exception:  # noqa: BLE001 - thumbnails then come one by one, as before
+                pass
+            finally:
+                with self._lock:
+                    self._strip_running.discard(key)
+        threading.Thread(target=run, name="editforge-strip", daemon=True).start()
+
+    def _strip_args(self, source: str) -> list:
+        return ["-map", "0:v:0", "-vf", f"fps=1:round=up,scale=-2:{STRIP_HEIGHT}:flags=fast_bilinear", "-q:v", "6",
+                "-start_number", "0", "-f", "image2", self.strip_pattern(source)]
+
+    def _mark_strip(self, source: str) -> None:
+        try:
+            (self.strips / (file_fingerprint(source) + "_s.done")).write_text("ok")
+        except OSError:
+            pass
+
     def shutdown(self) -> None:
         self._cancel.set()
 
@@ -95,7 +154,7 @@ class PreviewMaker:
             args = ["-y", "-i", source, "-map", "0:v:0", "-c:v", "copy"]
             args += ["-map", "0:a:0", "-c:a", "aac", "-b:a", "192k", "-ac", "2"] if has_audio else ["-an"]
             try:
-                res = run_ffmpeg(args + ["-f", "mp4", part], cancel=self._cancel)
+                res = run_ffmpeg(args + ["-f", "mp4", part], cancel=self._cancel, low_priority=True)
                 if res.ok:
                     os.replace(part, q)
             except Exception:  # noqa: BLE001 - the light copy below is still made
@@ -121,6 +180,9 @@ class PreviewMaker:
                 "-preset", "veryfast", "-crf", "27", "-g", "12", "-pix_fmt", "yuv420p"]
         args += ["-map", "0:a:0", "-c:a", "aac", "-b:a", "96k", "-ac", "2"] if has_audio else ["-an"]
         args += ["-movflags", "+faststart", "-f", "mp4", part]
+        if self.strips:                              # same decode, second output: every timeline picture at once
+            self.strips.mkdir(parents=True, exist_ok=True)
+            args += self._strip_args(source)
 
         def on_progress(d: Dict[str, str]) -> None:
             try:
@@ -130,9 +192,11 @@ class PreviewMaker:
             self._set(out, progress=max(0.0, min(0.99, t / max(duration, 0.001))))
 
         try:
-            res = run_ffmpeg(args, on_progress=on_progress, cancel=self._cancel)
+            res = run_ffmpeg(args, on_progress=on_progress, cancel=self._cancel, low_priority=True)
             if res.ok:
                 os.replace(part, out)
+                if self.strips:
+                    self._mark_strip(source)
                 self._set(out, state="ready", progress=1.0, error="")
             else:
                 message, fix = friendly_ffmpeg_error(res.stderr_tail, res.returncode)

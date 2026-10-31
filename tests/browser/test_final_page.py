@@ -31,7 +31,7 @@ def open_final(live, page, source_id, name="Final one"):
 def test_music_layers_have_volume_mute_and_solo_and_are_saved(live, page, movie_id, music_id):
     pid = open_final(live, page, movie_id)
     page.evaluate("(id) => { S.proj.settings.layers = [{ file: id, volume: 0.5, mute: false, solo: false }, { file: id, volume: 1, mute: false, solo: false }]; scheduleSave(); loadFiles(); }", music_id)
-    page.click(".rail button[data-panel=audio]")
+    page.click(".ftabs button[data-panel=sound]")
     page.wait_for_function("() => document.querySelectorAll('#musicLayers .ly-row').length === 2")
     assert page.query_selector("#sDuck") is None and page.query_selector("#sMusic") is None          # no ducking switch any more
     page.click("#musicLayers .ly-row:nth-child(1) .ly-mute")
@@ -64,7 +64,7 @@ def test_the_mix_check_shows_the_measured_loudness_and_a_live_meter(live, page, 
     open_final(live, page, movie_id, "Loudness")
     page.evaluate("(id) => { S.proj.settings.layers = [{ file: id, volume: 1, mute: false, solo: false }]; scheduleSave(); }", music_id)
     page.evaluate("() => { S.pieces = null; }")
-    page.click(".rail button[data-panel=sound]")
+    page.click(".ftabs button[data-panel=sound]")
     page.click("#checkMix")
     page.wait_for_selector("#exportsDrawer .job .facts:has-text('LUFS')", timeout=240000)
     text = page.inner_text("#exportsDrawer .job")
@@ -90,7 +90,7 @@ def _drag(page, x1, y1, x2, y2):
 def test_the_picture_can_be_moved_scaled_and_turned_with_the_mouse(live, page, movie_id):
     open_final(live, page, movie_id, "Handles")
     page.evaluate("() => { S.proj.settings.frame = Object.assign(Frame.full(null), { ratio: '9:16' }); sizeFrame(); }")
-    page.click(".rail button[data-panel=frame]")
+    page.click(".ftabs button[data-panel=frame]")
     page.wait_for_selector("#frame .frame-ov.editing")
     b = _box(page)
     cx, cy = b["x"] + b["w"] / 2, b["y"] + b["h"] / 2
@@ -120,7 +120,7 @@ def test_the_picture_can_be_moved_scaled_and_turned_with_the_mouse(live, page, m
 def test_the_mask_can_be_moved_resized_and_turned(live, page, movie_id):
     open_final(live, page, movie_id, "Mask handles")
     page.evaluate("() => { S.proj.settings.frame = Object.assign(Frame.full(null), { ratio: '9:16', mask: { shape: 'rect', x: 0.5, y: 0.5, w: 0.5, h: 0.2, feather: 20, invert: false, rot: 0 } }); sizeFrame(); }")
-    page.click(".rail button[data-panel=frame]")
+    page.click(".ftabs button[data-panel=frame]")
     page.click("#framePanel .seg button:has-text('Mask')")
     b = _box(page)
     cx, cy = b["x"] + b["w"] / 2, b["y"] + b["h"] / 2

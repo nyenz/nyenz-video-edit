@@ -105,3 +105,9 @@ def test_separate_without_pictures_treats_every_join_as_a_change():
     pieces = [{"start": 0.0, "end": 2.0, "off": False}, {"start": 4.0, "end": 6.0, "off": False}]
     out, scenes = shots.separate(pieces, [], None)
     assert [p["unit"] for p in out] == [0, 1] and scenes == 2
+
+
+def test_two_rough_cuts_on_the_same_frame_become_one(monkeypatch):
+    monkeypatch.setattr(shots, "refine_cut", lambda path, t, cancel=None: 3.5)
+    out = shots.refine_all("x.mp4", [shots.Cut(3.3, "cut", 0.5, 82), shots.Cut(3.6, "cut", 0.9, 90), shots.Cut(9.0, "dissolve", 0.4, 216)])
+    assert [(c.t, c.score) for c in out] == [(3.5, 0.9), (9.0, 0.4)]

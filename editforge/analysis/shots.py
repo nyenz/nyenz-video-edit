@@ -404,7 +404,16 @@ def refine_all(path: str, cuts: Sequence[Cut], cancel: Optional[threading.Event]
         out.append(Cut(round(t, 4), c.kind, c.score, c.frame))
         if progress:
             progress((k + 1) / max(1, len(cuts)))
-    return out
+    # Two rough cuts close together can settle on the same exact frame (it happened on a busy computer): keep one.
+    out.sort(key=lambda c: c.t)
+    merged: List[Cut] = []
+    for c in out:
+        if merged and c.t - merged[-1].t < MIN_SCENE:
+            if c.score > merged[-1].score:
+                merged[-1] = c
+            continue
+        merged.append(c)
+    return merged
 
 
 # ------------------------------------------------------------------------------------------------ in the project

@@ -98,7 +98,7 @@ function change(fn, opts) {
 function lockedNote() { toast("This is an older step, so it is locked. Click the newest step (in Steps) to change things.", true); }
 function refreshAll(opts) {
   S.sel = new Set([...S.sel].filter((p) => !p.off && cur().includes(p)));
-  renderTimeline(); renderInspector(); renderLengths(); renderSteps();
+  renderTimeline(); renderInspector(); renderLengths(); renderSteps(); renderStepbar();
   if (!(opts && opts.keepVideo)) showFrame();
 }
 
@@ -292,8 +292,9 @@ function renderOverlay() {
 
 // ================================================================== timeline
 const T = { thumbW: 100, h: 64, drag: null };
-function px(t) { return Math.round(t * S.pps) + 16; }
-function timeAt(x) { return (x - 16) / S.pps; }
+const X0 = () => (S.mode === "final" ? 152 : 16);           // Final shows track names at the left of the timeline
+function px(t) { return Math.round(t * S.pps) + X0(); }
+function timeAt(x) { return (x - X0()) / S.pps; }
 function renderPlayhead() {
   $("playhead").style.left = px(S.t) + "px";
   $("tNow").textContent = fmtTime(S.t);
@@ -313,9 +314,10 @@ function zoomTo(pps, anchorT) {
   S.pps = clamp(pps, 2, 400); sliderFromZoom(); renderTimeline();
   sc.scrollLeft = px(t) - before;
 }
-function fitZoom() { const w = $("tlScroll").clientWidth - 48; S.pps = clamp(w / Math.max(1, rawTotal()), 2, 400); sliderFromZoom(); renderTimeline(); $("tlScroll").scrollLeft = 0; }
+function fitZoom() { const w = $("tlScroll").clientWidth - X0() - 32; S.pps = clamp(w / Math.max(1, rawTotal()), 2, 400); sliderFromZoom(); renderTimeline(); $("tlScroll").scrollLeft = 0; }
 function renderRuler(total) {
   const r = $("ruler"); r.replaceChildren();
+  if (S.mode === "final") r.append(el("div", { class: "ruler-corner" }));
   const steps = [0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
   const major = steps.find((s) => s * S.pps >= 90) || 3600;
   const minor = steps.slice().reverse().find((s) => s < major && s * S.pps >= 12 && (major / s) % 1 === 0) || major;
@@ -358,7 +360,7 @@ function renderTimeline() {
       for (let k = 0; k < n; k++) {
         const ot = (k * T.thumbW + T.thumbW / 2) / S.pps;
         const st = clamp(p.reverse ? p.end - ot * p.speed : p.start + ot * p.speed, p.start, p.end - 0.04);
-        const img = el("img", { alt: "", src: thumbUrl(S.proj.source, Math.min(Math.round(st * 2) / 2, Math.floor((S.info.duration - 0.05) * 2) / 2)), draggable: "false" });
+        const img = lazyThumb(thumbUrl(S.proj.source, Math.min(Math.round(st), Math.floor(S.info.duration - 0.05))));
         img.style.width = T.thumbW + "px";
         if (p.fx.includes("hflip")) img.style.transform = "scaleX(-1)";
         if (p.fx.includes("grayscale")) img.style.filter = "grayscale(1)";
@@ -370,20 +372,28 @@ function renderTimeline() {
     b.append(el("div", { class: "h l", "data-edge": "l", title: "Drag to change where this piece starts" }), el("div", { class: "h r", "data-edge": "r", title: "Drag to make this piece longer or shorter" }));
     lane.append(b);
   }
+  const head = (ic, name, ...extra) => el("div", { class: "lane-head" }, icon(ic, "s"), el("span", { class: "ellip", text: name }), ...extra);
+  if (S.mode === "final") lane.prepend(head("film", "Video"));
   // words lane
   const lt = $("laneT"); lt.replaceChildren(); lt.hidden = !(S.proj.texts || []).length;
+  if (S.mode === "final" && !lt.hidden) lt.append(head("type", "Words"));
   (S.proj.texts || []).forEach((t, i) => {
     const end = t.end > 0 ? t.end : total;
     const d = el("div", { class: "lane-item text", title: t.text, onclick: () => { openPanel("text"); } }, icon("type", "s"), el("span", { text: t.text }));
     d.style.left = px(t.start) + "px"; d.style.width = Math.max(20, px(end) - px(t.start) - 2) + "px"; lt.append(d);
   });
-  // music lane
+  // music: one row per layer, with its own mute and solo at the left
   const lm = $("laneM"); lm.replaceChildren(); lm.hidden = !layers().length;
-  for (const x of layers()) {
+  layers().forEach((x, i) => {
     const name = (S.files.find((f) => f.id === x.file) || { name: x.file.split("/").pop() }).name;
-    const d = el("div", { class: "lane-item music" + (heard(x) ? "" : " off"), onclick: () => openPanel("audio") }, icon("music", "s"), el("span", { text: name }));
-    d.style.left = px(0) + "px"; d.style.width = Math.max(40, px(total) - px(0)) + "px"; lm.append(d);
-  }
+    const flip = (k) => (e) => { e.stopPropagation(); change(() => { S.proj.settings.layers = layers().map((y, j) => (j === i ? Object.assign({}, y, { [k]: !y[k] }) : y)); }, { keepVideo: true }); renderMusicLayers(); if (S.playing) musicPlay(); };
+    const row = el("div", { class: "mrow" });
+    if (S.mode === "final") row.append(head("music", name,
+      el("button", { type: "button", class: "lh-btn" + (x.mute ? " on" : ""), title: "Mute", "aria-label": "Mute " + name, onclick: flip("mute") }, icon(x.mute ? "mute" : "vol", "s")),
+      el("button", { type: "button", class: "lh-btn solo" + (x.solo ? " on" : ""), title: "Solo", "aria-label": "Solo " + name, onclick: flip("solo"), text: "S" })));
+    const d = el("div", { class: "lane-item music" + (heard(x) ? "" : " off"), onclick: () => openPanel("sound") }, icon("music", "s"), el("span", { text: name + " · " + Math.round(x.volume * 100) + "%" }));
+    d.style.left = px(0) + "px"; d.style.width = Math.max(40, px(total) - px(0)) + "px"; row.append(d); lm.append(row);
+  });
   renderPlayhead();
 }
 
@@ -544,16 +554,21 @@ function restorePiece(p) {
 
 // ================================================================== left panels
 function openPanel(name) {
+  if (S.mode === "edit") {                                    // Edit has no tabs: its extra tools are dropdowns on the left
+    const d = document.querySelector('details[data-sec="' + name + '"]');
+    if (d) { d.open = true; d.scrollIntoView({ block: "nearest" }); if (name === "pattern") renderPattern(); }
+    return;
+  }
+  const tabs = { audio: "sound", format: "frame", media: "sound" };
+  name = tabs[name] || name;
+  if (!document.querySelector('[data-for="' + name + '"]')) name = "sound";
   S.panel = name;
-  for (const b of document.querySelectorAll(".rail button")) b.classList.toggle("on", b.dataset.panel === name);
-  for (const s of document.querySelectorAll("#left > section")) s.hidden = s.dataset.for !== name;
-  if (name === "pattern") renderPattern();
-  if (name === "sections") renderVersionList();
-  if (name === "text") renderTexts();
-  if (name === "sound") Layers.open();
+  for (const b of document.querySelectorAll(".ftabs button")) { const on = b.dataset.panel === name; b.classList.toggle("on", on); b.setAttribute("aria-selected", String(on)); }
+  for (const s of document.querySelectorAll("#left [data-for]")) s.hidden = s.dataset.for !== name;
   Frame.setEditing(name === "frame");
-  if (name === "frame") Frame.renderPanel();
-  if (name === "format") renderShape();
+  if (name === "text") renderTexts();
+  if (name === "sound") { Layers.open(); renderMusicLayers(); }
+  if (name === "frame") { Frame.renderPanel(); renderShape(); }
 }
 // --- Cut
 /** Step 1: the whole parent video cut into pieces of `sec` seconds. */
@@ -800,6 +815,10 @@ function fillSettings() {
   for (const [id, key, kind] of BINDS) { const n = $(id); if (kind === "check") n.checked = !!st[key]; else n.value = String(st[key] === undefined ? 0 : st[key]); if (n.classList.contains("rng")) paintRange(n); }
   soundLabels();
   renderShape();
+  // Remove noise: four buttons instead of a list (the hidden list still carries the value)
+  const ns = $("sNoise");
+  $("noiseSeg").replaceChildren(segmented([["off", "Off"], ["light", "Light"], ["medium", "Medium"], ["strong", "Strong"]], ns.value || "off",
+    (v) => { ns.value = v; ns.dispatchEvent(new Event("change", { bubbles: true })); }));
 }
 function bindSettings() {
   for (const [id, key, kind] of BINDS) {
@@ -913,6 +932,7 @@ function renderInspector() {
   const basics = el("div", { class: "pad" }, el("div", { class: "field" }, el("span", { text: "Speed" }), chipsBox));
   if (S.mode === "final") basics.append(el("div", { class: "field" }, el("span", { text: "Loudness" }), vol), el("label", { class: "swl" }, el("span", { text: "Mute" }), muteSw));
   if (sel.length === 1) basics.append(trimFields(sel[0]));
+  if (S.mode === "edit") basics.append(nudgeBox(sel));
   basics.append(el("div", { class: "btns" },
     btn("Split", { icon: "split", onclick: splitAtPlayhead, title: "Split at the playhead (S)" }),
     btn("Duplicate", { icon: "copy", onclick: duplicateSelected }),
@@ -954,6 +974,29 @@ function renderInspector() {
   enhanceAll(R);
   for (const r of R.querySelectorAll("input.rng")) paintRange(r);
 }
+/** Edit stage: make the selected sections longer or shorter into the footage around them (never over the next section). */
+function nudgeBox(sel) {
+  const amt = S.nudge || 0.5;
+  const go = (edge, d) => {
+    let moved = 0;
+    change(() => {
+      for (const p of sel) {
+        const lim = Steps.extendLimits(S.proj.pieces, p, S.info.duration);
+        if (edge === "l") { const v = +clamp(p.start + d, lim.lo, p.end - MIN_PIECE).toFixed(3); if (v !== p.start) { p.start = v; moved++; } }
+        else { const v = +clamp(p.end + d, p.start + MIN_PIECE, lim.hi).toFixed(3); if (v !== p.end) { p.end = v; moved++; } }
+      }
+      markHand();
+    });
+    if (!moved) toast(d > 0 && edge === "r" || d < 0 && edge === "l" ? "It already touches the next section (or the end of the clip)." : "It is as short as it can be.", true);
+  };
+  const seg = segmented([[0.1, "0.1 s"], [0.5, "0.5 s"], [1, "1 s"]], amt, (v) => { S.nudge = v; renderInspector(); });
+  return el("div", { class: "field nudge" }, el("span", { text: sel.length === 1 ? "Make it longer or shorter" : "Make them longer or shorter" }), seg,
+    el("div", { class: "grid2" },
+      btn("Start earlier", { icon: "back", onclick: () => go("l", -amt), title: "Show " + amt + " s more before it" }),
+      btn("End later", { icon: "fwd", onclick: () => go("r", amt), title: "Show " + amt + " s more after it" }),
+      btn("Start later", { cls: "ghost", onclick: () => go("l", amt) }),
+      btn("End sooner", { cls: "ghost", onclick: () => go("r", -amt) })));
+}
 function trimFields(p) {
   const tin = (label, val, set) => {
     const n = el("input", { class: "input", value: fmtTime(val, 2), "aria-label": label, inputmode: "decimal" });
@@ -967,17 +1010,24 @@ function trimFields(p) {
 }
 function renderOverview(R) {
   const K = kept(), off = cur().filter((p) => p.off);
-  R.append(el("div", { class: "side-h" }, el("h2", { text: "Your video" })));
-  R.append(el("div", { class: "pad" },
-    el("div", { class: "box" },
-      el("div", { class: "stat" }, el("span", { class: "lbl", text: "Length" }), el("b", { text: fmtTime(finalTotal()) })),
-      el("div", { class: "stat" }, el("span", { class: "lbl", text: "Pieces in the timeline" }), el("span", { class: "num", text: String(K.length) })),
-      el("div", { class: "stat" }, el("span", { class: "lbl", text: "Removed pieces" }), el("span", { class: "num", text: String(off.length) })),
-      el("div", { class: "stat" }, el("span", { class: "lbl", text: "Original" }), el("span", { class: "num", text: fmtTime(S.info.duration) }))),
-    el("p", { class: "hint", text: "Click a piece in the timeline to change it. Ctrl+click or drag across empty space to pick several." })));
+  const stat = (label, value, strong) => el("div", { class: "stat" }, el("span", { class: "lbl", text: label }), el(strong ? "b" : "span", { class: strong ? "" : "num", text: value }));
+  const box = el("div", { class: "box" }, stat("Length", fmtTime(finalTotal()), true));
+  if (S.mode === "edit") {
+    const scenes = sceneCount();
+    box.append(stat("Sections", String(K.length)), stat("Taken out", String(off.length)));
+    if (scenes) box.append(stat("Scenes", String(scenes)));
+    box.append(stat("The clip", fmtTime(S.info.duration)));
+  } else {
+    const fr = S.proj.settings.frame;
+    box.append(stat("Shape", fr && Frame.active(fr) ? Frame.full(fr).ratio.replace("original", "Original") : ({ original: "Original", vertical: "Tall 9:16", square: "Square" }[(S.proj.settings.shape || "original").split("_")[0]] || "Original")),
+      stat("Loudness", "-14 LUFS (YouTube)"), stat("Music layers", String(layers().length)), stat("Pieces", String(K.length)));
+  }
+  R.append(el("div", { class: "side-h" }, el("h2", { text: S.mode === "edit" ? "This version" : "Your video" })));
+  R.append(el("div", { class: "pad" }, box,
+    el("p", { class: "hint", text: S.mode === "edit" ? "Click a section in the timeline to make it longer, shorter, or take it out. Ctrl+click or drag across empty space to pick several." : "Click a piece in the timeline for its speed, look, colour and zoom." })));
   const list = el("div", { class: "list" });
   for (const p of off.slice(0, 200)) list.append(el("div", { class: "item" },
-    el("img", { class: "thumb", alt: "", src: thumbUrl(S.proj.source, Math.round((p.start + 0.1) * 2) / 2) }),
+    lazyThumb(thumbUrl(S.proj.source, Math.round(p.start + 0.1)), "thumb"),
     el("div", { class: "t" }, el("b", { class: "num", text: fmtTime(p.start) + " – " + fmtTime(p.end) }), el("small", { text: fmtTime(outLen(p)) + " long" })),
     btn("", { icon: "restore", cls: "ghost", title: "Put back", onclick: () => restorePiece(p) })));
   if (off.length > 200) list.append(el("p", { class: "hint", text: "…and " + (off.length - 200) + " more." }));
@@ -1110,7 +1160,7 @@ async function openProject() {
   loadFiles().catch(() => {});
   api("/api/recipes").then((x) => { S.recipes = x.recipes; renderRecipes(); }).catch(() => {});
   api("/api/projects").then(({ projects }) => { const pl = $("projList"); for (const p of projects.filter((q) => q.id !== S.id && !q.trashed && !q.missing && (q.stage || "edit") === S.mode).slice(0, 30)) pl.append(projItem(p)); if (!pl.children.length) pl.append(el("p", { class: "hint", text: "No other projects." })); }).catch(() => {});
-  openPanel(S.mode === "edit" ? "sections" : "media");
+  if (S.mode === "edit") renderVersionList(); else openPanel("sound");
   renderSteps();
   if (S.migrated) { S.migrated = false; scheduleSave(); }
   $("saveState").textContent = "Saved";
@@ -1132,21 +1182,42 @@ async function renderVersionList() {
   const box = $("secVersionList");
   try {
     const { projects } = await api("/api/projects");
-    const root = S.proj.parent || S.id;
+    const root = S.proj.parent && projects.some((p) => p.id === S.proj.parent && (p.stage || "edit") === "edit") ? S.proj.parent : S.id;
     const rel = projects.filter((p) => !p.trashed && !p.missing && (p.stage || "edit") === "edit" && (p.id === root || p.parent === root));
+    rel.sort((a, b) => (a.id === root ? -1 : b.id === root ? 1 : String(a.name).localeCompare(String(b.name), undefined, { numeric: true })));
     box.replaceChildren();
-    if (rel.length > 1) {
-      box.append(el("p", { class: "hint", text: "Versions of this clip. Click one to edit it:" }));
-      for (const p of rel) box.append(projItem(p, p.id === S.id));
+    for (const p of rel) {
+      const on = p.id === S.id, tag = p.id === root ? "Clip" : p.version ? p.version.charAt(0).toUpperCase() + p.version.slice(1) : "Version";
+      const pic = el("span", { class: "vpic" }); if (S.info.has_video) pic.append(lazyThumb(thumbUrl(S.proj.source, Math.max(0, Math.round(p.thumb_at || 1))), "", true));
+      box.append(el("button", { type: "button", class: "vcard" + (on ? " on" : ""), onclick: on ? null : async () => { await saved(); location.href = "/edit?p=" + p.id; } },
+        pic, el("span", { class: "t" }, el("span", { class: "vtag" + (p.id === root ? "" : " " + (p.version || "")), text: tag }), el("b", { class: "ellip", text: p.name }),
+          el("small", { text: fmtTime(p.length, 0) + " · " + p.pieces + " sections" })), on ? el("span", { class: "pill", text: "Open" }) : icon("chevr", "s")));
     }
+    $("verCount").textContent = rel.length > 1 ? rel.length + " versions" : "";
+    $("verHint").hidden = rel.length > 1;
   } catch (e) { /* the list is only a help */ }
+}
+/** Scenes found by step 3: sections that share a scene number. (After step 2 every section has its own number, so that is not scenes.) */
+function sceneCount() {
+  const K = kept(), units = new Set(K.map((p) => p.unit).filter((u) => u !== undefined && u !== null));
+  return units.size && units.size < K.length ? units.size : 0;
+}
+/** Which steps are done on this version: shown on the step bar. */
+function renderStepbar() {
+  if (S.mode !== "edit") return;
+  const P = S.proj.pieces, rule = S.proj.rule || {};
+  const done1 = !!S.proj.version, done2 = rule.interval === 1 && rule.group === 4, scenes = sceneCount(), done3 = scenes > 0;
+  const mark = (id, done, txt) => { const b = $(id); b.classList.toggle("done", done); if (txt) b.querySelector("small").textContent = txt; };
+  mark("secVersions", done1, done1 ? "this is the " + S.proj.version + " version" : "2 s sections, two versions");
+  mark("secThin", done2, done2 ? P.filter((p) => p.off).length + " seconds taken out" : "keep 1 2 3, cut 4 …");
+  mark("secScenes", done3, done3 ? scenes + (scenes === 1 ? " scene" : " scenes") : "cut where each scene ends");
 }
 async function secVersions() {
   const b = $("secVersions"); b.disabled = true; secNote("Making the versions…");
   try {
     const r = await secCall("versions");
     const odd = r.versions.find((v) => v.version === "odd"), even = r.versions.find((v) => v.version === "even");
-    secNote("Made '" + odd.name + "' (" + odd.sections + " sections) and '" + even.name + "' (" + even.sections + " sections). Click one below to edit it.");
+    secNote("Made '" + odd.name + "' and '" + even.name + "'. Click one on the left to work on it.");
     await renderVersionList();
   } catch (e) { secNote(errText(e), true); }
   finally { b.disabled = false; }
@@ -1194,11 +1265,14 @@ function applyStage() {
   for (const n of document.querySelectorAll("[data-stage]")) n.hidden = n.dataset.stage !== S.mode;
   document.body.classList.toggle("stage-final", S.mode === "final");
   document.body.classList.toggle("stage-edit", S.mode === "edit");
+  $("suite").classList.add(S.mode === "final" ? "final" : "edit");
 }
 
 // ================================================================== wiring
 function wire() {
-  for (const b of document.querySelectorAll(".rail button")) b.addEventListener("click", () => openPanel(b.dataset.panel));
+  for (const b of document.querySelectorAll(".ftabs button")) b.addEventListener("click", () => openPanel(b.dataset.panel));
+  for (const d of document.querySelectorAll('details[data-sec="pattern"]')) d.addEventListener("toggle", () => { if (d.open) renderPattern(); });
+
   $("projName").addEventListener("change", () => { const v = $("projName").value.trim(); if (v) change(() => { S.proj.name = v; }, { keepVideo: true }); });
   // cut
   const chips = segmented([[1, "1 s"], [2, "2 s"], [3, "3 s"], [5, "5 s"], [10, "10 s"]], 2, (v) => { $("cutSec").value = String(v); });
@@ -1255,7 +1329,7 @@ function wire() {
   $("tMute").addEventListener("click", () => { S.mutedAll = !S.mutedAll; $("tMute").replaceChildren(icon(S.mutedAll ? "mute" : "vol")); showFrame(); musicMute(); });
   $("frame").addEventListener("click", (e) => { if (e.target.closest("#drawLayer")) return; togglePlay(); });
   // timeline
-  $("tlScroll").addEventListener("pointerdown", (e) => { if (e.target.closest("#ruler")) onRulerDown(e); else onLaneDown(e); });
+  $("tlScroll").addEventListener("pointerdown", (e) => { if (e.target.closest(".lane-head, .mrow")) return; if (e.target.closest("#ruler")) onRulerDown(e); else onLaneDown(e); });
   let raf = 0; $("tlScroll").addEventListener("scroll", () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(renderTimeline); });
   $("tlScroll").addEventListener("wheel", (e) => {
     if (e.ctrlKey || e.metaKey) { e.preventDefault(); const r = $("tlScroll").getBoundingClientRect(); zoomTo(S.pps * (e.deltaY < 0 ? 1.2 : 1 / 1.2), timeAt(e.clientX - r.left + $("tlScroll").scrollLeft)); }
@@ -1304,8 +1378,7 @@ function wire() {
 
 (async function init() {
   topBar("/" + S.mode, [el("div", { class: "lenpill", title: "Length of the video" }, icon("clock", "s"), el("span", { text: "Video" }), el("b", { id: "topLen", text: "0:00.0" })),
-    S.mode === "final" ? btn("Export", { icon: "export", cls: "primary", onclick: () => exportDialog() })
-      : btn("Send to Final", { icon: "check", cls: "primary", title: "The Edit stage makes no video. Send this version on to Final.", onclick: sendToFinal })]);
+    S.mode === "final" ? btn("Export", { icon: "export", cls: "primary", onclick: () => exportDialog() }) : null].filter(Boolean));
   paintIcons(); enhanceAll();
   if (!S.id) { location.replace("/?phase=" + S.mode); return; }
   wire(); await openProject();

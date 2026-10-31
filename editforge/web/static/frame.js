@@ -104,11 +104,19 @@ const Frame = (function () {
     ctx.save();
     ctx.clearRect(0, 0, W, H);
     if (f.bg === "blur") {
-      const kc = Math.max(W / vw, H / vh), dw = vw * kc, dh = vh * kc;
+      // A heavy blur on a full-size canvas costs tens of milliseconds a frame (the page stutters). Blurring a small copy and
+      // stretching it looks the same and costs about a millisecond.
       const sigma = (1 + f.blur / 100 * Math.min(W, H) * 0.06);
-      ctx.filter = "blur(" + sigma.toFixed(1) + "px)";
-      ctx.drawImage(v, (W - dw) / 2, (H - dh) / 2, dw, dh);
-      ctx.filter = "none";
+      const k = Math.max(1, Math.min(16, sigma / 3));                       // shrink by up to 16x; the blur hides it
+      const sw = Math.max(2, Math.round(W / k)), sh = Math.max(2, Math.round(H / k));
+      if (!F.bgCv) F.bgCv = document.createElement("canvas");
+      if (F.bgCv.width !== sw || F.bgCv.height !== sh) { F.bgCv.width = sw; F.bgCv.height = sh; }
+      const b = F.bgCv.getContext("2d"), kc = Math.max(sw / vw, sh / vh), dw = vw * kc, dh = vh * kc;
+      b.filter = "blur(" + Math.max(0.5, sigma / k).toFixed(2) + "px)";
+      b.drawImage(v, (sw - dw) / 2 - 2, (sh - dh) / 2 - 2, dw + 4, dh + 4);   // a little over the edges, so they do not darken
+      b.filter = "none";
+      ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(F.bgCv, 0, 0, W, H);
     } else { ctx.fillStyle = f.bg === "white" ? "#fff" : "#000"; ctx.fillRect(0, 0, W, H); }
     ctx.restore();
     // the picture: fitted, then scaled, moved and turned

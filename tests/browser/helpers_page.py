@@ -38,7 +38,8 @@ def clips(page):
 
 
 def tab(page, name):
-    page.click(f"#clipTabs .tab:has-text('{name}')")
+    """The clip panel has no tabs any more: everything shows at once. Kept so the tests read the same."""
+    return None
 
 
 def set_playhead(page, t):
