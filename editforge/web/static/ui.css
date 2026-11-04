@@ -748,3 +748,36 @@ label.swl.inline { padding: 0; gap: 8px; font-size: 12.5px; }
 .marknote { padding: 2px 18px 0; min-height: 18px; }
 .howto { display: block; padding: 12px; border-radius: 10px; background: var(--raised); border: 1px solid var(--line-soft); }
 .howto .hint { margin: 0 0 8px; } .howto .hint:last-child { margin: 0; }
+
+/* ---- right-click menus ---- */
+.menu.ctx { min-width: 210px; max-height: none; padding: 5px; z-index: 300; }
+.menu.ctx div { gap: 10px; padding: 7px 10px; }
+.menu.ctx div .noic { width: 16px; display: inline-block; }
+.menu.ctx div kbd { margin-left: auto; padding-left: 18px; font: 500 11px/1 var(--mono, ui-monospace, monospace); color: var(--faint); background: none; border: 0; }
+.menu.ctx div.danger { color: #ff8a8a; }
+.menu.ctx div.danger:hover, .menu.ctx div.danger.hl { background: rgba(255, 90, 90, .14); color: #ffb0b0; }
+.menu.ctx div.off { opacity: .42; cursor: default; }
+.menu.ctx div.off:hover { background: none; color: var(--ink-2); }
+.menu.ctx hr { border: 0; height: 1px; margin: 4px 6px; background: var(--line); }
+/* ---- Home: Clip projects | Made clips ---- */
+.subtabs { display: flex; gap: 4px; padding: 3px; border-radius: 10px; background: var(--sunk); border: 1px solid var(--line-soft); }
+.subtab { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px; border: 0; border-radius: 7px; background: none; color: var(--muted); font: 600 14px/1 var(--font); cursor: pointer; }
+.subtab:hover { color: var(--ink); }
+.subtab.on { background: var(--raised); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line); }
+.subtab .count { min-width: 20px; padding: 2px 6px; border-radius: 999px; background: var(--panel); color: var(--ink-2); font-size: 11px; text-align: center; }
+.subtab.on .count { background: var(--accent); color: var(--accent-ink); }
+.home-link.sub { height: 32px; margin: -2px 0 2px 22px; padding: 0 10px; font-size: 13px; font-weight: 500; color: var(--muted); }
+.home-link.sub .ic { width: 15px; height: 15px; }
+.chip-tag.plain { color: var(--muted); }
+
+/* ---- dragging rows ---- */
+.is-sorting, .is-sorting * { cursor: grabbing !important; user-select: none; }
+.dragging { opacity: .45; }
+.drop-line { position: fixed; height: 3px; margin-top: -1px; border-radius: 2px; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); pointer-events: none; z-index: 250; }
+/* ---- Stage 1: cut tools on the timeline, grab to move ---- */
+.tl-tools { display: flex; gap: 4px; margin-left: 8px; padding-left: 10px; border-left: 1px solid var(--line); }
+.tl-tools .btn { height: 28px; }
+.lane-item.cliptag.on { cursor: grab; }
+.tl-scroll.grabbing, .tl-scroll.grabbing * { cursor: grabbing !important; }
+.cliplist .clip-row, #parts .part-row { cursor: pointer; }
+@media (max-width: 1280px) { .tl-tools .btn span { display: none; } .tl-bar .hint { display: none; } }

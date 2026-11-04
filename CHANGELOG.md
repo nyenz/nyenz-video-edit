@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.15.0
+* **Made clips have their own place.** Home → Clips now has two tabs: **Clip projects** and **Made clips** (also in the left menu).
+  * Every clip you made is there, with a tag: **In use** (an Edit or Final project uses it) or **Not used**. Filter with All / In use / Not used.
+  * You can now delete a big Stage 1 project after its clips are made: the clips stay in Made clips, and Edit and Final projects that
+    use them keep working.
+  * A clip that a project uses cannot be removed by accident (also not from Exports): the app says which project uses it.
+  * Right-click a made clip: Watch, New edit project from it, Open the project that uses it, Save a copy, Remove.
+* **Cut before / Cut after** (like CapCut's delete left / right): removes what comes before or after the playhead in the clip under it.
+  Buttons on the timeline bar and on the right, keys **Q** and **W**. In Stage 1, Edit and Final.
+* **Better with the mouse everywhere.**
+  * **Right-click menus** on clips, parts, scenes, the marked part, the empty timeline, the picture, project cards, sections,
+    words and music layers. Each menu shows its key. Esc or a click outside closes it.
+  * Stage 1: **drag a clip** on the timeline to move it to another place in the movie (it keeps its length). **Drag clips and parts**
+    in the lists to change their order. Double-click a clip on the timeline to play it.
+
 ## 1.14.0
 * **Each stage has its own screen now** (before, Edit and Final were the same screen with different buttons).
   * **Clips (1):** marking sits right under the video: **Start**, **End**, the two times, **Add as new clip**. The right side is the
