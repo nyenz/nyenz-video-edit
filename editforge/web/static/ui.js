@@ -76,6 +76,9 @@ const ICONS = {
   link: "M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1",
   pin: "M12 17v5M9 3h6l-1 6 4 4H6l4-4z",
   lock: "M6 11h12v10H6zM8 11V7a4 4 0 0 1 8 0v4",
+  cutb: "M16 3v18M12 12H3M6 8.5 2.5 12 6 15.5M20 7v10",
+  cuta: "M8 3v18M12 12h9M18 8.5l3.5 3.5-3.5 3.5M4 7v10",
+  grip: "M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01",
 };
 /** An <svg> icon element. */
 function icon(name, cls) {
@@ -507,7 +510,8 @@ const Exports = {
     }
     if (["done", "failed", "cancelled", "interrupted"].includes(j.status)) acts.append(btn("", { icon: "trash", cls: "ghost danger", title: "Remove", onclick: async () => {
       if (!(await askYes("Remove '" + name + "'? The file is deleted from the app (copies you saved are kept).", "Remove", true))) return;
-      this.openIds.delete(j.id); await api("/api/jobs/" + j.id, { method: "DELETE" }); if (this.onFiles) this.onFiles(); this.refresh(true);
+      try { await api("/api/jobs/" + j.id, { method: "DELETE" }); } catch (e) { toast(errText(e), true); return; }
+      this.openIds.delete(j.id); if (this.onFiles) this.onFiles(); this.refresh(true);
     } }));
     node.append(acts);
     if (j.status === "done" && j.file_id && this.openIds.has(j.id)) node.append(miniPlayer(mediaUrl(j.file_id, false), { meter: j.options && j.options.kind === "project" || !!(j.result && j.result.loudness), loudness: j.result && j.result.loudness }));
@@ -533,6 +537,110 @@ const Exports = {
     this.timer = setInterval(() => { n++; if (this.busy || this.visible || n % 5 === 0 || document.hasFocus() && n % 3 === 0) this.refresh(); }, 1000);
   },
 };
+// ------------------------------------------------------------------ right-click menu (used on every page)
+/** Show a menu at the mouse. items: [label, icon, fn, {danger, off, why, key}] or "-" for a line. Esc, a click outside,
+ *  scrolling or the window losing focus closes it. Arrow keys and Enter work too. */
+const Ctx = { m: null };
+function ctxMenu(items, x, y) {
+  closeCtx();
+  const list = items.filter(Boolean);
+  if (!list.length) return null;
+  const m = el("div", { class: "menu ctx", role: "menu" });
+  const rows = [];
+  for (const it of list) {
+    if (it === "-") { m.append(el("hr")); continue; }
+    const [label, ic, fn, o] = it, opt = o || {};
+    const row = el("div", { role: "menuitem", class: (opt.danger ? "danger" : "") + (opt.off ? " off" : ""), title: opt.off && opt.why ? opt.why : "" },
+      ic ? icon(ic, "s") : el("i", { class: "noic" }), el("span", { text: label }), opt.key ? el("kbd", { text: opt.key }) : null);
+    row.addEventListener("mousedown", (e) => e.preventDefault());
+    row.addEventListener("click", (e) => { e.stopPropagation(); if (opt.off) { if (opt.why) toast(opt.why, true); return; } closeCtx(); fn(); });
+    m.append(row); rows.push(row);
+  }
+  document.body.append(m);
+  const r = m.getBoundingClientRect();
+  m.style.left = Math.max(4, Math.min(x, window.innerWidth - r.width - 6)) + "px";
+  m.style.top = Math.max(4, Math.min(y, window.innerHeight - r.height - 6)) + "px";
+  let hl = -1;
+  const paint = () => rows.forEach((rw, i) => rw.classList.toggle("hl", i === hl));
+  const key = (e) => {
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeCtx(); }
+    else if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); e.stopPropagation(); hl = (hl + (e.key === "ArrowDown" ? 1 : rows.length - 1)) % rows.length; paint(); }
+    else if (e.key === "Enter" && hl >= 0) { e.preventDefault(); e.stopPropagation(); rows[hl].click(); }
+  };
+  const outside = (e) => { if (!m.contains(e.target)) closeCtx(); };
+  const away = () => closeCtx();
+  setTimeout(() => { document.addEventListener("mousedown", outside, true); document.addEventListener("contextmenu", outside, true); }, 0);
+  document.addEventListener("keydown", key, true);
+  window.addEventListener("blur", away); window.addEventListener("resize", away); document.addEventListener("scroll", away, true);
+  Ctx.m = m;
+  Ctx.off = () => {
+    document.removeEventListener("mousedown", outside, true); document.removeEventListener("contextmenu", outside, true);
+    document.removeEventListener("keydown", key, true);
+    window.removeEventListener("blur", away); window.removeEventListener("resize", away); document.removeEventListener("scroll", away, true);
+  };
+  return m;
+}
+function closeCtx() { if (Ctx.m) { Ctx.m.remove(); Ctx.m = null; Ctx.off(); } }
+/** Right-click on node (or a "..." button) opens the menu that items() gives. */
+function onRightClick(node, items) {
+  node.addEventListener("contextmenu", (e) => { e.preventDefault(); e.stopPropagation(); ctxMenu(items(e), e.clientX, e.clientY); });
+}
+/** Open a menu under a button (for the "..." buttons). */
+function menuAt(anchor, items) { const r = anchor.getBoundingClientRect(); return ctxMenu(items, r.right - 200, r.bottom + 4); }
+// The app's own menus replace the browser's right-click menu everywhere except where you type.
+document.addEventListener("contextmenu", (e) => {
+  const t = e.target, tag = (t.tagName || "").toLowerCase();
+  if (tag === "input" || tag === "textarea" || t.isContentEditable) return;
+  e.preventDefault();
+});
+
+// ------------------------------------------------------------------ drag rows of a list to put them in another order
+/** Rows (rowSel inside box) can be dragged up and down with the mouse. onmove(from, to) is called once, on drop.
+ *  A drag starts after the mouse moves 6 pixels, so a plain click still works. Buttons and fields inside a row are left alone. */
+function dragSort(box, rowSel, onmove, enabled) {
+  if (box.dataset.sortable) return;
+  box.dataset.sortable = "1";
+  box.addEventListener("dragstart", (e) => e.preventDefault());           // pictures in a row must not start the browser's own drag
+  box.addEventListener("click", (e) => { if (Date.now() - +(box.dataset.dragEnd || 0) < 250) { e.stopPropagation(); e.preventDefault(); } }, true);
+  box.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || (enabled && !enabled())) return;
+    const row = e.target.closest(rowSel);
+    if (!row || !box.contains(row) || e.target.closest("button, input, select, textarea, a")) return;
+    const rows = Array.from(box.querySelectorAll(rowSel));
+    if (rows.length < 2) return;
+    const from = rows.indexOf(row), y0 = e.clientY;
+    let on = false, to = from, line = null;
+    const move = (ev) => {
+      if (!on) {
+        if (Math.abs(ev.clientY - y0) < 6) return;
+        on = true; row.classList.add("dragging"); document.body.classList.add("is-sorting");
+        line = el("div", { class: "drop-line" }); document.body.append(line);
+      }
+      ev.preventDefault();
+      const fresh = Array.from(box.querySelectorAll(rowSel));            // the list may be drawn again while dragging
+      if (fresh.length === rows.length) { rows.splice(0, rows.length, ...fresh); fresh[from].classList.add("dragging"); }
+      to = rows.length - 1;
+      for (let i = 0; i < rows.length; i++) { const r = rows[i].getBoundingClientRect(); if (ev.clientY < r.top + r.height / 2) { to = i; break; } }
+      const ref = rows[Math.min(to, rows.length - 1)].getBoundingClientRect(), last = rows[rows.length - 1].getBoundingClientRect();
+      const y = ev.clientY >= last.top + last.height / 2 ? last.bottom + 1 : ref.top - 2;
+      line.style.left = ref.left + "px"; line.style.width = ref.width + "px"; line.style.top = y + "px";
+      if (ev.clientY >= last.top + last.height / 2) to = rows.length;
+      const sc = box.closest(".pad, .list, .cliplist") || box, r = sc.getBoundingClientRect();
+      if (ev.clientY < r.top + 24) sc.scrollTop -= 8; else if (ev.clientY > r.bottom - 24) sc.scrollTop += 8;
+    };
+    const up = () => {
+      document.removeEventListener("pointermove", move); document.removeEventListener("pointerup", up); document.removeEventListener("pointercancel", up);
+      if (!on) return;
+      row.classList.remove("dragging"); for (const r of box.querySelectorAll(".dragging")) r.classList.remove("dragging");
+      document.body.classList.remove("is-sorting"); if (line) line.remove();
+      const dest = to > from ? to - 1 : to;
+      box.dataset.dragEnd = String(Date.now());          // the click that ends a drag must not also choose the row
+      if (dest !== from) onmove(from, dest);
+    };
+    document.addEventListener("pointermove", move); document.addEventListener("pointerup", up); document.addEventListener("pointercancel", up);
+  });
+}
+
 /** A small custom video player: picture, play, a seek bar, time, sound and full screen. */
 // ------------------------------------------------------------------ loudness meter (live, on a playing video)
 /** Shows the loudness of what you hear, the way YouTube measures it: K-weighted, over the last 3 seconds (short-term LUFS),

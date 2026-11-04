@@ -29,6 +29,7 @@
       <div class="field" id="qualBox"><span>File size of the clips</span><div id="mQual"></div></div>
       <button class="btn primary wide" id="makeBtn" type="button"><i data-ic="export" class="s"></i><span id="makeLabel">Save &amp; make clips</span></button>
       <button class="btn wide" id="freeBtn" type="button" hidden><i data-ic="disk" class="s"></i><span>Free up the movie</span></button>
+      <a class="btn ghost wide" id="libLink" href="/?phase=made" title="Every clip you made. They stay there when you delete this project."><i data-ic="film" class="s"></i><span>See all made clips</span></a>
       <span id="makeNote" class="note" aria-live="polite"></span>
     </div>
   </aside>
@@ -104,6 +105,8 @@
       <details class="sec" open><summary><i data-ic="scissors"></i><span>Cut and combine</span><i data-ic="chev" class="chev"></i></summary>
         <div class="pad">
           <div class="grid2">
+            <button class="btn" id="tCutB" type="button" title="Remove the part of the clip before the playhead (Q)"><i data-ic="cutb" class="s"></i><span>Cut before</span></button>
+            <button class="btn" id="tCutA" type="button" title="Remove the part of the clip after the playhead (W)"><i data-ic="cuta" class="s"></i><span>Cut after</span></button>
             <button class="btn" id="tSplit" type="button" title="Split the clip into two clips where the playhead is (S)"><i data-ic="scissors" class="s"></i><span>Split here</span></button>
             <button class="btn" id="tCutOut" type="button" title="Take the marked part out of the clip (X)"><i data-ic="trash" class="s"></i><span>Cut out marked</span></button>
             <button class="btn" id="tJoin" type="button" title="Put another clip's parts after this clip's"><i data-ic="combine" class="s"></i><span>Join a clip</span></button>
@@ -121,8 +124,13 @@
       <div class="info"><span>Movie <b id="iLen">0:00</b></span><span id="iSel"></span><span><b id="iCount">0</b> clips</span></div>
       <button class="btn sm" id="sceneBtn" type="button" title="Find where the scenes change"><i data-ic="split" class="s"></i><span id="sceneLabel">Find scenes</span></button>
       <label class="swl inline" title="Marks jump to the nearest scene change">Snap to scenes <input type="checkbox" id="snap" class="sw" checked></label>
+      <div class="tl-tools" role="group" aria-label="Cut at the playhead">
+        <button class="btn sm" id="tlSplit" type="button" title="Split the clip into two clips at the playhead (S)"><i data-ic="scissors" class="s"></i><span>Split</span></button>
+        <button class="btn sm" id="tlCutB" type="button" title="Cut before: remove what comes before the playhead (Q)"><i data-ic="cutb" class="s"></i><span>Cut before</span></button>
+        <button class="btn sm" id="tlCutA" type="button" title="Cut after: remove what comes after the playhead (W)"><i data-ic="cuta" class="s"></i><span>Cut after</span></button>
+      </div>
       <span class="grow"></span>
-      <span class="hint">Drag on the strip to mark · click a scene to mark it</span>
+      <span class="hint">Drag to mark · drag a clip to move it · right-click for more</span>
       <button class="btn ghost icon" id="bZoomOut" title="Zoom out (-)"><i data-ic="zout"></i></button>
       <input type="range" id="zoom" class="rng zoom" min="0" max="100" step="1" aria-label="Timeline zoom">
       <button class="btn ghost icon" id="bZoomIn" title="Zoom in (+)"><i data-ic="zin"></i></button>

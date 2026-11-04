@@ -6,8 +6,9 @@ const PHASES = [
   ["edit", "Edit", "layers", "Versions, sections and scenes"],
   ["final", "Final", "check", "Sound, picture and export"],
 ];
-const H = { phase: "clips", clipsets: [], projects: [], final: [], trash: false, view: "grid", q: "" };
+const H = { phase: "clips", clipsets: [], projects: [], final: [], library: [], trash: false, view: "grid", q: "", sub: "projects", lib: "all" };
 try {
+  if (localStorage.getItem("ef.home.sub") === "made") H.sub = "made";
   H.view = localStorage.getItem("ef.home.view") === "list" ? "list" : "grid";
   const ph = localStorage.getItem("ef.home.phase");
   if (PHASES.some((p) => p[0] === ph)) H.phase = ph;
@@ -16,8 +17,8 @@ try {
 // ------------------------------------------------------------------ loading
 async function loadAll() {
   try {
-    const [a, b, c] = await Promise.all([api("/api/clipsets"), api("/api/projects"), api("/api/final")]);
-    H.clipsets = a.clipsets; H.projects = b.projects; H.final = c.videos;
+    const [a, b, c, d] = await Promise.all([api("/api/clipsets"), api("/api/projects"), api("/api/final"), api("/api/clips/library")]);
+    H.clipsets = a.clipsets; H.projects = b.projects; H.final = c.videos; H.library = d.clips;
   } catch (e) { toast(errText(e), true); return; }
   render();
 }
@@ -29,7 +30,14 @@ function itemsOf(phase) {
   return phase === "clips" ? H.clipsets : phase === "edit" ? H.projects.filter((p) => stageOf(p) === "edit")
     : H.projects.filter((p) => stageOf(p) === "final").concat(H.final);
 }
+const madeView = () => H.phase === "clips" && H.sub === "made";
+function shownMade() {
+  const q = H.q.toLowerCase();
+  return H.library.filter((c) => (H.lib === "all" || (H.lib === "used" ? c.in_use : !c.in_use)) &&
+    (!q || c.name.toLowerCase().includes(q) || c.movie.toLowerCase().includes(q) || c.used_by.some((u) => u.name.toLowerCase().includes(q))));
+}
 function shown() {
+  if (madeView()) return shownMade();
   const q = H.q.toLowerCase();
   const list = itemsOf(H.phase);
   return list.filter((p) => (p.job ? !H.trash : !!p.trashed === H.trash) &&
@@ -48,10 +56,24 @@ function renderPhases() {
     box.append(b);
   });
 }
+function renderSub() {
+  const box = $("subTabs"), on = H.phase === "clips";
+  box.hidden = !on; $("projTitle").hidden = on;
+  if (!on) return;
+  box.replaceChildren();
+  const projects = H.clipsets.filter((p) => !p.trashed).length;
+  for (const [k, label, n] of [["projects", "Clip projects", projects], ["made", "Made clips", H.library.length]]) {
+    box.append(el("button", { class: "subtab" + (H.sub === k ? " on" : ""), type: "button", role: "tab", "aria-selected": String(H.sub === k),
+      onclick: () => { H.sub = k; H.trash = false; try { localStorage.setItem("ef.home.sub", k); } catch (e) { /* off */ } render(); } },
+      el("span", { text: label }), el("span", { class: "count num", text: String(n) })));
+  }
+}
 function render() {
   renderPhases();
-  const final = H.phase === "final";
-  $("createRow").hidden = final;
+  renderSub();
+  const final = H.phase === "final", made = madeView();
+  $("libFilter").hidden = !made;
+  $("createRow").hidden = final || made;
   const hasTrash = true;
   $("createTitle").textContent = H.phase === "clips" ? "New clip project" : "New edit project";
   $("createLine").textContent = H.phase === "clips" ? "Choose a movie, then mark as many clips as you like. Nothing is copied."
@@ -60,13 +82,21 @@ function render() {
   const list = shown(), grid = $("grid"), all = itemsOf(H.phase), trashN = all.filter((p) => p.trashed && !p.job).length;
   $("projTitle").textContent = H.trash ? "Trash" : { clips: "Clip projects", edit: "Edit projects", final: "Finished videos" }[H.phase];
   $("projCount").textContent = list.length ? String(list.length) : "";
-  $("trashBtn").hidden = !hasTrash;
+  $("trashBtn").hidden = !hasTrash || made;
   $("trashCount").textContent = String(trashN); $("trashCount").hidden = !trashN || H.trash;
   $("trashBtn").classList.toggle("on", H.trash);
   $("trashLabel").textContent = H.trash ? "Back to projects" : "Trash";
-  $("emptyTrash").hidden = !(H.trash && trashN);
+  $("emptyTrash").hidden = !(H.trash && trashN) || made;
+  if (made) $("projCount").textContent = "";
   grid.className = "proj-grid" + (H.view === "list" ? " as-list" : "");
   grid.replaceChildren();
+  if (made && !list.length) {
+    grid.append(el("div", { class: "proj-empty" }, icon("film", "l"),
+      el("b", { text: H.q ? "Nothing matches '" + H.q + "'." : H.library.length ? "No clips here." : "No made clips yet." }),
+      el("span", { class: "hint", text: H.library.length ? "" : "Open a clip project and press Save & make clips. Made clips stay here, also after you delete their clip project." })));
+    return;
+  }
+  if (made) { for (const c of list) grid.append(madeCard(c)); return; }
   if (!list.length) {
     const hint = H.trash || H.q ? "" : { clips: "Press New clip project and choose a movie.", edit: "Press New edit project, or open a made clip.",
       final: "Press 'Send to Final' in an Edit project. Videos you export from a Final project appear here too." }[H.phase];
@@ -83,14 +113,46 @@ function addImg(pic, url) {
   img.addEventListener("error", () => img.remove());
   pic.append(img);
 }
-function cardShell(p, pic, lines, open, title) {
-  const more = btn("", { icon: "more", cls: "ghost more", title: "More", onclick: (e) => { e.stopPropagation(); menu(p, more); } });
+function cardShell(p, pic, lines, open, title, items) {
+  const list = items || (() => menuItems(p));
+  const more = btn("", { icon: "more", cls: "ghost more", title: "More (or right-click the card)", onclick: (e) => { e.stopPropagation(); menuAt(more, list()); } });
   pic.append(more);
   const node = el("div", { class: "pcard" + (p.missing && !p.freed ? " is-missing" : ""), tabindex: "0", role: "button", title: title || "", "aria-label": p.name },
     pic, el("div", { class: "pinfo" }, el("b", { class: "ellip", text: p.name }), ...lines));
   node.addEventListener("click", open);
-  node.addEventListener("keydown", (e) => { if (e.key === "Enter") open(); });
+  node.addEventListener("keydown", (e) => { if (e.key === "Enter") open(); else if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) { e.preventDefault(); menuAt(more, list()); } });
+  onRightClick(node, list);
   return node;
+}
+/** Stage 1 result: one made clip. It stays here when its clip project is deleted. */
+function madeCard(c) {
+  const pic = thumbBox(false);
+  addImg(pic, thumbUrl(c.file, Math.min(0.5, (c.length || 1) / 2), true));
+  pic.append(el("span", { class: "chip-tag", text: fmtTime(c.length, 0) }));
+  pic.append(el("span", { class: "chip-tag top" + (c.in_use ? " good" : " plain"), text: c.in_use ? "In use" : "Not used" }));
+  const uses = c.used_by.filter((u) => !u.trashed);
+  const where = uses.length ? "Used in " + uses.map((u) => u.name).join(", ") : "Not used in Edit or Final";
+  const from = c.clipset && !c.clipset_trashed ? "From " + (c.clipset_name || c.movie) : "From " + (c.movie || "a movie") + " · project deleted";
+  return cardShell(c, pic, [el("small", { class: "num ellip", text: fmtShort(c.size) + " | " + (uses.length ? uses.length === 1 ? uses[0].name : uses.length + " projects" : from) }),
+    H.view === "list" ? el("small", { class: "num when", text: from + " · " + where }) : null], () => watchClip(c), c.name + "\n" + from + "\n" + where, () => madeItems(c));
+}
+function watchClip(c) { watch({ id: c.file, name: c.name }); }
+function madeItems(c) {
+  const uses = c.used_by;
+  const blocked = uses.length ? "It is used by " + uses.map((u) => "'" + u.name + "'" + (u.trashed ? " (in the trash)" : "")).join(", ") + ". Delete that project first." : "";
+  return [
+    ["Watch", "play", () => watchClip(c)],
+    ["New edit project from it", "layers", () => openInEditor(c.file, 2)],
+    ...uses.filter((u) => !u.trashed).slice(0, 4).map((u) => ["Open '" + u.name + "'", u.stage === "final" ? "check" : "layers", () => { location.href = "/" + u.stage + "?p=" + u.id; }]),
+    c.clipset && !c.clipset_trashed ? ["Open its clip project", "scissors", () => { location.href = "/clips?c=" + c.clipset; }] : null,
+    ["Save a copy", "download", () => { location.href = "/download/" + c.job + "?t=" + encodeURIComponent(TOKEN); }],
+    "-",
+    ["Remove this clip", "trash", async () => {
+      if (!(await askYes("Remove the made clip '" + c.name + "'? Its file is deleted from the app (copies you saved are kept).", "Remove", true))) return;
+      try { await api("/api/jobs/" + c.job, { method: "DELETE" }); toast("Removed '" + c.name + "'."); } catch (e) { toast(errText(e), true); }
+      loadAll();
+    }, { danger: true, off: !!uses.length, why: blocked }],
+  ];
 }
 
 /** Phase 1 card: a movie and its clips. */
@@ -166,22 +228,10 @@ function menuItems(p) {
   return [["Open", "layers", () => { if (p.missing) relink(p); else location.href = pageOf(p); }], ["Rename", "edit", () => rename(base, p)],
     ["Duplicate", "copy", () => act(base, p, "duplicate")], ["Move to trash", "trash", () => act(base, p, "trash")]];
 }
-function menu(p, anchor) {
-  closeMenu();
-  const m = el("div", { class: "menu pmenu", role: "menu" });
-  for (const [label, ic, fn] of menuItems(p)) m.append(el("div", { role: "menuitem", onclick: (e) => { e.stopPropagation(); closeMenu(); fn(); } }, icon(ic, "s"), el("span", { text: label })));
-  document.body.append(m);
-  const r = anchor.getBoundingClientRect();
-  m.style.left = Math.min(window.innerWidth - 190, r.right - 180) + "px"; m.style.top = (r.bottom + 4) + "px";
-  setTimeout(() => document.addEventListener("mousedown", outside, true));
-  function outside(e) { if (!m.contains(e.target)) closeMenu(); }
-  H.menu = { m, outside };
-}
-function closeMenu() { if (H.menu) { H.menu.m.remove(); document.removeEventListener("mousedown", H.menu.outside, true); H.menu = null; } }
 async function act(base, p, what) {
   try {
     await api(base + p.id + "/" + what, { method: "POST", json: {} });
-    if (what === "trash") toast("Moved '" + p.name + "' to the trash. Open Trash to bring it back.");
+    if (what === "trash") toast("Moved '" + p.name + "' to the trash. Open Trash to bring it back." + (base.includes("clipsets") && p.made ? " Its made clips stay in Made clips." : ""));
     await loadAll();
   } catch (e) { toast(errText(e), true); }
 }
@@ -191,7 +241,7 @@ async function rename(base, p) {
   try { await api(base + p.id + "/rename", { method: "POST", json: { name } }); await loadAll(); } catch (e) { toast(errText(e), true); }
 }
 async function forget(base, p) {
-  const extra = H.phase === "clips" ? " Clips you made stay in Exports." : " Exported videos are kept.";
+  const extra = H.phase === "clips" ? (p.made ? " Its " + p.made + " made clip" + (p.made === 1 ? "" : "s") + " stay in Made clips, and Edit projects that use them keep working." : "") : " Exported videos are kept.";
   if (!(await askYes("Delete '" + p.name + "' for good? Your video file itself is not touched." + extra, "Delete", true))) return;
   await api(base + p.id, { method: "DELETE" }).catch((e) => toast(errText(e), true));
   loadAll();
@@ -234,7 +284,7 @@ async function fromClip() {
   for (const c of clips) {
     list.append(el("div", { class: "item", onclick: () => list.dispatchEvent(new CustomEvent("pick", { detail: c.file })) },
       el("img", { class: "thumb", alt: "", src: thumbUrl(c.file, 0.5), loading: "lazy" }),
-      el("div", { class: "t" }, el("b", { text: c.name }), el("small", { class: "num", text: fmtTime(c.length, 1) + " · " + c.clipset_name }))));
+      el("div", { class: "t" }, el("b", { text: c.name }), el("small", { class: "num", text: fmtTime(c.length, 1) + " · " + (c.clipset_name || c.movie) + (c.in_use ? " · in use" : "") }))));
   }
   const file = await dialogBox("Edit a made clip", [list], [["Cancel", null, "ghost"]], (done) => list.addEventListener("pick", (e) => done(e.detail)));
   if (file) openInEditor(file, 2);
@@ -278,7 +328,12 @@ async function storagePanel() {
 // ------------------------------------------------------------------ start
 (function init() {
   const nav = $("homeNav");
-  for (const [href, name, ic] of PAGES) nav.append(el("a", { href, class: "home-link" + (href === "/" ? " on" : "") }, icon(ic), el("span", { text: name })));
+  for (const [href, name, ic] of PAGES) {
+    nav.append(el("a", { href, class: "home-link" + (href === "/" ? " on" : "") }, icon(ic), el("span", { text: name })));
+    if (href === "/clips") nav.append(el("a", { href: "/?phase=made", class: "home-link sub", title: "Every clip you made, also after its clip project is deleted",
+      onclick: (e) => { e.preventDefault(); H.phase = "clips"; H.sub = "made"; H.trash = false; try { localStorage.setItem("ef.home.phase", "clips"); localStorage.setItem("ef.home.sub", "made"); } catch (er) { /* off */ } render(); } },
+      icon("film"), el("span", { text: "Made clips" })));
+  }
   $("homeTop").append(el("span", { class: "grow" }), Update.pill(), exportsButton());
   Exports.start();
   Exports.onFiles = () => loadAll();
@@ -291,6 +346,7 @@ async function storagePanel() {
   $("search").addEventListener("input", () => { H.q = $("search").value.trim(); render(); });
   $("viewToggle").append(segmented([["grid", "Grid"], ["list", "List"]], H.view, (v) => { H.view = v; try { localStorage.setItem("ef.home.view", v); } catch (e) { /* off */ } render(); }));
   $("trashBtn").addEventListener("click", () => { H.trash = !H.trash; render(); });
+  $("libFilter").append(segmented([["all", "All"], ["used", "In use"], ["free", "Not used"]], H.lib, (v) => { H.lib = v; render(); }));
   $("emptyTrash").addEventListener("click", async () => {
     if (!(await askYes("Delete everything in this trash for good? Video files themselves are not touched.", "Empty trash", true))) return;
     if (H.phase === "clips") {
@@ -301,7 +357,7 @@ async function storagePanel() {
   $("storageBtn").addEventListener("click", storagePanel);
   const params = new URLSearchParams(location.search);
   const msg = params.get("msg"), ph = params.get("phase");
-  if (PHASES.some((p) => p[0] === ph)) H.phase = ph;
+  if (ph === "made") { H.phase = "clips"; H.sub = "made"; } else if (PHASES.some((p) => p[0] === ph)) H.phase = ph;
   if (msg) toast(msg, true);
   if (msg || ph) history.replaceState(null, "", "/");
   render();

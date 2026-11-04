@@ -129,7 +129,7 @@ async function openClipset(id) {
     sceneStatus(false);
   }
   for (const b of ["setStart", "setEnd", "startIn", "endIn", "addNew", "addPart", "playSel", "sceneBtn", "playClip", "playCtx", "playAll", "newClip",
-    "nSa", "nSb", "nEa", "nEb", "tSplit", "tCutOut", "tJoin", "tDup", "clipName"]) $(b).disabled = !canEdit();
+    "nSa", "nSb", "nEa", "nEb", "tSplit", "tCutOut", "tJoin", "tDup", "clipName", "tCutB", "tCutA", "tlSplit", "tlCutB", "tlCutA"]) $(b).disabled = !canEdit();
   fitZoom(); renderAll(); renderUndo(); poll();
 }
 function useQuick() {
@@ -214,20 +214,20 @@ function advance() {
 /** Play the chosen clip: its parts one after the other. */
 function playClip() {
   const c = selClip();
-  if (!c || !c.parts.length) { $("markNote").textContent = "Choose a clip on the left first."; return; }
+  if (!c || !c.parts.length) { say("Choose a clip on the left first."); return; }
   playItems(c.parts.map((p) => ({ a: p.start, b: p.end, clip: c.id })));
 }
 /** Play the chosen part with a few seconds before and after it, so you see where it sits in the movie. */
 function playContext() {
   const p = selPartObj();
-  if (!p) { $("markNote").textContent = "Choose a clip on the left first."; return; }
+  if (!p) { say("Choose a clip on the left first."); return; }
   playRange(Math.max(0, p.start - CONTEXT), Math.min(dur(), p.end + CONTEXT));
 }
 /** Play every clip, in the order of the list. */
 function playAllClips() {
   const items = [];
   for (const c of clips()) for (const p of c.parts) items.push({ a: p.start, b: p.end, clip: c.id });
-  if (!items.length) { $("markNote").textContent = "There are no clips yet."; return; }
+  if (!items.length) { say("There are no clips yet."); return; }
   playItems(items);
 }
 video.addEventListener("play", () => $("tPlay").replaceChildren(icon("pause")));
@@ -253,6 +253,11 @@ function followHead() {
 function applyLive() { video.muted = $("tMute").dataset.off === "1"; }
 
 // ------------------------------------------------------------------ marks and scenes
+/** A short message under the mark bar. It goes away by itself after a few seconds. */
+function say(m) {
+  const n = $("markNote"); n.textContent = m; delete n.dataset.order;
+  clearTimeout(C.noteTimer); C.noteTimer = setTimeout(() => { if (n.textContent === m) n.textContent = ""; }, 6000);
+}
 function selOk() { return C.start !== null && C.end !== null && C.end > C.start; }
 function snapT(t) {
   if (!$("snap").checked || !C.scenes.length) return t;
@@ -272,7 +277,9 @@ function renderMarks() {
   $("addPart").disabled = !ok || !c || !canEdit();
   $("tCutOut").disabled = !ok || !c || !canEdit();
   $("addPartLabel").textContent = "Add to clip"; $("addPart").title = c ? "Add the marked part to " + c.name + " (A)" : "Choose a clip on the left first";
-  $("markNote").textContent = s !== null && e !== null && e <= s ? "The end must come after the start." : "";
+  const bad = s !== null && e !== null && e <= s, mn = $("markNote");      // only clear the note this function wrote
+  if (bad) { mn.textContent = "The end must come after the start."; mn.dataset.order = "1"; }
+  else if (mn.dataset.order) { mn.textContent = ""; delete mn.dataset.order; }
   const m = $("markSel");
   m.hidden = s === null;
   if (s !== null) {
@@ -287,7 +294,7 @@ function setEnd(t) { C.end = snapT(clampT(t)); if (C.start === null) C.start = 0
 function typed(input, which) {
   if (!input.value.trim()) { C[which] = null; renderMarks(); return; }
   const t = parseTime(input.value);
-  if (t === null) { $("markNote").textContent = "'" + input.value + "' is not a time. Write it like 1:23 or 1:02:03.5 or 75."; return; }
+  if (t === null) { say("'" + input.value + "' is not a time. Write it like 1:23 or 1:02:03.5 or 75."); return; }
   if (which === "start") { C.start = clampT(t); if (C.end !== null && C.end <= C.start) C.end = null; } else { C.end = clampT(t); if (C.start === null) C.start = 0; }
   renderMarks();
 }
@@ -311,7 +318,7 @@ const copyOf = (o) => JSON.parse(JSON.stringify(o));
 
 // ------------------------------------------------------------------ the changes (each one can be undone)
 function addNewClip() {
-  if (!selOk()) { $("markNote").textContent = "Mark a start and an end first."; return; }
+  if (!selOk()) { say("Mark a start and an end first."); return; }
   if (clips().length >= 300) { toast("A clip project can have at most 300 clips. Start a second project for the rest.", true); return; }
   commit(() => { const c = blankClip([takeMarks()]); C.cs.clips.push(c); C.sel = c.id; C.selPart = 0; });
   toast("Added: " + selClip().name + " · " + fmtTime(clipLen(selClip()), 1));
@@ -319,7 +326,7 @@ function addNewClip() {
 function addPartTo() {
   const c = selClip();
   if (!c) { addNewClip(); return; }
-  if (!selOk()) { $("markNote").textContent = "Mark a start and an end first."; return; }
+  if (!selOk()) { say("Mark a start and an end first."); return; }
   if (c.parts.length >= MAX_PARTS) { toast("A clip can have at most " + MAX_PARTS + " parts.", true); return; }
   commit(() => { c.parts.push(takeMarks()); C.selPart = c.parts.length - 1; });
   toast(c.name + ": " + c.parts.length + " parts · " + fmtTime(clipLen(c), 1));
@@ -360,6 +367,32 @@ function splitAtPlayhead() {
     C.selPart = c.parts.length - 1; made2 = second;
   });
   if (made2) toast("Split into two clips: " + c.name + " and " + made2.name + ".");
+}
+/** Cut before / Cut after (like CapCut's "delete left / delete right"): the part under the playhead loses what comes
+ *  before (or after) the playhead. The chosen clip comes first; otherwise the marked range; otherwise any clip there. */
+function cutSide(side, at) {
+  const t = r3(clampT(at === undefined ? video.currentTime || 0 : at));
+  const note = (m) => { $("toolNote").textContent = m; say(m); };
+  const inside = (p) => t > p.start + 0.02 && t < p.end - 0.02;
+  const chosen = selClip();
+  let c = null, i = -1;
+  if (chosen) {
+    if (chosen.parts[C.selPart] && inside(chosen.parts[C.selPart])) { c = chosen; i = C.selPart; }
+    else { i = chosen.parts.findIndex(inside); if (i >= 0) c = chosen; }
+  }
+  if (!c && selOk() && t > C.start && t < C.end) {                 // only a marked range here: shorten the marks
+    if (side === "before") C.start = t; else C.end = t;
+    renderMarks(); note(side === "before" ? "The marked part now starts here." : "The marked part now ends here.");
+    return;
+  }
+  if (!c) for (const x of clips()) { const j = x.parts.findIndex(inside); if (j >= 0) { c = x; i = j; break; } }
+  if (!c) { note("Put the playhead inside a clip first (the blue blocks under the strip)."); return; }
+  const p = c.parts[i];
+  if (side === "before" ? p.end - t < MIN_PART : t - p.start < MIN_PART) { note("That would leave too little of the clip."); return; }
+  const gone = side === "before" ? t - p.start : p.end - t;
+  commit(() => { if (side === "before") p.start = t; else p.end = t; C.sel = c.id; C.selPart = i; });
+  video.pause(); video.currentTime = side === "before" ? t : Math.max(p.start, t - frameLen()); renderHead();
+  note((side === "before" ? "Cut " : "Cut ") + fmtTime(gone, 1) + (side === "before" ? " before the playhead from " : " after the playhead from ") + c.name + ". It is now " + fmtTime(clipLen(c), 1) + ".");
 }
 /** Take the part between the marks out of the chosen clip (the rest stays, in two pieces when the cut is in the middle). */
 function cutOutMarked() {
@@ -453,11 +486,40 @@ function renderClips() {
     const src = st.file && !C.info ? thumbUrl(st.file, 0.3) : C.info && C.info.has_video ? thumbUrl(C.cs.source, Math.floor((c.parts[0].start + 0.3) * 2) / 2) : "";
     if (src) pic.append(el("img", { alt: "", loading: "lazy", src }));
     const nm = el("b", { text: c.name, title: canEdit() ? "Double-click to rename" : c.name });
-    box.append(el("div", { class: "item clip-row" + (c.id === C.sel ? " on" : ""), "data-id": c.id, onclick: () => select(c.id), ondblclick: () => { if (canEdit()) renameClip(c); } },
-      pic, el("div", { class: "t" }, nm, el("small", { class: "num", text: fmtTime(clipLen(c), 1) + " · " + c.parts.length + " part" + (c.parts.length > 1 ? "s" : "") }), chip), acts));
+    const row = el("div", { class: "item clip-row" + (c.id === C.sel ? " on" : ""), "data-id": c.id, onclick: () => select(c.id), ondblclick: () => { if (canEdit()) renameClip(c); } },
+      pic, el("div", { class: "t" }, nm, el("small", { class: "num", text: fmtTime(clipLen(c), 1) + " · " + c.parts.length + " part" + (c.parts.length > 1 ? "s" : "") }), chip), acts);
+    row.title = canEdit() ? "Click to choose · drag to move · right-click for more" : "";
+    onRightClick(row, () => clipItems(c));
+    box.append(row);
   });
+  dragSort(box, ".clip-row", (a, b) => commit(() => { const [x] = C.cs.clips.splice(a, 1); C.cs.clips.splice(b, 0, x); }), canEdit);
   renderMake();
   $("iCount").textContent = String(clips().length);
+}
+/** The right-click menu of a clip (in the list and on the timeline). at: the time under the mouse, if any. */
+function clipItems(c, at, part) {
+  const st = stateOf(c), ed = !canEdit(), i = clips().indexOf(c), here = at !== undefined;
+  const choose = () => { if (C.sel !== c.id) { C.sel = c.id; C.selPart = part || 0; renderAll(); } else if (part !== undefined) { C.selPart = part; renderAll(); } };
+  const made = st.file && (st.state === "done" || st.state === "old");
+  return [
+    ["Play this clip", "play", () => { choose(); playClip(); }, { key: "P" }],
+    part !== undefined ? ["Play this part", "play", () => { const p = c.parts[part]; if (p) playRange(p.start, p.end); }] : null,
+    made ? ["Watch the made clip", "eye", () => watch(c, st.file)] : null,
+    made ? ["Edit it (next stage)", "layers", async () => { await flush(); openInEditor(st.file, 2); }] : null,
+    "-",
+    here ? ["Cut before here", "cutb", () => { choose(); cutSide("before", at); }, { key: "Q", off: ed }] : ["Cut before the playhead", "cutb", () => { choose(); cutSide("before"); }, { key: "Q", off: ed }],
+    here ? ["Cut after here", "cuta", () => { choose(); cutSide("after", at); }, { key: "W", off: ed }] : ["Cut after the playhead", "cuta", () => { choose(); cutSide("after"); }, { key: "W", off: ed }],
+    ["Split here", "scissors", () => { choose(); if (here) { video.pause(); video.currentTime = clampT(at); } setTimeout(splitAtPlayhead, here ? 60 : 0); }, { key: "S", off: ed }],
+    part !== undefined && c.parts.length > 1 ? ["Remove this part", "x", () => commit(() => { c.parts.splice(part, 1); C.sel = c.id; C.selPart = 0; }), { off: ed }] : null,
+    "-",
+    ["Rename", "edit", () => renameClip(c), { off: ed }],
+    ["Duplicate", "copy", () => { choose(); duplicateClip(); }, { key: "D", off: ed }],
+    ["Join another clip to it", "combine", () => { choose(); joinClip(); }, { off: ed || clips().length < 2 }],
+    ["Move up", "up", () => move(i, -1), { off: ed || i <= 0 }],
+    ["Move down", "down", () => move(i, 1), { off: ed || i >= clips().length - 1 }],
+    "-",
+    ["Delete this clip", "trash", () => deleteClip(c, true), { danger: true, key: "Del", off: ed }],
+  ];
 }
 function move(i, d) { const j = i + d; if (j < 0 || j >= clips().length) return; commit(() => { [C.cs.clips[i], C.cs.clips[j]] = [C.cs.clips[j], C.cs.clips[i]]; }); }
 function select(id) { C.sel = id; C.selPart = 0; C.queue = null; renderAll(); const c = selClip(); if (c && C.info) seek(c.parts[0].start); }
@@ -557,7 +619,7 @@ function renderSide() {
       e.stopPropagation();
       const j = i + d; if (j < 0 || j >= c.parts.length) return;
       commit(() => { [c.parts[i], c.parts[j]] = [c.parts[j], c.parts[i]]; C.selPart = j; }); } }), !canEdit());
-    box.append(el("div", { class: "item part-row" + (i === C.selPart ? " on" : ""), onclick: () => selectPart(i) },
+    const prow = el("div", { class: "item part-row" + (i === C.selPart ? " on" : ""), onclick: () => selectPart(i), ondblclick: () => playRange(p.start, p.end), title: "Click to go there · double-click to play · drag to change the order" },
       el("span", { class: "part-n num", text: String(i + 1) }),
       el("div", { class: "t" }, el("b", { class: "num", text: fmtTime(p.start) + " – " + fmtTime(p.end) }), el("small", { class: "num", text: fmtTime(p.end - p.start, 2) })),
       el("div", { class: "acts" },
@@ -567,8 +629,11 @@ function renderSide() {
           e.stopPropagation();
           commit(() => { c.parts.splice(i, 1); C.start = p.start; C.end = p.end; if (!c.parts.length) C.cs.clips = clips().filter((x) => x !== c); });
           renderMarks(); seek(p.start); } }), !canEdit()),
-        dis(btn("", { icon: "trash", cls: "ghost icon sm", title: "Remove this part", onclick: (e) => { e.stopPropagation(); commit(() => { c.parts.splice(i, 1); }); } }), !canEdit() || c.parts.length < 2))));
+        dis(btn("", { icon: "trash", cls: "ghost icon sm", title: "Remove this part", onclick: (e) => { e.stopPropagation(); commit(() => { c.parts.splice(i, 1); }); } }), !canEdit() || c.parts.length < 2)));
+    onRightClick(prow, () => clipItems(c, undefined, i));
+    box.append(prow);
   });
+  if (c) dragSort(box, ".part-row", (a, b) => { const cc = selClip(); if (cc) commit(() => { const [x] = cc.parts.splice(a, 1); cc.parts.splice(b, 0, x); C.selPart = b; }); }, canEdit);
   // tools
   $("noClipT").hidden = !!c; $("toolsBox").hidden = !c;
   $("tJoin").disabled = !canEdit() || clips().length < 2;
@@ -670,7 +735,7 @@ function onTimelineDown(e) {
   else if (scene) drag = { kind: "scene", a: +scene.dataset.a, b: +scene.dataset.b };
   else if (tag) {
     const c = clips().find((x) => x.id === tag.dataset.c), p = c.parts[+tag.dataset.p];
-    drag = edge ? { kind: "partEdge", c, p, edge, before: snap() } : { kind: "part", c, p };
+    drag = edge ? { kind: "partEdge", c, p, edge, before: snap() } : { kind: "part", c, p, before: snap(), off: t0 - p.start, len: p.end - p.start };
   } else if (edge && e.target.closest("#markSel")) drag = { kind: "markEdge", edge };
   else if (e.target.closest("#laneV")) drag = { kind: "mark", from: snapT(t0) };
   else drag = { kind: "seek" };
@@ -693,11 +758,21 @@ function onTimelineDown(e) {
       const p = drag.p, s = snapT(t);
       if (drag.edge === "s") p.start = r3(clamp(Math.min(s, p.end - MIN_PART), 0, dur())); else p.end = r3(clamp(Math.max(s, p.start + MIN_PART), 0, dur()));
       renderLane(); seekSoft(t); tip(drag.c.name + " · part " + (drag.c.parts.indexOf(p) + 1) + " · " + fmtTime(p.end - p.start, 2), ev);
+    } else if (drag.kind === "part" && canEdit()) {
+      // move the whole part: same length, it starts somewhere else in the movie (snaps its start or its end to a scene)
+      const p = drag.p, L = drag.len;
+      let a = clamp(t - drag.off, 0, Math.max(0, dur() - L));
+      const sa = snapT(a), se = snapT(a + L) - L;
+      if (sa !== a) a = sa; else if (Math.abs(se - a) > 1e-6) a = se;
+      a = clamp(a, 0, Math.max(0, dur() - L));
+      p.start = r3(a); p.end = r3(Math.min(dur(), a + L));
+      $("tlScroll").classList.add("grabbing");
+      renderLane(); seekSoft(p.start); tip(drag.c.name + " · starts at " + fmtTime(p.start, 2), ev);
     }
   };
   // while dragging near the left or right edge of the timeline, it scrolls by itself
   const auto = setInterval(() => {
-    if (!drag.moved || drag.kind === "scene" || drag.kind === "part") return;
+    if (!drag.moved || drag.kind === "scene") return;
     const r = sc.getBoundingClientRect(), x = last.clientX;
     const d = x < r.left + 36 ? -(r.left + 36 - x) : x > r.right - 36 ? x - (r.right - 36) : 0;
     if (d) { sc.scrollLeft += Math.sign(d) * Math.min(40, 4 + Math.abs(d) / 3); move(last); renderRuler(); }
@@ -707,6 +782,8 @@ function onTimelineDown(e) {
     sc.removeEventListener("pointermove", move); sc.removeEventListener("pointerup", up); sc.removeEventListener("pointercancel", up);
     const t = $("tlTip"); if (t) t.hidden = true;
     if (drag.kind === "partEdge" && drag.moved) { pushUndo(drag.before); C.sel = drag.c.id; C.selPart = drag.c.parts.indexOf(drag.p); changed(); renderAll(); }
+    $("tlScroll").classList.remove("grabbing");
+    if (drag.kind === "part" && drag.moved && canEdit()) { pushUndo(drag.before); C.sel = drag.c.id; C.selPart = drag.c.parts.indexOf(drag.p); changed(); renderAll(); }
     if (drag.kind === "part" && !drag.moved) { if (C.sel !== drag.c.id) { C.sel = drag.c.id; } C.selPart = drag.c.parts.indexOf(drag.p); renderAll(); seek(drag.p.start); }
     if (drag.kind === "mark" && !drag.moved) seek(tAt(ev));
     if (drag.kind === "scene" && !drag.moved) { C.start = drag.a; C.end = drag.b; renderMarks(); seek(drag.a); }
@@ -714,11 +791,58 @@ function onTimelineDown(e) {
   sc.addEventListener("pointermove", move); sc.addEventListener("pointerup", up); sc.addEventListener("pointercancel", up);
 }
 
+// ------------------------------------------------------------------ right-click menus
+function markItems(t) {
+  const ok = selOk(), c = selClip(), ed = !canEdit();
+  return [
+    ["Mark the start here", "inp", () => setStart(t), { key: "I" }],
+    ["Mark the end here", "outp", () => setEnd(t), { key: "O" }],
+    ok ? ["Play the marked part", "play", () => playRange(C.start, C.end)] : null,
+    ok ? "-" : null,
+    ok ? ["Add as new clip", "plus", addNewClip, { key: "Enter", off: ed }] : null,
+    ok && c ? ["Add to " + c.name, "split", addPartTo, { key: "A", off: ed }] : null,
+    ok && c ? ["Cut it out of " + c.name, "trash", cutOutMarked, { key: "X", off: ed }] : null,
+    C.start !== null ? ["Clear the marks", "x", clearMarks, { key: "Esc" }] : null,
+  ];
+}
+function timelineMenu(e) {
+  if (!C.info) return;
+  e.preventDefault();
+  const sc = $("tlScroll"), r = sc.getBoundingClientRect(), t = clampT(timeAt(e.clientX - r.left + sc.scrollLeft));
+  const tag = e.target.closest(".cliptag"), scene = e.target.closest(".scene"), marked = e.target.closest("#markSel");
+  let items;
+  if (tag) {
+    const c = clips().find((x) => x.id === tag.dataset.c);
+    items = c ? clipItems(c, t, +tag.dataset.p) : [];
+  } else if (scene) {
+    const a = +scene.dataset.a, b = +scene.dataset.b, c = selClip(), ed = !canEdit();
+    items = [
+      ["Play this scene", "play", () => playRange(a, b)],
+      ["Mark this scene", "mark", () => { C.start = a; C.end = b; renderMarks(); seek(a); }],
+      "-",
+      ["Add it as a new clip", "plus", () => { C.start = a; C.end = b; addNewClip(); }, { off: ed }],
+      c ? ["Add it to " + c.name, "split", () => { C.start = a; C.end = b; addPartTo(); }, { off: ed }] : null,
+    ];
+  } else if (marked) items = markItems(t);
+  else {
+    items = [["Move the playhead here", "target", () => seek(t)], "-", ...markItems(t), "-",
+      ["Zoom in here", "zin", () => setZoom(C.pps * 2, t)], ["Show the whole movie", "fit", fitZoom]];
+  }
+  ctxMenu(items, e.clientX, e.clientY);
+}
+function pictureItems() {
+  const t = video.currentTime || 0;
+  return [[video.paused ? "Play" : "Pause", video.paused ? "play" : "pause", togglePlay, { key: "Space" }], "-", ...markItems(t), "-",
+    ["Cut before the playhead", "cutb", () => cutSide("before"), { key: "Q", off: !canEdit() }],
+    ["Cut after the playhead", "cuta", () => cutSide("after"), { key: "W", off: !canEdit() }],
+    ["Split here", "scissors", splitAtPlayhead, { key: "S", off: !canEdit() }]];
+}
+
 // ------------------------------------------------------------------ the keys
 const KEYS = [
   ["Space", "Play or pause"], ["I / O", "Mark the start / the end here"], ["Enter", "Add the marked part as a new clip"], ["A", "Add the marked part to the chosen clip"],
   ["P", "Play the chosen clip"], ["C", "Play the chosen part with 3 seconds around it"], ["Shift + P", "Play all clips"],
-  ["S", "Split the chosen clip at the playhead"], ["X", "Cut the marked part out of the chosen clip"], ["D", "Duplicate the chosen clip"],
+  ["S", "Split the chosen clip at the playhead"], ["Q", "Cut before: remove what comes before the playhead"], ["W", "Cut after: remove what comes after the playhead"], ["X", "Cut the marked part out of the chosen clip"], ["D", "Duplicate the chosen clip"],
   ["Delete", "Delete the chosen clip"], ["Esc", "Clear the marks"], ["Ctrl + Z", "Undo"], ["Ctrl + Y", "Redo"],
   ["Left / Right", "Back / forward 1 second"], [", and .", "Back / forward one picture"], ["Home / End", "Go to the start / the end"], ["+ and -", "Zoom the timeline"],
 ];
@@ -745,7 +869,7 @@ function wire() {
   $("playSel").addEventListener("click", () => playRange(C.start, C.end));
   $("addNew").addEventListener("click", addNewClip);
   $("addPart").addEventListener("click", addPartTo);
-  $("newClip").addEventListener("click", () => { C.sel = ""; C.start = C.end = null; C.tab = "parts"; renderAll(); $("markNote").textContent = "Mark the first part of the new clip, then press Add as new clip."; });
+  $("newClip").addEventListener("click", () => { C.sel = ""; C.start = C.end = null; C.tab = "parts"; renderAll(); say("Mark the first part of the new clip, then press Add as new clip."); });
   $("makeBtn").addEventListener("click", makeClips);
   $("freeBtn").addEventListener("click", freeMovie);
   $("sceneBtn").addEventListener("click", () => sceneStatus(true));
@@ -757,6 +881,11 @@ function wire() {
   $("nEa").addEventListener("click", () => nudge("end", -1)); $("nEb").addEventListener("click", () => nudge("end", 1));
   $("tSplit").addEventListener("click", splitAtPlayhead); $("tCutOut").addEventListener("click", cutOutMarked);
   $("tJoin").addEventListener("click", joinClip); $("tDup").addEventListener("click", duplicateClip);
+  $("tCutB").addEventListener("click", () => cutSide("before")); $("tCutA").addEventListener("click", () => cutSide("after"));
+  $("tlCutB").addEventListener("click", () => cutSide("before")); $("tlCutA").addEventListener("click", () => cutSide("after"));
+  $("tlSplit").addEventListener("click", splitAtPlayhead);
+  $("tlScroll").addEventListener("contextmenu", timelineMenu);
+  $("frame").addEventListener("contextmenu", (e) => { if (!C.info) return; e.preventDefault(); ctxMenu(pictureItems(), e.clientX, e.clientY); });
   enhanceAll($("suite"));
   // After a click with the mouse, a button or slider must not keep the keyboard: the keys (Space, I, O ...) keep working
   document.addEventListener("click", (e) => { const b = e.target.closest && e.target.closest("button"); if (b && e.detail > 0 && !b.closest(".dialog")) setTimeout(() => b.blur(), 0); });
@@ -764,6 +893,8 @@ function wire() {
   video.addEventListener("seeked", renderHead);
   $("tlScroll").addEventListener("pointerdown", onTimelineDown);
   $("tlScroll").addEventListener("dblclick", (e) => {
+    const tg = e.target.closest(".cliptag");
+    if (tg && !e.target.dataset.edge) { const c = clips().find((x) => x.id === tg.dataset.c), p = c && c.parts[+tg.dataset.p]; if (p) playRange(p.start, p.end); return; }
     const s = e.target.closest(".scene"); if (!s || !canEdit()) return;
     C.start = +s.dataset.a; C.end = +s.dataset.b; if (selClip()) addPartTo(); else addNewClip();
   });
@@ -803,6 +934,8 @@ function wire() {
     else if (k === "p") { if (e.shiftKey) playAllClips(); else playClip(); }
     else if (k === "c") playContext();
     else if (k === "s") splitAtPlayhead();
+    else if (k === "q") cutSide("before");
+    else if (k === "w") cutSide("after");
     else if (k === "x") cutOutMarked();
     else if (k === "d") duplicateClip();
     else if (k === "delete") { const c = selClip(); if (c) deleteClip(c, true); }

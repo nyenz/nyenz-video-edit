@@ -379,7 +379,7 @@ function renderTimeline() {
   if (S.mode === "final" && !lt.hidden) lt.append(head("type", "Words"));
   (S.proj.texts || []).forEach((t, i) => {
     const end = t.end > 0 ? t.end : total;
-    const d = el("div", { class: "lane-item text", title: t.text, onclick: () => { openPanel("text"); } }, icon("type", "s"), el("span", { text: t.text }));
+    const d = el("div", { class: "lane-item text", "data-i": String(i), title: t.text + " · right-click for more", onclick: () => { openPanel("text"); } }, icon("type", "s"), el("span", { text: t.text }));
     d.style.left = px(t.start) + "px"; d.style.width = Math.max(20, px(end) - px(t.start) - 2) + "px"; lt.append(d);
   });
   // music: one row per layer, with its own mute and solo at the left
@@ -387,7 +387,7 @@ function renderTimeline() {
   layers().forEach((x, i) => {
     const name = (S.files.find((f) => f.id === x.file) || { name: x.file.split("/").pop() }).name;
     const flip = (k) => (e) => { e.stopPropagation(); change(() => { S.proj.settings.layers = layers().map((y, j) => (j === i ? Object.assign({}, y, { [k]: !y[k] }) : y)); }, { keepVideo: true }); renderMusicLayers(); if (S.playing) musicPlay(); };
-    const row = el("div", { class: "mrow" });
+    const row = el("div", { class: "mrow", "data-i": String(i), title: "Right-click for more" });
     if (S.mode === "final") row.append(head("music", name,
       el("button", { type: "button", class: "lh-btn" + (x.mute ? " on" : ""), title: "Mute", "aria-label": "Mute " + name, onclick: flip("mute") }, icon(x.mute ? "mute" : "vol", "s")),
       el("button", { type: "button", class: "lh-btn solo" + (x.solo ? " on" : ""), title: "Solo", "aria-label": "Solo " + name, onclick: flip("solo"), text: "S" })));
@@ -539,6 +539,63 @@ function splitAtPlayhead() {
     const i = S.proj.pieces.indexOf(p);
     S.proj.pieces.splice(i, 1, a, b); S.sel = new Set([b]); S.anchor = b; markHand();
   });
+}
+/** Cut before / Cut after (CapCut's delete left / right): the section under the playhead loses what comes before
+ *  (or after) the playhead. The rest of the video moves up to close the gap. */
+function cutSide(side, at) {
+  if (locked()) { lockedNote(); return; }
+  const t = at === undefined ? S.t : at;
+  const hit = segAt(t); if (!hit || hit.end && t >= hit.s.out1 - 1e-6) { toast("Put the playhead inside a section first."); return; }
+  const { s } = hit, p = s.p;
+  const cut = p.reverse ? p.end - (t - s.out0) * p.speed : p.start + (t - s.out0) * p.speed;
+  const keepsFront = (side === "after") !== !!p.reverse;            // which end of the footage stays
+  if (keepsFront ? cut - p.start < MIN_PIECE : p.end - cut < MIN_PIECE) { toast("That would leave too little of the section."); return; }
+  const gone = side === "before" ? t - s.out0 : s.out1 - t;
+  change(() => { if (keepsFront) p.end = +cut.toFixed(4); else p.start = +cut.toFixed(4); S.sel = new Set([p]); S.anchor = p; markHand(); });
+  const r = layout().find((q) => q.p === p);
+  if (r) seek(side === "before" ? r.out0 : Math.max(r.out0, r.out1 - 0.04));
+  toast("Cut " + fmtTime(gone, 1) + (side === "before" ? " before" : " after") + " the playhead · video now " + fmtTime(finalTotal()));
+}
+/** The right-click menu of the timeline. */
+function timelineMenu(e) {
+  e.preventDefault();
+  const sc = $("tlScroll"), rect = sc.getBoundingClientRect(), t = clamp(timeAt(e.clientX - rect.left + sc.scrollLeft), 0, Math.max(0, rawTotal() - 0.01));
+  const lk = locked(), why = "This is an older step, so it is locked.";
+  const textEl = e.target.closest(".lane-item.text"), musicEl = e.target.closest(".mrow"), p = pieceFromEvent(e);
+  let items;
+  if (textEl) {
+    const i = +textEl.dataset.i, tx = S.proj.texts[i];
+    items = [["Change the words", "type", () => openPanel("text")],
+      ["Start here", "clock", () => { change(() => { tx.start = +t.toFixed(2); }, { keepVideo: true }); renderTexts(); renderOverlay(); }],
+      ["End here", "clock", () => { change(() => { tx.end = +t.toFixed(2); }, { keepVideo: true }); renderTexts(); renderOverlay(); }],
+      "-", ["Delete these words", "trash", () => { change(() => S.proj.texts.splice(i, 1), { keepVideo: true }); renderTexts(); renderOverlay(); }, { danger: true }]];
+  } else if (musicEl && musicEl.dataset.i !== undefined) {
+    const i = +musicEl.dataset.i, x = layers()[i];
+    const set = (patch) => { change(() => { S.proj.settings.layers = layers().map((y, j) => (j === i ? Object.assign({}, y, patch) : y)); }, { keepVideo: true }); renderMusicLayers(); if (S.playing) musicPlay(); };
+    items = [["Sound settings", "sliders", () => openPanel("sound")],
+      [x.mute ? "Turn this music on" : "Mute this music", x.mute ? "vol" : "mute", () => set({ mute: !x.mute })],
+      [x.solo ? "Stop solo" : "Hear only this (solo)", "target", () => set({ solo: !x.solo })],
+      "-", ["Remove this music", "trash", () => { change(() => { S.proj.settings.layers = layers().filter((_, k) => k !== i); }, { keepVideo: true }); renderMusicLayers(); musicPlay(); if (!S.playing) musicPause(); }, { danger: true }]];
+  } else if (p) {
+    if (!S.sel.has(p)) { S.sel = new Set([p]); S.anchor = p; refreshAll({ keepVideo: true }); }
+    const n = S.sel.size;
+    items = [["Play from here", "play", () => { seek(t); play(); }, { key: "Space" }],
+      "-",
+      ["Split here", "split", () => { seek(t); splitAtPlayhead(); }, { key: "S", off: lk, why }],
+      ["Cut before here", "cutb", () => cutSide("before", t), { key: "Q", off: lk, why }],
+      ["Cut after here", "cuta", () => cutSide("after", t), { key: "W", off: lk, why }],
+      "-",
+      [n > 1 ? "Duplicate " + n + " sections" : "Duplicate", "copy", duplicateSelected, { key: "Ctrl+D", off: lk, why }],
+      ["Select all", "grid", () => { S.sel = new Set(kept()); refreshAll({ keepVideo: true }); }, { key: "Ctrl+A" }],
+      "-",
+      [n > 1 ? "Remove " + n + " sections" : "Remove this section", "trash", removeSelected, { danger: true, key: "Del", off: lk, why }]];
+  } else {
+    items = [["Move the playhead here", "target", () => seek(t)], ["Play from here", "play", () => { seek(t); play(); }],
+      "-", ["Select all", "grid", () => { S.sel = new Set(kept()); refreshAll({ keepVideo: true }); }, { key: "Ctrl+A" }],
+      ["Undo", "undo", undo, { key: "Ctrl+Z", off: !S.undo.length }], ["Redo", "redo", redo, { key: "Ctrl+Y", off: !S.redo.length }],
+      "-", ["Zoom in here", "zin", () => zoomTo(S.pps * 2, t)], ["Show the whole video", "fit", fitZoom]];
+  }
+  ctxMenu(items, e.clientX, e.clientY);
 }
 function restorePiece(p) {
   change(() => {
@@ -1340,7 +1397,17 @@ function wire() {
   $("bZoomOut").addEventListener("click", () => zoomTo(S.pps / 1.5));
   $("bFit").addEventListener("click", fitZoom);
   $("bUndo").addEventListener("click", undo); $("bRedo").addEventListener("click", redo);
-  $("bSplit").addEventListener("click", splitAtPlayhead); $("bDup").addEventListener("click", duplicateSelected); $("bDel").addEventListener("click", removeSelected);
+  $("bSplit").addEventListener("click", splitAtPlayhead);
+  $("bCutB").addEventListener("click", () => cutSide("before")); $("bCutA").addEventListener("click", () => cutSide("after"));
+  $("tlScroll").addEventListener("contextmenu", (e) => { if (e.target.closest(".lane-head")) { e.preventDefault(); return; } timelineMenu(e); });
+  $("frame").addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    ctxMenu([[S.playing ? "Pause" : "Play", S.playing ? "pause" : "play", togglePlay, { key: "Space" }], "-",
+      ["Split here", "split", splitAtPlayhead, { key: "S", off: locked() }],
+      ["Cut before the playhead", "cutb", () => cutSide("before"), { key: "Q", off: locked() }],
+      ["Cut after the playhead", "cuta", () => cutSide("after"), { key: "W", off: locked() }],
+      "-", ["Undo", "undo", undo, { key: "Ctrl+Z", off: !S.undo.length }], ["Redo", "redo", redo, { key: "Ctrl+Y", off: !S.redo.length }]], e.clientX, e.clientY);
+  }); $("bDup").addEventListener("click", duplicateSelected); $("bDel").addEventListener("click", removeSelected);
   // resize the timeline by dragging its top edge
   $("tlResize").addEventListener("pointerdown", (e) => {
     const h0 = $("tl").offsetHeight, y0 = e.clientY; e.target.setPointerCapture(e.pointerId);
@@ -1360,6 +1427,8 @@ function wire() {
     else if (mod && k.toLowerCase() === "d") { e.preventDefault(); duplicateSelected(); }
     else if (mod && k.toLowerCase() === "b") { e.preventDefault(); splitAtPlayhead(); }
     else if (k.toLowerCase() === "s" && !mod) { e.preventDefault(); splitAtPlayhead(); }
+    else if (k.toLowerCase() === "q" && !mod && !e.altKey) { e.preventDefault(); cutSide("before"); }
+    else if (k.toLowerCase() === "w" && !mod && !e.altKey) { e.preventDefault(); cutSide("after"); }
     else if (k === "Delete" || k === "Backspace") { e.preventDefault(); removeSelected(); }
     else if (k === "Escape") { S.sel.clear(); refreshAll({ keepVideo: true }); }
     else if (k === "ArrowLeft") { e.preventDefault(); seek(S.t - (e.shiftKey ? 1 : frame())); }

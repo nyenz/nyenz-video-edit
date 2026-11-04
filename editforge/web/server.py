@@ -630,7 +630,8 @@ class AppState:
             name = clean_filename(f"{stem}_{clip['name']}").rsplit(".", 1)[0][:80]
             job = self.manager.submit(json.dumps(proj), src, "", {"kind": "project", "preview": False, "music_path": None,
                                                                  "output_dir": str(self.outputs), "stems_home": str(self.home),
-                                                                 "output_name": name, "clipset": cid, "clip": clip["id"]})
+                                                                 "output_name": name, "clipset": cid, "clip": clip["id"],
+                                                                 "clip_name": clip["name"], "movie_name": Path(src).name})
             clip["made"] = {"job": job, "key": clip_mod.clip_key(cs["source"], clip)}
             started.append(clip["id"])
         if not started and not cs["clips"]:
@@ -680,20 +681,59 @@ class AppState:
         self.edit_clipset(cid, freed=time.time())
         return {"freed": freed}
 
-    def made_clips(self) -> List[Dict[str, Any]]:
-        """Every made clip of every clip project (to start an Edit project from one)."""
+    def users_of(self, fid: str) -> List[Dict[str, Any]]:
+        """The Edit and Final projects that use this file as their video (also the ones in the trash)."""
         out = []
-        for cs in sorted(self.all_clipsets(), key=lambda d: d.get("opened") or 0, reverse=True):
-            if cs.get("trashed"):
-                continue
-            for c in cs["clips"]:
-                if not isinstance(c, dict) or not c.get("parts"):
-                    continue
-                st = self.clip_state(cs, c)
-                if st["state"] in ("done", "old") and st["file"]:
-                    out.append({"file": st["file"], "name": c.get("name") or "", "clipset": cs["id"], "clipset_name": cs.get("name") or "",
-                                "length": round(clip_mod.clip_length(c), 3), "size": st["size"]})
+        for d in self.all_projects():
+            if str(d.get("source") or "") == fid:
+                out.append({"id": d["id"], "name": str(d.get("name") or ""), "trashed": bool(d.get("trashed")),
+                            "stage": d.get("stage") if d.get("stage") in project_mod.STAGES else "edit"})
         return out
+
+    def clip_library(self) -> List[Dict[str, Any]]:
+        """Every made clip, newest first. A clip lives on here when its clip project is deleted.
+        'used_by': the Edit / Final projects that use it."""
+        sets = {d["id"]: d for d in self.all_clipsets()}
+        users: Dict[str, List[Dict[str, Any]]] = {}
+        for d in self.all_projects():
+            src = str(d.get("source") or "")
+            if src.startswith("o/"):
+                users.setdefault(src, []).append({"id": d["id"], "name": str(d.get("name") or ""), "trashed": bool(d.get("trashed")),
+                                                   "stage": d.get("stage") if d.get("stage") in project_mod.STAGES else "edit"})
+        out = []
+        for job in self.store.list(5000):
+            opts = job.get("options") if isinstance(job.get("options"), dict) else {}
+            if not opts.get("clipset") or opts.get("preview"):
+                continue
+            fid = self.output_id(job)
+            if not fid:
+                continue
+            cs = sets.get(str(opts.get("clipset")))
+            clip = None
+            if cs:
+                clip = next((c for c in cs["clips"] if isinstance(c, dict) and c.get("id") == opts.get("clip")), None)
+                if clip and (clip.get("made") or {}).get("job") != job["id"]:
+                    clip = None                              # that clip was made again since: this is an older file of it
+            res = job.get("result") if isinstance(job.get("result"), dict) else {}
+            f = Path(job["output_path"])
+            try:
+                size = f.stat().st_size
+            except OSError:
+                continue
+            name = str((clip or {}).get("name") or opts.get("clip_name") or f.stem)
+            movie = str(opts.get("movie_name") or ((cs or {}).get("src") or {}).get("name") or "")
+            u = users.get(fid, [])
+            out.append({"file": fid, "job": job["id"], "name": name, "movie": movie, "size": size,
+                        "length": round(float(res.get("duration") or (clip_mod.clip_length(clip) if clip else 0)), 3),
+                        "when": float(job.get("updated") or job.get("created") or 0),
+                        "clipset": cs["id"] if cs else "", "clipset_name": str((cs or {}).get("name") or ""),
+                        "clipset_trashed": bool(cs and cs.get("trashed")), "current": bool(clip),
+                        "used_by": u, "in_use": any(not x["trashed"] for x in u)})
+        return out
+
+    def made_clips(self) -> List[Dict[str, Any]]:
+        """Every made clip (to start an Edit project from one). Older name of clip_library."""
+        return self.clip_library()
 
     def final_videos(self) -> List[Dict[str, Any]]:
         """Phase 3: finished videos made from Edit projects (not quick previews, not clips)."""
@@ -1115,6 +1155,10 @@ class Handler(BaseHTTPRequestHandler):
                 if query is None:
                     return
                 self._json(self.state.scenes.status(self.state.resolve_input((query.get("id") or [""])[0])))
+            elif path == "/api/clips/library":
+                if self._guard() is None:
+                    return
+                self._json({"clips": self.state.clip_library()})
             elif path == "/api/clips/made":
                 if self._guard() is None:
                     return
@@ -1342,6 +1386,12 @@ class Handler(BaseHTTPRequestHandler):
             elif re.fullmatch(r"/api/jobs/[0-9a-f]{12}", path):
                 jid = path.rsplit("/", 1)[1]
                 job = self.state.store.get(jid)
+                fid = self.state.output_id(job) if job else None
+                used = self.state.users_of(fid) if fid else []
+                if used:                                     # never break a project: its video must stay
+                    names = ", ".join("'" + u["name"] + "'" + (" (in the trash)" if u["trashed"] else "") for u in used[:3])
+                    raise EditForgeError("This video is used by " + names + ".",
+                                         "Delete that project first (also from the trash), then remove the video.")
                 if job and job["status"] in ("done", "failed", "cancelled", "interrupted"):
                     shutil.rmtree(self.state.outputs / jid, ignore_errors=True)
                     self.state.store.delete(jid)
