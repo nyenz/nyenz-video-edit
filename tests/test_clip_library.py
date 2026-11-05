@@ -98,3 +98,33 @@ def test_a_clip_made_again_keeps_only_the_newest_as_current(web, media):
     _, lv = c.json("GET", "/api/clips/library")
     cur = [x for x in lv["clips"] if x["current"]]
     assert len(lv["clips"]) == 2 and len(cur) == 1 and cur[0]["length"] > 1.5
+
+
+def test_deleting_a_project_for_good_frees_the_copies_of_its_video(web, media):
+    """1.15.2: deleting the last project of a long movie frees its light copy and pictures at once (not after a month)."""
+    c, state = web
+    fid = c.upload(media["colors"])
+    ids = [c.json("POST", "/api/clipsets", {"source": fid, "name": n})[1]["clipset"]["id"] for n in ("One", "Two")]
+    fp = state._fp_of(fid)
+    assert fp
+    light = state.previews.folder / f"{fp}.360p.mp4"
+    light.parent.mkdir(parents=True, exist_ok=True)
+    light.write_bytes(b"x" * 3_000_000)
+    state.thumbs.mkdir(parents=True, exist_ok=True)
+    pics = [state.thumbs / f"{fp}_s{k:06d}.jpg" for k in range(3)] + [state.thumbs / f"{fp}_1500.jpg"]
+    for p in pics:
+        p.write_bytes(b"j" * 1000)
+    (state.thumbs / f"{fp}_s.done").write_text("ok")
+    other = state.thumbs / "ffffffffffffffff_1000.jpg"                 # a picture of another video stays
+    other.write_bytes(b"o")
+    # trash the first one and delete it for good: the second still uses the movie, so nothing is removed
+    c.json("POST", f"/api/clipsets/{ids[0]}/trash", {})
+    status, r = c.json("DELETE", f"/api/clipsets/{ids[0]}")
+    assert r["ok"] and r["freed"] == 0 and light.exists()
+    # a project in the trash still counts as using it
+    c.json("POST", f"/api/clipsets/{ids[1]}/trash", {})
+    assert light.exists()
+    status, r = c.json("DELETE", f"/api/clipsets/{ids[1]}")
+    assert r["ok"] and r["freed"] >= 3_000_000
+    assert not light.exists() and not any(p.exists() for p in pics) and not (state.thumbs / f"{fp}_s.done").exists()
+    assert other.exists()

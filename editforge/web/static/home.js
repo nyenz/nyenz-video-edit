@@ -242,10 +242,12 @@ async function rename(base, p) {
 }
 async function forget(base, p) {
   const extra = H.phase === "clips" ? (p.made ? " Its " + p.made + " made clip" + (p.made === 1 ? "" : "s") + " stay in Made clips, and Edit projects that use them keep working." : "") : " Exported videos are kept.";
-  if (!(await askYes("Delete '" + p.name + "' for good? Your video file itself is not touched." + extra, "Delete", true))) return;
-  await api(base + p.id, { method: "DELETE" }).catch((e) => toast(errText(e), true));
+  if (!(await askYes("Delete '" + p.name + "' for good? Your video file itself is not touched. The app's own copies of it " +
+    "(light copy, pictures) are deleted too, to free space." + extra, "Delete", true))) return;
+  try { const r = await api(base + p.id, { method: "DELETE" }); toast("Deleted '" + p.name + "'." + freedText(r.freed)); } catch (e) { toast(errText(e), true); }
   loadAll();
 }
+function freedText(b) { return b > 1e6 ? " Freed " + (b >= 1e9 ? (b / 1e9).toFixed(1) + " GB" : Math.round(b / 1e6) + " MB") + "." : ""; }
 /** "Find it again": choose the moved video; the project keeps all its pieces and steps. */
 async function relink(p) {
   try {
@@ -349,9 +351,11 @@ async function storagePanel() {
   $("libFilter").append(segmented([["all", "All"], ["used", "In use"], ["free", "Not used"]], H.lib, (v) => { H.lib = v; render(); }));
   $("emptyTrash").addEventListener("click", async () => {
     if (!(await askYes("Delete everything in this trash for good? Video files themselves are not touched.", "Empty trash", true))) return;
+    let freed = 0;
     if (H.phase === "clips") {
-      for (const p of H.clipsets.filter((x) => x.trashed)) await api("/api/clipsets/" + p.id, { method: "DELETE" }).catch(() => {});
-    } else await api("/api/trash/empty", { method: "POST", json: {} }).catch((e) => toast(errText(e), true));
+      for (const p of H.clipsets.filter((x) => x.trashed)) freed += await api("/api/clipsets/" + p.id, { method: "DELETE" }).then((r) => r.freed || 0).catch(() => 0);
+    } else freed = await api("/api/trash/empty", { method: "POST", json: {} }).then((r) => r.freed || 0).catch((e) => { toast(errText(e), true); return 0; });
+    toast("The trash is empty." + freedText(freed));
     loadAll();
   });
   $("storageBtn").addEventListener("click", storagePanel);

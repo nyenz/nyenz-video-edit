@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.15.2
+* **Deleting a project now frees its space at once.** When you delete a project for good (Trash → Delete forever, or Empty trash)
+  and no other project uses that movie, the app's own copies of it are deleted right away: the light copy (often GBs for a long movie),
+  the small pictures, and a sent-in copy. Before, they stayed up to a month. A message says how much was freed.
+  * Your own movie file is never touched (it is only linked). Made clips stay in Made clips.
+
 ## 1.15.1
 * **Cut before, Cut after and Split work the way you expect.** A click on a clip on the timeline now puts the playhead where you
   clicked (it jumped to the start of the clip, so there was nothing to cut). Then press the button or Q / W / S.
