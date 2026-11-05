@@ -193,6 +193,7 @@ class AppState:
         self._fp_cache: Dict[Tuple[str, int, int], str] = {}
         self._thumb_slots = threading.Semaphore(3)
         self._lock = threading.Lock()
+        self.freed = 0                                # bytes freed by the last delete-for-good (for the message)
         # Finished videos can be opened again as a new source ("save, then edit the result").
         roots = [str(self.uploads), str(self.media), str(self.outputs)]
         if examples_dir().exists():
@@ -454,19 +455,61 @@ class AppState:
                 continue
         return sorted(out, key=lambda d: d["opened"], reverse=True)
 
+    def _fp_of(self, source: str) -> str:
+        try:
+            return self.fingerprint(self.resolve_input(str(source)))
+        except Exception:  # noqa: BLE001 - a missing file has nothing to clean
+            return ""
+
+    def _drop_upload(self, source: str) -> int:
+        """A sent-in copy (not linked) that no project or clip project uses any more is deleted. Returns the bytes freed."""
+        m = re.fullmatch(r"u/([0-9a-f]{12})/[^/\\]+", source)
+        if not m or m.group(1) in self.used_uploads():
+            return 0
+        d = self.uploads / m.group(1)
+        size = sum(f.stat().st_size for f in d.rglob("*") if f.is_file()) if d.is_dir() else 0
+        shutil.rmtree(d, ignore_errors=True)
+        return 0 if d.exists() else size
+
+    def drop_video_caches(self, fp: str) -> int:
+        """After a project is deleted for good: remove the light copy and the small pictures of its video at once
+        (they can be GBs for a long movie), unless another project, clip project (also in the trash) still uses that video.
+        Your own video file and made clips are never touched. Returns the bytes freed."""
+        if not fp:
+            return 0
+        for d in self.all_projects() + self.all_clipsets():
+            if self._fp_of(str(d.get("source") or "")) == fp:
+                return 0
+        busy = {Path(k).name for k, v in self.previews._jobs.items() if v.get("state") == "running"}
+        freed = 0
+
+        def gone(f: Path) -> int:
+            try:
+                size = f.stat().st_size
+            except OSError:
+                return 0
+            return size if _unlink(f) else 0
+        for f in list(self.previews.folder.glob(fp + ".*")):
+            if f.name not in busy:
+                freed += gone(f)
+        if not busy.intersection(f.name for f in self.previews.folder.glob(fp + ".*")):
+            _unlink(self.thumbs / (fp + "_s.done"))
+            for f in list(self.thumbs.glob(fp + "_*.jpg")):
+                freed += gone(f)
+        return freed
+
     def delete_project(self, pid: str) -> bool:
         """Delete for good. A video copy that was sent in (not linked) and that no other project uses is deleted too."""
         try:
             proj = self.load_project(pid)
         except EditForgeError:
             return False
+        fp = self._fp_of(str(proj.get("source") or ""))
         try:
             self.project_path(pid).unlink()
         except OSError:
             return False
-        m = re.fullmatch(r"u/([0-9a-f]{12})/[^/\\]+", str(proj.get("source") or ""))
-        if m and m.group(1) not in self.used_uploads():
-            shutil.rmtree(self.uploads / m.group(1), ignore_errors=True)
+        self.freed = self._drop_upload(str(proj.get("source") or "")) + self.drop_video_caches(fp)
         return True
 
     def duplicate_project(self, pid: str) -> Dict[str, Any]:
@@ -603,12 +646,11 @@ class AppState:
     def delete_clipset(self, cid: str) -> bool:
         try:
             cs = self.load_clipset(cid)
+            fp = self._fp_of(str(cs.get("source") or ""))
             self.clipset_path(cid).unlink()
         except (EditForgeError, OSError):
             return False
-        m = re.fullmatch(r"u/([0-9a-f]{12})/[^/\\]+", str(cs.get("source") or ""))
-        if m and m.group(1) not in self.used_uploads():
-            shutil.rmtree(self.uploads / m.group(1), ignore_errors=True)
+        self.freed = self._drop_upload(str(cs.get("source") or "")) + self.drop_video_caches(fp)
         return True
 
     def make_clips(self, cid: str, ids: Optional[List[str]] = None) -> List[str]:
@@ -1220,8 +1262,14 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 self._json(self._project_action(path.split("/")[3], path.split("/")[4], data))
             elif path == "/api/trash/empty":
-                n = sum(self.state.delete_project(d["id"]) for d in self.state.list_projects() if d["trashed"])
-                self._json({"deleted": n})
+                freed = 0
+                n = 0
+                for d in self.state.list_projects():
+                    if d["trashed"]:
+                        self.state.freed = 0
+                        n += self.state.delete_project(d["id"])
+                        freed += self.state.freed
+                self._json({"deleted": n, "freed": freed})
             elif path == "/api/storage/clean":
                 data = self._read_json()
                 if data is None:
@@ -1380,9 +1428,11 @@ class Handler(BaseHTTPRequestHandler):
             if self._guard() is None:
                 return
             if re.fullmatch(rf"/api/projects/{PROJECT_ID}", path):
-                self._json({"ok": self.state.delete_project(path.rsplit("/", 1)[1])})
+                self.state.freed = 0
+                self._json({"ok": self.state.delete_project(path.rsplit("/", 1)[1]), "freed": self.state.freed})
             elif re.fullmatch(rf"/api/clipsets/{clip_mod.CLIPSET_ID}", path):
-                self._json({"ok": self.state.delete_clipset(path.rsplit("/", 1)[1])})
+                self.state.freed = 0
+                self._json({"ok": self.state.delete_clipset(path.rsplit("/", 1)[1]), "freed": self.state.freed})
             elif re.fullmatch(r"/api/jobs/[0-9a-f]{12}", path):
                 jid = path.rsplit("/", 1)[1]
                 job = self.state.store.get(jid)
