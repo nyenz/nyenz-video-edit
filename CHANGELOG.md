@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.15.1
+* **Cut before, Cut after and Split work the way you expect.** A click on a clip on the timeline now puts the playhead where you
+  clicked (it jumped to the start of the clip, so there was nothing to cut). Then press the button or Q / W / S.
+  Keys also kept doing nothing after you had clicked a button; fixed.
+* **Choose more than one clip:** hold **Ctrl** and click clips (in the list or on the timeline); **Shift** + click chooses all in between;
+  **Ctrl + A** chooses all. The right side then shows the chosen clips with **Combine into one clip** (Ctrl + J), **Delete** and **Clear choice**.
+  Right-click works on them too.
+* **Clips never lie on top of each other on the timeline.** Clips that use the same minutes of the movie get their own row.
+* **Short names:** the list and the timeline show "Clip 02" instead of the whole movie file name (the full name stays on the made file).
+
 ## 1.15.0
 * **Made clips have their own place.** Home → Clips now has two tabs: **Clip projects** and **Made clips** (also in the left menu).
   * Every clip you made is there, with a tag: **In use** (an Edit or Final project uses it) or **Not used**. Filter with All / In use / Not used.

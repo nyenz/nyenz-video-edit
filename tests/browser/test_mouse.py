@@ -157,3 +157,68 @@ def test_edit_page_cut_before_after_and_right_click(live, page, movie_id):
     click_menu(page, "Split here")
     assert page.evaluate("() => kept().length") == 2
     assert page.errors == []
+
+
+def test_click_on_a_clip_then_cut_like_capcut(live, page, movie_id):
+    """What went wrong in 1.15.0: a click on a clip put the playhead at the clip's start, so Cut before / Split had nothing to cut.
+    Also the keys did nothing after a button had been clicked."""
+    open_clips(live, page, movie_id)
+    drag_mark(page, 30, 60); page.click("#addNew")
+    y = y_of(page, "#laneC")
+    page.mouse.click(x_of(page, 40), y)                                # the playhead goes where you click
+    assert abs(page.evaluate("() => video.currentTime") - 40) < 0.6
+    page.click("#tlCutB")
+    a, b = clips(page)[0]["parts"][0]
+    assert abs(a - 40) < 0.6 and abs(b - 60) < 0.3
+    page.mouse.click(x_of(page, 50), y)
+    page.keyboard.press("w")                                           # a key right after clicking a button still works
+    a, b = clips(page)[0]["parts"][0]
+    assert abs(b - 50) < 0.6
+    page.mouse.click(x_of(page, 45), y)
+    page.click("#tlSplit")
+    assert len(clips(page)) == 2
+    assert page.errors == []
+
+
+def test_overlapping_clips_get_their_own_rows(live, page, movie_id):
+    open_clips(live, page, movie_id)
+    drag_mark(page, 10, 40); page.click("#addNew")
+    drag_mark(page, 20, 50); page.click("#addNew")
+    drag_mark(page, 70, 80); page.click("#addNew")
+    tops = page.eval_on_selector_all("#laneC .cliptag", "els => els.map(e => [e.dataset.c, e.getBoundingClientRect().top, e.getBoundingClientRect().left])")
+    tops.sort(key=lambda t: t[2])
+    assert tops[0][1] != tops[1][1]                                   # 10-40 and 20-50 overlap: two rows
+    assert tops[2][1] == tops[0][1]                                   # 70-80 fits on the first row again
+    # the names on the timeline and in the list are short (no long movie name in front)
+    labels = page.eval_on_selector_all("#laneC .cliptag span", "els => els.map(e => e.textContent)")
+    assert all(l.startswith("Clip ") for l in labels), labels
+    assert page.errors == []
+
+
+def test_ctrl_click_clips_and_combine_them(live, page, movie_id):
+    open_clips(live, page, movie_id)
+    for a in (10, 40, 70, 100):
+        drag_mark(page, a, a + 10); page.click("#addNew")
+    row = lambda i: page.locator("#clips .clip-row").nth(i)
+    row(0).click()
+    row(2).click(modifiers=["Control"])
+    y = y_of(page, "#laneC")
+    page.keyboard.down("Control"); page.mouse.click(x_of(page, 105), y); page.keyboard.up("Control")   # Ctrl + click on the timeline too
+    assert page.inner_text("#clipHead") == "3 clips chosen"
+    assert page.is_visible("#multiBox") and page.is_hidden("#toolsBox")
+    assert len(page.query_selector_all("#clips .clip-row.picked")) == 3
+    page.click("#mCombine")
+    cs = clips(page)
+    assert len(cs) == 2 and len(cs[0]["parts"]) == 3
+    assert [round(p[0]) for p in cs[0]["parts"]] == [10, 70, 100]
+    page.keyboard.press("Control+z")
+    assert len(clips(page)) == 4
+    # Shift + click chooses all in between; Delete removes them together (after a yes)
+    row(1).click(); row(3).click(modifiers=["Shift"])
+    assert page.inner_text("#clipHead") == "3 clips chosen"
+    page.mouse.click(x_of(page, 45), y, button="right")
+    assert "Combine 3 clips into one" in menu_labels(page)
+    click_menu(page, "Delete 3 clips")
+    page.click(".dialog .btn.danger-fill, .dialog button:has-text('Delete 3')")
+    assert len(clips(page)) == 1
+    assert page.errors == []

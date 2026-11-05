@@ -81,10 +81,20 @@
   <aside class="side right" aria-label="Clip">
     <div class="side-h"><h2 id="clipHead">Mark a part</h2><span class="note num" id="clipLen"></span></div>
     <div class="pad">
+      <div id="multiBox" class="multi-box" hidden>
+        <p class="hint">They are put together in this order (the order of the list). Drag clips in the list to change it.</p>
+        <div id="multiList" class="list"></div>
+        <button class="btn primary wide" id="mCombine" type="button" title="Put the chosen clips together into one clip (Ctrl + J)"><i data-ic="combine" class="s"></i><span>Combine into one clip</span></button>
+        <div class="grid2">
+          <button class="btn danger" id="mDelete" type="button"><i data-ic="trash" class="s"></i><span>Delete</span></button>
+          <button class="btn ghost" id="mClear" type="button" title="Esc"><i data-ic="x" class="s"></i><span>Clear choice</span></button>
+        </div>
+      </div>
       <div id="noClipT" class="howto">
         <p class="hint"><b>1.</b> Drag on the movie strip below (or press <span class="kbd">I</span> and <span class="kbd">O</span>) to mark a part.</p>
         <p class="hint"><b>2.</b> Press <b>Add as new clip</b> under the video (or <span class="kbd">Enter</span>). Clips are named from the movie.</p>
         <p class="hint"><b>3.</b> Mark as many as you like, then <b>Save &amp; make clips</b> on the left.</p>
+        <p class="hint">Hold <span class="kbd">Ctrl</span> and click clips to choose more than one, then combine or delete them together.</p>
       </div>
       <label class="field" id="clipNameBox" hidden><span>Clip name</span><input id="clipName" class="input" maxlength="60"></label>
       <div class="field" id="partsBox" hidden><span>Parts of this clip, played in this order</span><div id="parts" class="list"></div></div>
