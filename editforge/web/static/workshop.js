@@ -11,6 +11,7 @@ const C = {
   pps: 10, usingLight: false, scenes: [], sceneState: "none",
   saveTimer: 0, saving: null, pollTimer: 0, tab: "parts", step: 1,
   undo: [], redo: [],
+  multi: new Set(), anchor: "",                                    // multi: clips chosen together (Ctrl / Shift + click)
 };
 const CONTEXT = 3;                                                  // seconds shown before and after for "With context"
 const video = $("player");
@@ -87,6 +88,7 @@ function fixSel() {
   if (!clips().some((c) => c.id === C.sel)) C.sel = clips()[0] ? clips()[0].id : "";
   const c = selClip();
   C.selPart = c ? clamp(C.selPart, 0, c.parts.length - 1) : 0;
+  for (const id of [...C.multi]) if (!clips().some((x) => x.id === id)) C.multi.delete(id);
 }
 
 // ------------------------------------------------------------------ opening the project
@@ -352,10 +354,13 @@ function nudge(which, dir) {
 }
 /** Split the chosen clip into two clips where the playhead is. */
 function splitAtPlayhead() {
-  const c = selClip(); if (!c) { $("toolNote").textContent = "Choose a clip first."; return; }
   const t = r3(video.currentTime || 0);
-  const i = c.parts.findIndex((p) => t > p.start + MIN_PART / 2 && t < p.end - MIN_PART / 2);
-  if (i < 0) { $("toolNote").textContent = "Put the playhead inside a part of this clip first."; return; }
+  const inside = (p) => t > p.start + MIN_PART / 2 && t < p.end - MIN_PART / 2;
+  let c = selClip();
+  if (!c || !c.parts.some(inside)) c = clips().find((x) => x.parts.some(inside)) || null;   // the clip under the playhead
+  if (!c) { toast("Put the playhead inside a clip first: click on a clip on the timeline where you want to split.", true); return; }
+  C.sel = c.id;
+  const i = c.parts.findIndex(inside);
   if (clips().length >= 300) { toast("A clip project can have at most 300 clips.", true); return; }
   let made2 = null;
   commit(() => {
@@ -372,7 +377,7 @@ function splitAtPlayhead() {
  *  before (or after) the playhead. The chosen clip comes first; otherwise the marked range; otherwise any clip there. */
 function cutSide(side, at) {
   const t = r3(clampT(at === undefined ? video.currentTime || 0 : at));
-  const note = (m) => { $("toolNote").textContent = m; say(m); };
+  const note = (m, bad) => { $("toolNote").textContent = m; say(m); if (bad) toast(m, true); };
   const inside = (p) => t > p.start + 0.02 && t < p.end - 0.02;
   const chosen = selClip();
   let c = null, i = -1;
@@ -386,9 +391,9 @@ function cutSide(side, at) {
     return;
   }
   if (!c) for (const x of clips()) { const j = x.parts.findIndex(inside); if (j >= 0) { c = x; i = j; break; } }
-  if (!c) { note("Put the playhead inside a clip first (the blue blocks under the strip)."); return; }
+  if (!c) { note("Put the playhead inside a clip first: click on a clip on the timeline where you want to cut.", true); return; }
   const p = c.parts[i];
-  if (side === "before" ? p.end - t < MIN_PART : t - p.start < MIN_PART) { note("That would leave too little of the clip."); return; }
+  if (side === "before" ? p.end - t < MIN_PART : t - p.start < MIN_PART) { note("That would leave too little of the clip.", true); return; }
   const gone = side === "before" ? t - p.start : p.end - t;
   commit(() => { if (side === "before") p.start = t; else p.end = t; C.sel = c.id; C.selPart = i; });
   video.pause(); video.currentTime = side === "before" ? t : Math.max(p.start, t - frameLen()); renderHead();
@@ -485,10 +490,10 @@ function renderClips() {
     const pic = el("div", { class: "cthumb" });
     const src = st.file && !C.info ? thumbUrl(st.file, 0.3) : C.info && C.info.has_video ? thumbUrl(C.cs.source, Math.floor((c.parts[0].start + 0.3) * 2) / 2) : "";
     if (src) pic.append(el("img", { alt: "", loading: "lazy", src }));
-    const nm = el("b", { text: c.name, title: canEdit() ? "Double-click to rename" : c.name });
-    const row = el("div", { class: "item clip-row" + (c.id === C.sel ? " on" : ""), "data-id": c.id, onclick: () => select(c.id), ondblclick: () => { if (canEdit()) renameClip(c); } },
+    const nm = el("b", { text: shortName(c), title: c.name + (canEdit() ? " · double-click to rename" : "") });
+    const row = el("div", { class: "item clip-row" + (c.id === C.sel ? " on" : "") + (C.multi.size > 1 && C.multi.has(c.id) ? " picked" : ""), "data-id": c.id, onclick: (e) => pick(c.id, e), ondblclick: (e) => { if (canEdit() && !e.ctrlKey && !e.shiftKey) renameClip(c); } },
       pic, el("div", { class: "t" }, nm, el("small", { class: "num", text: fmtTime(clipLen(c), 1) + " · " + c.parts.length + " part" + (c.parts.length > 1 ? "s" : "") }), chip), acts);
-    row.title = canEdit() ? "Click to choose · drag to move · right-click for more" : "";
+    row.title = canEdit() ? "Click to choose · Ctrl + click to choose more · drag to move · right-click for more" : "";
     onRightClick(row, () => clipItems(c));
     box.append(row);
   });
@@ -499,6 +504,18 @@ function renderClips() {
 /** The right-click menu of a clip (in the list and on the timeline). at: the time under the mouse, if any. */
 function clipItems(c, at, part) {
   const st = stateOf(c), ed = !canEdit(), i = clips().indexOf(c), here = at !== undefined;
+  const group = chosen();
+  if (group.length > 1 && group.includes(c)) {
+    return [
+      ["Combine " + group.length + " clips into one", "combine", combineChosen, { key: "Ctrl+J", off: ed }],
+      ["Play them one after another", "play", () => playItems(group.flatMap((x) => x.parts.map((p) => ({ a: p.start, b: p.end, clip: x.id }))))],
+      "-",
+      ["Choose only this clip", "check", () => { C.multi.clear(); select(c.id); }],
+      ["Clear the choice", "x", () => { C.multi.clear(); renderAll(); }, { key: "Esc" }],
+      "-",
+      ["Delete " + group.length + " clips", "trash", deleteChosen, { danger: true, key: "Del", off: ed }],
+    ];
+  }
   const choose = () => { if (C.sel !== c.id) { C.sel = c.id; C.selPart = part || 0; renderAll(); } else if (part !== undefined) { C.selPart = part; renderAll(); } };
   const made = st.file && (st.state === "done" || st.state === "old");
   return [
@@ -514,6 +531,7 @@ function clipItems(c, at, part) {
     "-",
     ["Rename", "edit", () => renameClip(c), { off: ed }],
     ["Duplicate", "copy", () => { choose(); duplicateClip(); }, { key: "D", off: ed }],
+    ["Choose more clips (Ctrl + click)", "check", () => { C.multi = new Set([C.sel || c.id, c.id].filter(Boolean)); C.sel = c.id; renderAll(); toast("Now hold Ctrl and click the other clips you want."); }],
     ["Join another clip to it", "combine", () => { choose(); joinClip(); }, { off: ed || clips().length < 2 }],
     ["Move up", "up", () => move(i, -1), { off: ed || i <= 0 }],
     ["Move down", "down", () => move(i, 1), { off: ed || i >= clips().length - 1 }],
@@ -522,6 +540,48 @@ function clipItems(c, at, part) {
   ];
 }
 function move(i, d) { const j = i + d; if (j < 0 || j >= clips().length) return; commit(() => { [C.cs.clips[i], C.cs.clips[j]] = [C.cs.clips[j], C.cs.clips[i]]; }); }
+/** The short name shown in lists and on the timeline: "Clip 02" instead of "Movie.2007.1080p.BluRay - Clip 02". */
+function shortName(c) {
+  const base = nameBase() + " - ";
+  return c.name.startsWith(base) && c.name.length > base.length ? c.name.slice(base.length) : c.name;
+}
+/** The chosen clips, in list order (one, or more with Ctrl / Shift + click). */
+function chosen() { return C.multi.size > 1 ? clips().filter((c) => C.multi.has(c.id)) : clips().filter((c) => c.id === C.sel); }
+/** Click on a clip. Ctrl + click adds it to (or takes it out of) the chosen clips; Shift + click chooses every clip in between. */
+function pick(id, e) {
+  if (e && (e.ctrlKey || e.metaKey)) {
+    if (C.multi.size < 2) { C.multi = new Set(C.sel ? [C.sel] : []); }
+    if (C.multi.has(id) && C.multi.size > 1) { C.multi.delete(id); if (C.sel === id) C.sel = [...C.multi][C.multi.size - 1]; }
+    else { C.multi.add(id); C.sel = id; C.selPart = 0; }
+    C.anchor = id; renderAll(); return;
+  }
+  if (e && e.shiftKey && (C.anchor || C.sel)) {
+    const ids = clips().map((c) => c.id), a = ids.indexOf(C.anchor || C.sel), b = ids.indexOf(id);
+    if (a >= 0 && b >= 0) { C.multi = new Set(ids.slice(Math.min(a, b), Math.max(a, b) + 1)); C.sel = id; C.selPart = 0; renderAll(); return; }
+  }
+  C.multi.clear(); C.anchor = id; select(id);
+}
+/** Put the chosen clips together into one clip (parts after each other, in list order). */
+function combineChosen() {
+  const list = chosen();
+  if (list.length < 2) { toast("Hold Ctrl and click two or more clips first (in the list or on the timeline). Then Combine.", true); return; }
+  const n = list.reduce((a, c) => a + c.parts.length, 0);
+  if (n > MAX_PARTS) { toast("Together they have " + n + " parts. A clip can have at most " + MAX_PARTS + ".", true); return; }
+  const first = list[0], gone = new Set(list.slice(1).map((c) => c.id));
+  commit(() => {
+    first.parts = list.flatMap((c) => c.parts.map(copyOf));
+    C.cs.clips = clips().filter((c) => !gone.has(c.id));
+    C.sel = first.id; C.selPart = 0; C.multi.clear();
+  });
+  toast("Combined " + list.length + " clips into " + shortName(first) + " · " + first.parts.length + " parts · " + fmtTime(clipLen(first), 1) + ". Ctrl + Z undoes it.");
+}
+async function deleteChosen() {
+  const list = chosen(); if (!list.length) return;
+  if (list.length === 1) { deleteClip(list[0], true); return; }
+  if (!(await askYes("Delete these " + list.length + " clips? Made files stay in Made clips.", "Delete " + list.length, true))) return;
+  const gone = new Set(list.map((c) => c.id));
+  commit(() => { C.cs.clips = clips().filter((c) => !gone.has(c.id)); C.multi.clear(); });
+}
 function select(id) { C.sel = id; C.selPart = 0; C.queue = null; renderAll(); const c = selClip(); if (c && C.info) seek(c.parts[0].start); }
 function watch(c, file) {
   dialogBox(c.name, [el("div", { class: "watch" }, miniPlayer(mediaUrl(file, false)))], [["Close", null, "ghost"]], (done, dlg) => dlg.classList.add("wide"));
@@ -606,6 +666,20 @@ function renderTabs() {
 }
 function renderSide() {
   renderTabs();
+  const many = chosen().length > 1;
+  $("multiBox").hidden = !many;
+  if (many) {
+    const list = chosen();
+    $("clipHead").textContent = list.length + " clips chosen";
+    $("clipLen").textContent = fmtTime(list.reduce((a, x) => a + clipLen(x), 0), 1);
+    $("multiList").replaceChildren(...list.map((x) => el("div", { class: "item" }, el("div", { class: "t" }, el("b", { text: shortName(x) }),
+      el("small", { class: "num", text: fmtTime(clipLen(x), 1) + " · " + x.parts.length + " part" + (x.parts.length > 1 ? "s" : "") })))));
+    $("mCombine").querySelector("span").textContent = "Combine into one clip";
+    $("mDelete").querySelector("span").textContent = "Delete " + list.length + " clips";
+    $("mCombine").disabled = $("mDelete").disabled = !canEdit();
+    for (const id of ["noClipT", "clipNameBox", "partsBox", "toolsBox"]) $(id).hidden = true;
+    return;
+  }
   const c = selClip();
   $("clipHead").textContent = c ? c.name : "Mark a part";
   $("clipLen").textContent = c ? fmtTime(clipLen(c), 1) : "";
@@ -709,14 +783,29 @@ function renderLane() {
     }
   } else ls.append(el("span", { class: "lane-note", text: C.sceneState === "running" ? "Finding scenes…" : "Scenes: press Find scenes" }));
   // parts lane: every clip's parts; the chosen clip's are bright and numbered, the chosen part has a frame
+  // clips that cover the same minutes of the movie go on separate rows, so they never lie on top of each other
   const lc = $("laneC"); lc.replaceChildren();
-  clips().forEach((c) => c.parts.forEach((p, pi) => {
-    const on = c.id === C.sel, cur = on && pi === C.selPart;
-    const d = el("div", { class: "lane-item cliptag" + (on ? " on" : "") + (cur ? " cur" : ""), "data-c": c.id, "data-p": String(pi), title: c.name + " · part " + (pi + 1) + " · " + fmtTime(p.end - p.start, 2) },
-      on && canEdit() ? el("div", { class: "h l", "data-edge": "s" }) : null, el("span", { text: (on ? (pi + 1) + " · " : "") + c.name }),
+  const items = [];
+  clips().forEach((c) => c.parts.forEach((p, pi) => items.push({ c, p, pi })));
+  items.sort((x, y) => x.p.start - y.p.start || x.p.end - y.p.end);
+  const rowEnd = [];
+  for (const it of items) {
+    const x0 = px(it.p.start), x1 = Math.max(x0 + 6, px(it.p.end));
+    let r = rowEnd.findIndex((e) => e <= x0 - 2);
+    if (r < 0) { r = rowEnd.length; rowEnd.push(0); }
+    rowEnd[r] = x1; it.row = r; it.x0 = x0; it.x1 = x1;
+  }
+  const ROW = 30, picked = C.multi.size > 1;
+  lc.style.height = Math.max(1, rowEnd.length) * ROW + "px";
+  for (const { c, p, pi, row, x0, x1 } of items) {
+    const on = c.id === C.sel, cur = on && pi === C.selPart, pk = picked && C.multi.has(c.id);
+    const label = shortName(c) + (c.parts.length > 1 ? " · " + (pi + 1) + "/" + c.parts.length : "");
+    const d = el("div", { class: "lane-item cliptag" + (on ? " on" : "") + (cur ? " cur" : "") + (pk ? " picked" : ""), "data-c": c.id, "data-p": String(pi),
+      title: c.name + " · part " + (pi + 1) + " · " + fmtTime(p.end - p.start, 2) + "\nClick: playhead here · drag: move · Ctrl + click: choose more · right-click: more" },
+      on && canEdit() ? el("div", { class: "h l", "data-edge": "s" }) : null, el("span", { text: label }),
       on && canEdit() ? el("div", { class: "h r", "data-edge": "e" }) : null);
-    d.style.left = px(p.start) + "px"; d.style.width = Math.max(6, px(p.end) - px(p.start)) + "px"; lc.append(d);
-  }));
+    d.style.left = x0 + "px"; d.style.width = x1 - x0 + "px"; d.style.top = row * ROW + "px"; d.style.height = ROW - 4 + "px"; lc.append(d);
+  }
   renderMarks(); renderHead();
 }
 function renderAll() { renderClips(); renderSide(); renderLane(); }
@@ -784,7 +873,10 @@ function onTimelineDown(e) {
     if (drag.kind === "partEdge" && drag.moved) { pushUndo(drag.before); C.sel = drag.c.id; C.selPart = drag.c.parts.indexOf(drag.p); changed(); renderAll(); }
     $("tlScroll").classList.remove("grabbing");
     if (drag.kind === "part" && drag.moved && canEdit()) { pushUndo(drag.before); C.sel = drag.c.id; C.selPart = drag.c.parts.indexOf(drag.p); changed(); renderAll(); }
-    if (drag.kind === "part" && !drag.moved) { if (C.sel !== drag.c.id) { C.sel = drag.c.id; } C.selPart = drag.c.parts.indexOf(drag.p); renderAll(); seek(drag.p.start); }
+    if (drag.kind === "part" && !drag.moved) {
+      if (ev.ctrlKey || ev.metaKey || ev.shiftKey) { pick(drag.c.id, ev); return; }
+      C.multi.clear(); C.anchor = drag.c.id; C.sel = drag.c.id; C.selPart = drag.c.parts.indexOf(drag.p); renderAll(); seek(tAt(ev));
+    }
     if (drag.kind === "mark" && !drag.moved) seek(tAt(ev));
     if (drag.kind === "scene" && !drag.moved) { C.start = drag.a; C.end = drag.b; renderMarks(); seek(drag.a); }
   };
@@ -843,7 +935,8 @@ const KEYS = [
   ["Space", "Play or pause"], ["I / O", "Mark the start / the end here"], ["Enter", "Add the marked part as a new clip"], ["A", "Add the marked part to the chosen clip"],
   ["P", "Play the chosen clip"], ["C", "Play the chosen part with 3 seconds around it"], ["Shift + P", "Play all clips"],
   ["S", "Split the chosen clip at the playhead"], ["Q", "Cut before: remove what comes before the playhead"], ["W", "Cut after: remove what comes after the playhead"], ["X", "Cut the marked part out of the chosen clip"], ["D", "Duplicate the chosen clip"],
-  ["Delete", "Delete the chosen clip"], ["Esc", "Clear the marks"], ["Ctrl + Z", "Undo"], ["Ctrl + Y", "Redo"],
+  ["Delete", "Delete the chosen clip(s)"], ["Ctrl + click", "Choose more clips (Shift + click: all in between)"],
+  ["Ctrl + A", "Choose all clips"], ["Ctrl + J", "Combine the chosen clips into one"], ["Esc", "Clear the marks"], ["Ctrl + Z", "Undo"], ["Ctrl + Y", "Redo"],
   ["Left / Right", "Back / forward 1 second"], [", and .", "Back / forward one picture"], ["Home / End", "Go to the start / the end"], ["+ and -", "Zoom the timeline"],
 ];
 function showKeys() {
@@ -884,6 +977,8 @@ function wire() {
   $("tCutB").addEventListener("click", () => cutSide("before")); $("tCutA").addEventListener("click", () => cutSide("after"));
   $("tlCutB").addEventListener("click", () => cutSide("before")); $("tlCutA").addEventListener("click", () => cutSide("after"));
   $("tlSplit").addEventListener("click", splitAtPlayhead);
+  $("mCombine").addEventListener("click", combineChosen); $("mDelete").addEventListener("click", deleteChosen);
+  $("mClear").addEventListener("click", () => { C.multi.clear(); renderAll(); });
   $("tlScroll").addEventListener("contextmenu", timelineMenu);
   $("frame").addEventListener("contextmenu", (e) => { if (!C.info) return; e.preventDefault(); ctxMenu(pictureItems(), e.clientX, e.clientY); });
   enhanceAll($("suite"));
@@ -923,9 +1018,12 @@ function wire() {
     if (e.ctrlKey || e.metaKey) {
       if (typing) return;
       if (k === "z" && !e.shiftKey) { e.preventDefault(); undo(); } else if (k === "y" || (k === "z" && e.shiftKey)) { e.preventDefault(); redo(); }
+      else if (k === "a" && clips().length) { e.preventDefault(); C.multi = new Set(clips().map((c) => c.id)); if (!C.sel) C.sel = clips()[0].id; renderAll(); }
+      else if (k === "j") { e.preventDefault(); combineChosen(); }
       return;
     }
-    if (e.altKey || typing || tag === "button" || tag === "a" || tag === "summary") return;
+    if (e.altKey || typing) return;
+    if ((tag === "button" || tag === "a" || tag === "summary") && (k === " " || k === "enter")) return;   // those press the button
     if (k === " ") { e.preventDefault(); togglePlay(); }
     else if (k === "i") setStart(video.currentTime);
     else if (k === "o") setEnd(video.currentTime);
@@ -938,8 +1036,8 @@ function wire() {
     else if (k === "w") cutSide("after");
     else if (k === "x") cutOutMarked();
     else if (k === "d") duplicateClip();
-    else if (k === "delete") { const c = selClip(); if (c) deleteClip(c, true); }
-    else if (k === "escape") clearMarks();
+    else if (k === "delete" || k === "backspace") { e.preventDefault(); if (chosen().length > 1) deleteChosen(); else { const c = selClip(); if (c) deleteClip(c, true); } }
+    else if (k === "escape") { if (C.multi.size > 1) { C.multi.clear(); renderAll(); } else clearMarks(); }
     else if (k === "?") showKeys();
     else if (k === "home") { e.preventDefault(); seek(0); $("tlScroll").scrollLeft = 0; }
     else if (k === "end") { e.preventDefault(); seek(dur()); }

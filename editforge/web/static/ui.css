@@ -781,3 +781,11 @@ label.swl.inline { padding: 0; gap: 8px; font-size: 12.5px; }
 .tl-scroll.grabbing, .tl-scroll.grabbing * { cursor: grabbing !important; }
 .cliplist .clip-row, #parts .part-row { cursor: pointer; }
 @media (max-width: 1280px) { .tl-tools .btn span { display: none; } .tl-bar .hint { display: none; } }
+
+/* ---- Stage 1: more than one clip chosen (Ctrl / Shift + click) ---- */
+.cliplist .clip-row.picked, #clips .clip-row.picked { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.lane-item.cliptag.picked { background: #2a6f7f; border-color: var(--accent); color: #fff; box-shadow: 0 0 0 2px var(--accent-soft); }
+.lane-item.cliptag { bottom: auto; }
+.multi-box { display: flex; flex-direction: column; gap: 10px; }
+.multi-box .list { max-height: 240px; overflow: auto; }
+.multi-box .list .item { cursor: default; }
