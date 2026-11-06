@@ -87,7 +87,7 @@ FRAME_RATIOS: Dict[str, Optional[tuple]] = {"original": None, "16:9": (16, 9), "
                                              "5.8in": (9, 19.5)}
 FRAME_BGS = ("black", "white", "blur")
 MASK_SHAPES = ("none", "strip", "vstrip", "rect", "circle", "split")
-DEFAULT_FRAME: Dict[str, Any] = {"ratio": "original", "bg": "blur", "blur": 50.0, "scale": 1.0, "x": 0.0, "y": 0.0, "rotate": 0.0,
+DEFAULT_FRAME: Dict[str, Any] = {"ratio": "original", "bg": "blur", "blur": 50.0, "scale": 1.0, "x": 0.0, "y": 0.0, "rotate": 0.0, "edge": 0.0,
                                  "mask": {"shape": "none", "x": 0.5, "y": 0.5, "w": 1.0, "h": 0.35, "feather": 20.0, "invert": False, "rot": 0.0}}
 SPLIT_ID = re.compile(r"^[0-9a-f]{32}/\d{9}-\d{9}$")
 NOISE_LEVELS = {"off": 0.0, "light": 10.0, "medium": 18.0, "strong": 28.0}
@@ -143,6 +143,9 @@ def clean_piece(raw: Any, duration: float) -> Optional[Dict[str, Any]]:
     unit = raw.get("unit")
     if isinstance(unit, int) and not isinstance(unit, bool) and 0 <= unit <= 10 * MAX_PIECES:
         extra["unit"] = unit                  # pieces cut from one new piece in a later step share a unit (see recut)
+    place = clean_place(raw.get("place"))
+    if place:
+        extra["place"] = place                # this piece's own position of the video layer (Final, Picture)
     return {**extra,
         "start": round(start, 4), "end": round(end, 4), "off": bool(raw.get("off")),
         "speed": round(_num(raw.get("speed"), 1.0, 0.1, 16.0), 4), "reverse": bool(raw.get("reverse")),
@@ -154,6 +157,14 @@ def clean_piece(raw: Any, duration: float) -> Optional[Dict[str, Any]]:
         "follow": {"mode": follow_mode, "zoom": round(_num(follow_raw.get("zoom"), 1.6, 1.1, 4.0), 3),
                    "path": points if follow_mode == "object" else []},
     }
+
+
+def clean_place(raw: Any) -> Optional[Dict[str, float]]:
+    """A piece's own position of the video layer: {x, y, scale, rotate} (the same meaning as in the frame)."""
+    if not isinstance(raw, dict):
+        return None
+    return {"x": round(_num(raw.get("x"), 0.0, -2.0, 2.0), 4), "y": round(_num(raw.get("y"), 0.0, -2.0, 2.0), 4),
+            "scale": round(_num(raw.get("scale"), 1.0, 0.1, 4.0), 3), "rotate": round(_num(raw.get("rotate"), 0.0, -180.0, 180.0), 2)}
 
 
 def clean_texts(raw: Any) -> List[Dict[str, Any]]:
@@ -236,6 +247,7 @@ def clean_frame(raw: Any) -> Dict[str, Any]:
             "scale": round(_num(raw.get("scale"), 1.0, 0.1, 4.0), 3),
             "x": round(_num(raw.get("x"), 0.0, -2.0, 2.0), 4), "y": round(_num(raw.get("y"), 0.0, -2.0, 2.0), 4),
             "rotate": round(_num(raw.get("rotate"), 0.0, -180.0, 180.0), 2),
+            "edge": round(_num(raw.get("edge"), 0.0, 0.0, 100.0), 1),     # soft edges of the video layer itself
             "mask": {"shape": m_raw.get("shape") if m_raw.get("shape") in MASK_SHAPES else "none",
                      "x": round(_num(m_raw.get("x"), dm["x"], 0.0, 1.0), 4), "y": round(_num(m_raw.get("y"), dm["y"], 0.0, 1.0), 4),
                      "w": round(_num(m_raw.get("w"), dm["w"], 0.02, 2.0), 4), "h": round(_num(m_raw.get("h"), dm["h"], 0.02, 2.0), 4),
@@ -248,7 +260,7 @@ def frame_active(fr: Optional[Dict[str, Any]]) -> bool:
     if not fr:
         return False
     return (fr["ratio"] != "original" or abs(fr["scale"] - 1) > 1e-3 or abs(fr["x"]) > 1e-4 or abs(fr["y"]) > 1e-4
-            or abs(fr["rotate"]) > 1e-3 or fr["mask"]["shape"] != "none")
+            or abs(fr["rotate"]) > 1e-3 or fr["mask"]["shape"] != "none" or fr.get("edge", 0) > 0.5)
 
 
 def frame_size(fr: Dict[str, Any], width: int, height: int, preview: bool) -> tuple:
@@ -481,6 +493,8 @@ class _ProjectPlanner(Planner):
         seg = Segment("clip", a, b - a, max(1, int(round((b - a) / piece["speed"]))))
         seg.mute = bool(piece["mute"]) or silent
         seg.volume = float(piece["volume"])
+        if piece.get("place"):
+            seg.place = dict(piece["place"])
         if self.has_video:
             seg.effects = [EffectSpec(name, 0.5) for name in piece["fx"]]
             zoom, amount = piece["zoom"]["mode"], float(piece["zoom"]["amount"])
@@ -594,6 +608,8 @@ def plan_project(project: Dict[str, Any], src_path: str, *, music_path: Optional
     if not live:
         raise ScriptError("Every piece is removed, so there would be no video left.", "Put at least one piece back.")
     frame = st.get("frame") if media.has_video else None
+    if media.has_video and not frame and any(p.get("place") for p in live):
+        frame = clean_frame({})                                # a piece placed on its own needs the frame's layers
     preset, aspect, follow, fit = SHAPES["original" if frame else st["shape"]]
     crf, x264 = QUALITIES[st["quality"]]
     notes: List[str] = list(media.warnings)

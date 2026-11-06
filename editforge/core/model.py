@@ -118,6 +118,7 @@ class Segment:
     out_start: int = 0
     lines: List[int] = field(default_factory=list)
     rev_group: int = -1
+    place: Optional[Dict[str, float]] = None  # this piece's own position of the video layer (x, y, scale, rotate), over the frame's
 
     @property
     def speed(self) -> float:

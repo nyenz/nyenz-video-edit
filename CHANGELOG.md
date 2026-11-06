@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.17.0
+* **Each section can have its own position** (Final → Picture). "Position for: **Whole video** / **Chosen sections**".
+  * Click a section (Ctrl + click for more, **Ctrl + A** for all), choose Chosen sections, then drag on the viewer or type numbers.
+  * New number boxes: **X** and **Y** in pixels of the finished video (0 = middle), **Size** in %, **Turn** in degrees. Typing a number
+    sets it on every chosen section at once.
+  * When the playhead is on a section with its own position, the panel says so (Change it / Use the whole video's).
+  * The export uses each section's own position.
+* **Soft edges for the video layer** (no mask needed): its border fades into the background layer, so no hard line is left.
+  The mask's own softness is now called "Soft mask edges".
+* **Preview** (top bar, or key **P**): the finished video plays in the full window, live, with the frame, words and music,
+  without rendering. Esc closes it. "Make a preview file" makes a small quick file if you want one.
+* **The sound track under the video** in Edit and Final: a waveform under every section that moves, speeds up, mutes and
+  turns around with it.
+* Fixed: the edge distances on the viewer showed minus numbers when the picture was bigger than the frame; those are hidden now.
+* Fixed: typing in the Picture panel's boxes could draw the panel twice.
+
 ## 1.16.0
 * **Work on several projects at once.** Slow work goes on in the background while you open other projects:
   * **Activity** (top right, on every page) lists everything the app is working on, each with its own bar and time left:
