@@ -188,7 +188,8 @@ class AppState:
         self.clipsets = self.home / "clipsets"
         for d in (self.projects, self.thumbs, self.clipsets):
             d.mkdir(parents=True, exist_ok=True)
-        self.scenes = clip_mod.SceneFinder(self.home / "scenes", self.fingerprint)
+        self._task_lock = threading.RLock()            # one change at a time to a project's background task
+        self.scenes = clip_mod.SceneFinder(self.home / "scenes", self.fingerprint, read_from=self._quick_copy, on_done=self._scenes_done)
         self.recipes_file = self.home / "recipes.json"
         self._fp_cache: Dict[Tuple[str, int, int], str] = {}
         self._thumb_slots = threading.Semaphore(3)
@@ -216,6 +217,7 @@ class AppState:
             self.updater.clean()
             self.updater.check_in_background()
             threading.Thread(target=self.auto_clean, name="editforge-clean", daemon=True).start()
+            threading.Thread(target=self.resume_tasks, name="editforge-tasks", daemon=True).start()
 
     # ---- linked files ------------------------------------------------------------------------------
     def _load_links(self) -> None:
@@ -410,11 +412,216 @@ class AppState:
         atomic_write_json(self.project_path(pid), proj)
         return proj
 
+    # ---- work done in the background for a project (scenes), that goes on when its page is closed ----------------
+    def _quick_copy(self, src: str, duration: float) -> Optional[str]:
+        """The light copy of a video, when it is finished and as long as the video: reading it is about three times
+        quicker than a full-size movie, and it has the same frames at the same times."""
+        p = self.previews.path_for(src)
+        if self.previews.status(src).get("state") != "ready" or not p.is_file():
+            return None
+        try:
+            if abs(probe_media(str(p)).duration - duration) > 0.6:
+                return None
+        except Exception:  # noqa: BLE001
+            return None
+        return str(p)
+
+    def start_scenes(self, pid: str) -> Dict[str, Any]:
+        """Separate scenes in the background: the scenes are found (one video at a time, the others wait in line) and
+        put into the project when they are ready, also when its page is closed. Returns the project's task."""
+        from ..analysis import shots
+        proj = self.load_project(pid)
+        if (proj.get("stage") or "edit") != "edit":
+            raise EditForgeError("Scenes are separated in Edit.", "Open the Edit version of this video.")
+        if not shots.available():
+            raise EditForgeError("Finding scenes needs the 'numpy' add-on.", "Install the newest version of Nyenz Edit.")
+        src = self.resolve_input(str(proj["source"]))
+        info = probe_media(src)
+        if not info.has_video:
+            raise EditForgeError("This video has no picture, so it has no scenes.", "Choose a video.")
+        if not any(not p.get("off") for p in proj.get("pieces") or []):
+            raise EditForgeError("'" + str(proj.get("name")) + "' has nothing on its timeline.", "Put a section back first.")
+        with self._task_lock:
+            proj = self.load_project(pid)
+            if not (isinstance(proj.get("task"), dict) and proj["task"].get("kind") == "scenes"):
+                proj["task"] = {"kind": "scenes", "since": time.time()}
+                proj.pop("task_done", None)
+                atomic_write_json(self.project_path(pid), proj)
+        st = self.scenes.start(src, info.duration, True)
+        if st["state"] == "ready":
+            self._scenes_done(src)
+        return self.task_of(self.load_project(pid))
+
+    def stop_scenes(self, pid: str) -> Dict[str, Any]:
+        with self._task_lock:
+            proj = self.load_project(pid)
+            if not proj.get("task"):
+                return self.task_of(proj)
+            proj.pop("task", None)
+            atomic_write_json(self.project_path(pid), proj)
+        fp = self._fp_of(str(proj.get("source") or ""))
+        if fp and not any(d.get("task") and self._fp_of(str(d.get("source") or "")) == fp for d in self.all_projects()):
+            try:
+                self.scenes.stop(self.resolve_input(str(proj["source"])))
+            except EditForgeError:
+                pass
+        return self.task_of(self.load_project(pid))
+
+    def _scenes_done(self, src: str) -> None:
+        """The scenes of a video are ready (or could not be found): every project waiting for them gets them now."""
+        from ..analysis import shots
+        try:
+            fp = self.fingerprint(src)
+        except OSError:
+            return
+        st = self.scenes.status(src)
+        feats = self.scenes.features(src) if st["state"] == "ready" else None
+        with self._task_lock:
+            for d in self.all_projects():
+                task = d.get("task") if isinstance(d.get("task"), dict) else None
+                if not task or task.get("kind") != "scenes" or self._fp_of(str(d.get("source") or "")) != fp:
+                    continue
+                if st["state"] == "ready":
+                    before = [dict(p) for p in d.get("pieces") or []]
+                    new, count = shots.separate(before, st["scenes"], feats)
+                    if len(new) > project_mod.MAX_PIECES:
+                        d["task_done"] = {"kind": "scenes", "ok": False, "when": time.time(), "error": "That would make too many sections."}
+                    else:
+                        d["pieces"] = new
+                        d["rule"] = {"interval": 0, "group": 1, "picks": [], "action": "", "hand": True, "scenes": True}
+                        d["task_done"] = {"kind": "scenes", "ok": True, "when": time.time(), "scenes": count, "before": before, "seen": False}
+                        d["updated"] = time.time()
+                elif st["state"] == "failed":
+                    d["task_done"] = {"kind": "scenes", "ok": False, "when": time.time(), "error": st.get("error") or "The scenes could not be found."}
+                else:
+                    continue                                   # still waiting (it was started again)
+                d.pop("task", None)
+                atomic_write_json(self.project_path(d["id"]), d)
+
+    def resume_tasks(self) -> None:
+        """At start: the app was closed while scenes were being found. Go on with them."""
+        for d in self.all_projects():
+            if isinstance(d.get("task"), dict) and d["task"].get("kind") == "scenes":
+                try:
+                    self.start_scenes(d["id"])
+                except Exception:  # noqa: BLE001 - the video is gone: the task ends with a message
+                    try:
+                        with self._task_lock:
+                            p = self.load_project(d["id"])
+                            p.pop("task", None)
+                            p["task_done"] = {"kind": "scenes", "ok": False, "when": time.time(), "error": "The video could not be read."}
+                            atomic_write_json(self.project_path(d["id"]), p)
+                    except EditForgeError:
+                        pass
+
+    def task_of(self, proj: Dict[str, Any]) -> Dict[str, Any]:
+        """What the page and the Home card show: {'state': 'none'|'queued'|'running'|'done'|'failed', ...}."""
+        task = proj.get("task") if isinstance(proj.get("task"), dict) else None
+        if task:
+            try:
+                st = self.scenes.status(self.resolve_input(str(proj["source"])))
+            except EditForgeError:
+                st = {"state": "failed", "error": "The video is gone."}
+            state = st.get("state")
+            if state == "ready":                              # finished a moment ago: put in now
+                self._scenes_done(self.resolve_input(str(proj["source"])))
+                return self.task_of(self.load_project(proj["id"]))
+            return {"kind": "scenes", "state": state if state in ("queued", "running") else "queued", "progress": st.get("progress", 0.0),
+                    "place": st.get("place", 0), "since": task.get("since", 0)}
+        done = proj.get("task_done") if isinstance(proj.get("task_done"), dict) else None
+        if done:
+            return {"kind": done.get("kind"), "state": "done" if done.get("ok") else "failed", "scenes": done.get("scenes", 0),
+                    "error": done.get("error", ""), "when": done.get("when", 0), "seen": bool(done.get("seen", True))}
+        return {"state": "none"}
+
+    def activity(self) -> Dict[str, Any]:
+        """Everything the app is working on, for the Activity list on every page: what, for which project, how far,
+        and where to go to see it. Finished items stay for 15 minutes."""
+        now = time.time()
+        items: List[Dict[str, Any]] = []
+        projects = self.all_projects()
+        sets = {d["id"]: d for d in self.all_clipsets()}
+        waiting_fps = set()
+        for d in projects:
+            if not (d.get("task") or d.get("task_done")):
+                continue
+            t = self.task_of(d)
+            name = str(d.get("name") or "Project")
+            base = {"kind": "scenes", "title": name, "link": "/edit?p=" + d["id"], "project": d["id"]}
+            if t["state"] in ("queued", "running"):
+                waiting_fps.add(self._fp_of(str(d.get("source") or "")))
+                items.append(dict(base, state=t["state"], progress=t.get("progress", 0.0), since=t.get("since", 0),
+                                  what="Waiting to separate scenes" + (f" ({t['place']} in line)" if t.get("place") else "") if t["state"] == "queued" else "Separating scenes",
+                                  stop="/api/projects/" + d["id"] + "/scenes-stop"))
+            elif t["state"] in ("done", "failed") and now - float(t.get("when") or 0) < 900:
+                items.append(dict(base, state=t["state"], progress=1.0, since=t.get("when", 0),
+                                  what=(f"{t.get('scenes', 0)} scenes separated" if t["state"] == "done" else "Scenes: " + str(t.get("error") or "failed"))))
+        for j in self.scenes.jobs():                      # Find scenes in a clip project (no Edit project waits for it)
+            src = str(j.get("src") or "")
+            try:
+                if self.fingerprint(src) in waiting_fps:
+                    continue
+            except OSError:
+                continue
+            cs = next((c for c in sets.values() if self._fp_of(str(c.get("source") or "")) == self.fingerprint(src)), None)
+            items.append({"kind": "scenes", "title": cs.get("name") if cs else j.get("name"), "what": "Finding scenes" if j["state"] == "running" else "Waiting to find scenes",
+                          "state": j["state"], "progress": j.get("progress", 0.0), "since": j.get("since", 0),
+                          "link": "/clips?c=" + cs["id"] if cs else ""})
+        groups: Dict[str, Dict[str, Any]] = {}
+        for job in self.store.list(300):
+            opts = job.get("options") if isinstance(job.get("options"), dict) else {}
+            status = job["status"]
+            recent = status in ("done", "failed") and now - float(job.get("updated") or 0) < 900
+            if status not in ("queued", "running") and not recent:
+                continue
+            if opts.get("preview"):
+                continue
+            cid = str(opts.get("clipset") or "")
+            if cid:
+                g = groups.setdefault(cid, {"n": 0, "done": 0, "busy": 0, "failed": 0, "progress": 0.0, "since": 0.0})
+                g["n"] += 1
+                g["since"] = max(g["since"], float(job.get("updated") or 0))
+                if status == "done":
+                    g["done"] += 1
+                    g["progress"] += 1.0
+                elif status == "failed":
+                    g["failed"] += 1
+                else:
+                    g["busy"] += 1
+                    g["progress"] += float(job.get("progress") or 0)
+                continue
+            pid = str(opts.get("project_id") or "")
+            proj = next((d for d in projects if d["id"] == pid), None)
+            title = str(proj.get("name")) if proj else str(opts.get("output_name") or "Video")
+            items.append({"kind": "export", "title": title, "state": "done" if status == "done" else status,
+                          "what": {"queued": "Waiting to export", "running": "Exporting", "done": "Exported", "failed": "Export failed"}[status],
+                          "progress": 1.0 if status == "done" else float(job.get("progress") or 0), "since": float(job.get("updated") or 0),
+                          "link": ("/final?p=" + pid) if proj else "", "job": job["id"]})
+        for cid, g in groups.items():
+            cs = sets.get(cid)
+            busy = g["busy"] > 0
+            items.append({"kind": "clips", "title": str((cs or {}).get("name") or "Clips"), "state": "running" if busy else ("failed" if g["failed"] else "done"),
+                          "what": (f"Making clips · {g['done']} of {g['n']} made" if busy else f"{g['done']} clips made" + (f", {g['failed']} failed" if g["failed"] else "")),
+                          "progress": g["progress"] / max(1, g["n"]), "since": g["since"], "link": "/clips?c=" + cid if cs else "/?phase=made"})
+        with self.previews._lock:
+            prev = [(k, dict(v)) for k, v in self.previews._jobs.items() if v.get("state") == "running"]
+        for k, v in prev:
+            items.append({"kind": "copy", "title": str(v.get("name") or "A video"), "what": "Making a light copy for smooth playing", "state": "running",
+                          "progress": float(v.get("progress") or 0), "since": float(v.get("since") or 0), "link": ""})
+        sp = self.splitter.status()
+        if sp.get("state") in ("running", "downloading"):
+            items.append({"kind": "split", "title": "Sound", "what": "Splitting voices, music and effects", "state": "running",
+                          "progress": float(sp.get("progress") or 0), "since": 0, "link": ""})
+        order = {"running": 0, "queued": 1, "failed": 2, "done": 3}
+        items.sort(key=lambda i: (order.get(i["state"], 4), -float(i.get("since") or 0)))
+        return {"items": items, "busy": sum(1 for i in items if i["state"] in ("running", "queued"))}
+
     def edit_project(self, pid: str, **fields: Any) -> Dict[str, Any]:
         """Change a few fields of a stored project without checking its video (it may be missing)."""
-        proj = self.load_project(pid)
-        proj.update(fields)
-        atomic_write_json(self.project_path(pid), proj)
+        with self._task_lock:
+            proj = self.load_project(pid)
+            proj.update(fields)
+            atomic_write_json(self.project_path(pid), proj)
         return proj
 
     def all_projects(self) -> List[Dict[str, Any]]:
@@ -450,6 +657,7 @@ class AppState:
                             "stage": d.get("stage") if d.get("stage") in project_mod.STAGES else "edit",
                             "parent": str(d.get("parent") or ""), "version": str(d.get("version") or ""),
                             "linked": str(d["source"]).startswith("l/"), "where": self.link_path(str(d["source"])) or path,
+                            "task": self.task_of(d) if (d.get("task") or d.get("task_done")) else {"state": "none"},
                             "thumb_at": _thumb_time(pieces, dur)})
             except (KeyError, TypeError, ValueError):
                 continue
@@ -1175,6 +1383,15 @@ class Handler(BaseHTTPRequestHandler):
                 if self._guard() is None:
                     return
                 self._json({"projects": self.state.list_projects()})
+            elif re.fullmatch(rf"/api/projects/{PROJECT_ID}/task", path):
+                if self._guard() is None:
+                    return
+                proj = self.state.load_project(path.split("/")[3])
+                self._json({"task": self.state.task_of(proj), "updated": proj.get("updated", 0)})
+            elif path == "/api/activity":
+                if self._guard() is None:
+                    return
+                self._json(self.state.activity())
             elif re.fullmatch(rf"/api/projects/{PROJECT_ID}", path):
                 if self._guard() is None:
                     return
@@ -1256,6 +1473,22 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({"no_dialog": True})
                     return
                 self._json(self._file_reply(ident) if ident else {"cancelled": True})
+            elif re.fullmatch(rf"/api/projects/{PROJECT_ID}/(scenes|scenes-stop|task-seen)", path):
+                if self._read_json() is None:
+                    return
+                pid, what = path.split("/")[3], path.split("/")[4]
+                if what == "scenes":
+                    self._json(self.state.start_scenes(pid))
+                elif what == "scenes-stop":
+                    self._json(self.state.stop_scenes(pid))
+                else:
+                    with self.state._task_lock:
+                        proj = self.state.load_project(pid)
+                        if isinstance(proj.get("task_done"), dict):
+                            proj["task_done"]["seen"] = True
+                            proj["task_done"].pop("before", None)
+                            atomic_write_json(self.state.project_path(pid), proj)
+                    self._json({"ok": True})
             elif re.fullmatch(rf"/api/projects/{PROJECT_ID}/(rename|duplicate|trash|restore|relink)", path):
                 data = self._read_json()
                 if data is None:
@@ -1408,9 +1641,15 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if re.fullmatch(rf"/api/projects/{PROJECT_ID}", path):
                 pid = path.rsplit("/", 1)[1]
-                old = self.state.load_project(pid)
-                data["source"] = old["source"]          # a project always stays with its own video (Find it again changes it)
-                self._json(self.state.save_project(pid, data, old.get("created"), old))
+                with self.state._task_lock:
+                    old = self.state.load_project(pid)
+                    data["source"] = old["source"]          # a project always stays with its own video (Find it again changes it)
+                    done = old.get("task_done") if isinstance(old.get("task_done"), dict) else {}
+                    if old.get("task") or (done.get("ok") and not done.get("seen", True)):
+                        # scenes are being put in (or were, and the page has not loaded them yet): its timeline stays as it is
+                        for k in ("pieces", "steps", "rule"):
+                            data[k] = old.get(k)
+                    self._json(self.state.save_project(pid, data, old.get("created"), old))
             elif re.fullmatch(rf"/api/clipsets/{clip_mod.CLIPSET_ID}", path):
                 cid = path.rsplit("/", 1)[1]
                 old = self.state.load_clipset(cid)

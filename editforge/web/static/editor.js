@@ -42,7 +42,7 @@ const outLen = (p) => (p.end - p.start) / p.speed;
 /** The pieces on screen: the newest step, or an older step being looked at. */
 function cur() { return S.viewStep === null ? S.proj.pieces : S.proj.steps[S.viewStep].pieces; }
 function kept() { return cur().filter((p) => !p.off); }
-function locked() { return S.viewStep !== null; }
+function locked() { return S.viewStep !== null || !!S.waiting; }
 function markHand() { S.proj.rule = Object.assign({ interval: 0, group: 1, picks: [], action: "" }, S.proj.rule || {}, { hand: true }); }
 /** The timeline: kept pieces with their place in the finished video. */
 function layout() {
@@ -66,6 +66,69 @@ function segAt(t) {
   return L.length ? { i: L.length - 1, s: L[L.length - 1], L, end: true } : null;
 }
 function selList() { return kept().filter((p) => S.sel.has(p)); }
+// ---- scenes on the timeline: after Separate scenes, a click chooses a whole scene (all its sections)
+function scenesOn() { return S.mode === "edit" && S.choose !== "sections" && sceneCount() > 0; }
+function sceneOf(p) { return p.unit === undefined || p.unit === null ? [p] : kept().filter((q) => q.unit === p.unit); }
+/** The scenes in the order they play: [{unit, pieces, out0, out1}]. */
+function sceneList() {
+  const out = [];
+  for (const r of layout()) {
+    const last = out[out.length - 1];
+    if (last && last.unit === r.p.unit && r.p.unit !== undefined) { last.pieces.push(r.p); last.out1 = r.out1; }
+    else out.push({ unit: r.p.unit, pieces: [r.p], out0: r.out0, out1: r.out1 });
+  }
+  return out;
+}
+/** Number the scenes 0, 1, 2 ... in the order they play. */
+function renumberScenes() {
+  const map = new Map(); let n = 0;
+  for (const p of kept()) { if (p.unit === undefined || p.unit === null) continue; if (!map.has(p.unit)) map.set(p.unit, n++); p.unit = map.get(p.unit); }
+}
+function chosenScenes() { return new Set(selList().map((p) => p.unit).filter((u) => u !== undefined && u !== null)); }
+/** Put the chosen scenes together into one scene, where the first of them is. */
+function combineScenes() {
+  if (locked()) { lockedNote(); return; }
+  const units = chosenScenes();
+  if (units.size < 2) { toast("Hold Ctrl and click two or more scenes first. Then Combine (Ctrl + J).", true); return; }
+  let target = null;
+  change(() => {
+    const K = kept(), inIt = (p) => units.has(p.unit);
+    target = K.find(inIt).unit;
+    const moving = K.filter(inIt), rest = K.filter((p) => !inIt(p));
+    const pos = K.slice(0, K.findIndex(inIt)).filter((p) => !inIt(p)).length;
+    for (const p of moving) p.unit = target;
+    S.proj.pieces = rest.slice(0, pos).concat(moving, rest.slice(pos)).concat(S.proj.pieces.filter((p) => p.off));
+    renumberScenes(); S.sel = new Set(moving); S.anchor = moving[0]; markHand();
+  });
+  toast("Combined " + units.size + " scenes into one · " + sceneList().length + " scenes now. Ctrl + Z undoes it.");
+}
+function selectScene(p, e) {
+  const runs = sceneList(), grp = sceneOf(p);
+  if (e.shiftKey && S.anchor && kept().includes(S.anchor)) {
+    const a = runs.findIndex((r) => r.pieces.includes(S.anchor)), b = runs.findIndex((r) => r.pieces.includes(p));
+    if (!(e.ctrlKey || e.metaKey)) S.sel.clear();
+    for (let k = Math.min(a, b); k <= Math.max(a, b); k++) for (const q of runs[k].pieces) S.sel.add(q);
+  } else if (e.ctrlKey || e.metaKey) {
+    const on = grp.every((q) => S.sel.has(q));
+    for (const q of grp) { if (on) S.sel.delete(q); else S.sel.add(q); }
+    S.anchor = p;
+  } else if (!S.sel.has(p)) { S.sel = new Set(grp); S.anchor = p; }
+}
+function renderChoose() {
+  const box = $("chooseSeg"), has = S.mode === "edit" && sceneCount() > 0;
+  box.hidden = !has; $("bCombine").hidden = !has;
+  if (!has) return;
+  $("bCombine").disabled = chosenScenes().size < 2 || locked();
+  const want = S.choose === "sections" ? "sections" : "scenes";
+  if (box.dataset.v !== want) {
+    box.dataset.v = want;
+    box.replaceChildren(segmented([["scenes", "Scenes"], ["sections", "Sections"]], want, (v) => {
+      S.choose = v; try { localStorage.setItem("ef.choose", v); } catch (er) { /* off */ }
+      if (v === "scenes") for (const q of [...S.sel]) for (const x of sceneOf(q)) S.sel.add(x);
+      refreshAll({ keepVideo: true });
+    }));
+  }
+}
 
 // ================================================================== saving and undo
 function snapshot() { return JSON.stringify({ pieces: S.proj.pieces, settings: S.proj.settings, name: S.proj.name, texts: S.proj.texts, steps: S.proj.steps, rule: S.proj.rule }); }
@@ -78,8 +141,8 @@ function restore(json) {
   S.sel = new Set(keepSel.map((i) => S.proj.pieces[i]).filter((p) => p && !p.off));
   refreshAll(); scheduleSave();
 }
-function undo() { if (!S.undo.length) return; S.redo.push(snapshot()); restore(S.undo.pop()); }
-function redo() { if (!S.redo.length) return; S.undo.push(snapshot()); restore(S.redo.pop()); }
+function undo() { if (S.waiting) { lockedNote(); return; } if (!S.undo.length) return; S.redo.push(snapshot()); restore(S.undo.pop()); }
+function redo() { if (S.waiting) { lockedNote(); return; } if (!S.redo.length) return; S.undo.push(snapshot()); restore(S.redo.pop()); }
 function scheduleSave() { $("saveState").textContent = "Saving…"; clearTimeout(S.saveTimer); S.saveTimer = setTimeout(saveNow, 500); }
 function saveNow() {
   clearTimeout(S.saveTimer); S.saveTimer = null;
@@ -95,10 +158,13 @@ function change(fn, opts) {
   remember(); fn(); refreshAll(opts); scheduleSave();
   return true;
 }
-function lockedNote() { toast("This is an older step, so it is locked. Click the newest step (in Steps) to change things.", true); }
+function lockedNote() {
+  if (S.waiting) { toast("The scenes are being separated, so the timeline waits until they are in. You can open other projects meanwhile.", true); return; }
+  toast("This is an older step, so it is locked. Click the newest step (in Steps) to change things.", true);
+}
 function refreshAll(opts) {
   S.sel = new Set([...S.sel].filter((p) => !p.off && cur().includes(p)));
-  renderTimeline(); renderInspector(); renderLengths(); renderSteps(); renderStepbar();
+  renderTimeline(); renderInspector(); renderLengths(); renderSteps(); renderStepbar(); if (S.mode === "edit") renderChoose();
   if (!(opts && opts.keepVideo)) showFrame();
 }
 
@@ -108,9 +174,12 @@ function renderLengths() {
   $("iLen").textContent = fmtTime(total);
   $("tTotal").textContent = fmtTime(total);
   $("topLen").textContent = fmtTime(total);
-  $("iCount").textContent = String(kept().length);
-  const sl = sel.reduce((a, p) => a + outLen(p), 0);
-  $("iSel").textContent = sel.length ? sel.length + " selected · " + fmtTime(sl) : "";
+  const scn = scenesOn();
+  $("iCount").textContent = String(scn ? sceneList().length : kept().length);
+  $("iCount").nextSibling.textContent = scn ? " scenes" : " pieces";
+  const sl = sel.reduce((a, p) => a + outLen(p), 0), ns = scn ? chosenScenes().size : 0;
+  $("iSel").textContent = sel.length ? (scn ? ns + " scene" + (ns > 1 ? "s" : "") : sel.length) + " selected · " + fmtTime(sl) : "";
+  if (S.mode === "edit") $("bCombine").disabled = ns < 2 || locked();
   $("bUndo").disabled = !S.undo.length; $("bRedo").disabled = !S.redo.length;
   $("bDel").disabled = $("bDup").disabled = !sel.length;
 }
@@ -347,12 +416,17 @@ function renderTimeline() {
   const left = sc.scrollLeft - 300, right = sc.scrollLeft + sc.clientWidth + 300;
   const ar = S.info.width && S.info.height ? S.info.width / S.info.height : 16 / 9;
   T.thumbW = Math.round(T.h * ar);
+  const scn = S.mode === "edit" && sceneCount() > 0, sceneAt = new Map(), firstOf = new Set();
+  if (scn) sceneList().forEach((sc, k) => { firstOf.add(sc.pieces[0]); for (const q of sc.pieces) sceneAt.set(q, k); });
   for (const r of L) {
     const x0 = px(r.out0), x1 = px(r.out1);
     if (x1 < left || x0 > right) continue;                    // only what is on screen is drawn, so 5,000 pieces stay quick
     const w = Math.max(4, x1 - x0 - 2);
     const p = r.p;
-    const b = el("div", { class: "clipb" + (S.sel.has(p) ? " sel" : "") + (w < 70 ? " narrow" : "") + (locked() ? " locked" : ""), "data-k": String(cur().indexOf(p)) });
+    const k = sceneAt.get(p);
+    const b = el("div", { class: "clipb" + (S.sel.has(p) ? " sel" : "") + (w < 70 ? " narrow" : "") + (locked() ? " locked" : "") +
+      (scn ? " sc" + (k % 2) + (firstOf.has(p) ? " sc-first" : "") : ""), "data-k": String(cur().indexOf(p)) });
+    if (scn && firstOf.has(p)) b.append(el("span", { class: "scene-tag", text: "Scene " + (k + 1) }));
     b.style.left = x0 + "px"; b.style.width = w + "px";
     if (S.info.has_video) {
       const strip = el("div", { class: "strip" });
@@ -408,6 +482,7 @@ function showTip(text, x, y) {
 }
 function hideTip() { const t = $("tlTip"); if (t) t.hidden = true; }
 function selectClick(p, e) {
+  if (scenesOn()) { selectScene(p, e); return; }
   const K = kept();
   if (e.shiftKey && S.anchor && K.includes(S.anchor)) {
     const a = K.indexOf(S.anchor), b = K.indexOf(p);
@@ -461,7 +536,8 @@ function onLaneDown(e) {
       const firstOut = layout().find((r) => S.sel.has(r.p));
       mark.style.left = (gap === 0 ? px(0) : (L[gap - 1] ? px(L[gap - 1].out1) : px(edgeT))) + "px";
       for (const b of $("laneV").querySelectorAll(".clipb.sel")) b.classList.add("drag");
-      showTip("Move " + S.sel.size + " piece" + (S.sel.size > 1 ? "s" : "") + " here", ev.clientX, ev.clientY);
+      const ns = scenesOn() ? chosenScenes().size : 0;
+      showTip("Move " + (ns ? ns + " scene" + (ns > 1 ? "s" : "") : S.sel.size + " piece" + (S.sel.size > 1 ? "s" : "")) + " here", ev.clientX, ev.clientY);
       void firstOut;
     } else {
       const a = Math.min(d.x0, x), b = Math.max(d.x0, x);
@@ -470,7 +546,7 @@ function onLaneDown(e) {
       m.style.left = a + "px"; m.style.width = (b - a) + "px"; m.style.top = (lr.top - ir.top) + "px"; m.style.height = lr.height + "px";
       const t0 = timeAt(a), t1 = timeAt(b);
       S.sel = new Set(d.base);
-      for (const r of layout()) if (r.out1 > t0 && r.out0 < t1) S.sel.add(r.p);
+      for (const r of layout()) if (r.out1 > t0 && r.out0 < t1) { if (scenesOn()) for (const q of sceneOf(r.p)) S.sel.add(q); else S.sel.add(r.p); }
       for (const bl of $("laneV").querySelectorAll(".clipb")) bl.classList.toggle("sel", S.sel.has(cur()[+bl.dataset.k]));
       renderLengths();
     }
@@ -484,7 +560,7 @@ function onLaneDown(e) {
     } else if (d.kind === "move") {
       if (d.moved && !d.frozen && d.gap !== undefined) moveSelected(d.gap);
       else {
-        if (d.wasSel) { S.sel = new Set([d.p]); S.anchor = d.p; }
+        if (d.wasSel) { S.sel = new Set(scenesOn() ? sceneOf(d.p) : [d.p]); S.anchor = d.p; }
         const r = layout().find((q) => q.p === d.p);                   // a click on a piece also moves the playhead there
         if (r) { const tt = timeAt(xIn(ev)); seek(clamp(tt, r.out0, r.out1 - 0.01)); }
         refreshAll({ keepVideo: true });
@@ -515,14 +591,26 @@ function onRulerDown(e) {
 // ---- timeline actions
 function removeSelected() {
   const sel = selList(); if (!sel.length) return;
+  const n = scenesOn() ? chosenScenes().size : 0;
   if (change(() => { for (const p of sel) p.off = true; S.sel.clear(); markHand(); }))
-    toast(sel.length + " piece" + (sel.length > 1 ? "s" : "") + " removed · video now " + fmtTime(finalTotal()));
+    toast((n ? n + " scene" + (n > 1 ? "s" : "") : sel.length + " piece" + (sel.length > 1 ? "s" : "")) + " removed · video now " + fmtTime(finalTotal()) + ". Ctrl + Z brings it back.");
 }
 function duplicateSelected() {
   const sel = selList(); if (!sel.length) return;
   change(() => {
     const out = [];
     const copies = new Set();
+    const scn = scenesOn();
+    if (scn) {                                   // a copied scene comes right after its scene, as a scene of its own
+      const K = kept(), fresh = new Map();
+      let next = Math.max(...K.map((q) => (q.unit === undefined ? -1 : q.unit))) + 1;
+      const lastOf = new Map(); for (const q of K) if (S.sel.has(q)) lastOf.set(q.unit, q);
+      const pend = new Map();
+      for (const q of K) if (S.sel.has(q)) { if (!fresh.has(q.unit)) fresh.set(q.unit, next++); const c = clone(q); c.unit = fresh.get(q.unit); (pend.get(q.unit) || pend.set(q.unit, []).get(q.unit)).push(c); copies.add(c); }
+      for (const p of S.proj.pieces) { out.push(p); if (!p.off && lastOf.get(p.unit) === p && pend.has(p.unit)) out.push(...pend.get(p.unit)); }
+      S.proj.pieces = out; renumberScenes(); S.sel = copies; markHand();
+      return;
+    }
     for (const p of S.proj.pieces) { out.push(p); if (S.sel.has(p)) { const c = clone(p); out.push(c); copies.add(c); } }
     S.proj.pieces = out; S.sel = copies; markHand();
   });
@@ -538,6 +626,11 @@ function splitAtPlayhead() {
     if (p.reverse) { a.start = +cut.toFixed(4); b.end = +cut.toFixed(4); } else { a.end = +cut.toFixed(4); b.start = +cut.toFixed(4); }
     const i = S.proj.pieces.indexOf(p);
     S.proj.pieces.splice(i, 1, a, b); S.sel = new Set([b]); S.anchor = b; markHand();
+    if (scenesOn() && p.unit !== undefined && p.unit !== null) {          // in Scenes, a split starts a new scene here
+      const K = kept(), fresh = Math.max(...K.map((q) => (q.unit === undefined ? -1 : q.unit))) + 1;
+      for (let j = K.indexOf(b); j < K.length && K[j].unit === p.unit; j++) K[j].unit = fresh;
+      renumberScenes(); S.sel = new Set(sceneOf(b));
+    }
   });
 }
 /** Cut before / Cut after (CapCut's delete left / right): the section under the playhead loses what comes before
@@ -576,6 +669,19 @@ function timelineMenu(e) {
       [x.mute ? "Turn this music on" : "Mute this music", x.mute ? "vol" : "mute", () => set({ mute: !x.mute })],
       [x.solo ? "Stop solo" : "Hear only this (solo)", "target", () => set({ solo: !x.solo })],
       "-", ["Remove this music", "trash", () => { change(() => { S.proj.settings.layers = layers().filter((_, k) => k !== i); }, { keepVideo: true }); renderMusicLayers(); musicPlay(); if (!S.playing) musicPause(); }, { danger: true }]];
+  } else if (p && scenesOn()) {
+    if (!S.sel.has(p)) { S.sel = new Set(sceneOf(p)); S.anchor = p; refreshAll({ keepVideo: true }); }
+    const n = chosenScenes().size, run = sceneList().find((r) => r.pieces.includes(p));
+    items = [["Play this scene", "play", () => { seek(run.out0); play(); }],
+      ["Choose more scenes (Ctrl + click)", "check", () => toast("Hold Ctrl and click the other scenes you want.")],
+      "-",
+      n > 1 ? ["Combine " + n + " scenes into one", "combine", combineScenes, { key: "Ctrl+J", off: lk, why }] : null,
+      ["Split the scene here", "split", () => { seek(t); splitAtPlayhead(); }, { key: "S", off: lk, why }],
+      [n > 1 ? "Duplicate " + n + " scenes" : "Duplicate this scene", "copy", duplicateSelected, { key: "Ctrl+D", off: lk, why }],
+      ["Select all", "grid", () => { S.sel = new Set(kept()); refreshAll({ keepVideo: true }); }, { key: "Ctrl+A" }],
+      ["Choose sections instead", "list", () => { S.choose = "sections"; S.sel = new Set([p]); refreshAll({ keepVideo: true }); }],
+      "-",
+      [n > 1 ? "Remove " + n + " scenes" : "Remove this scene", "trash", removeSelected, { danger: true, key: "Del", off: lk, why }]];
   } else if (p) {
     if (!S.sel.has(p)) { S.sel = new Set([p]); S.anchor = p; refreshAll({ keepVideo: true }); }
     const n = S.sel.size;
@@ -655,7 +761,7 @@ async function cutAtScenes() {
   b.disabled = true;
   try {
     let st = await api("/api/scenes", { method: "POST", json: { id: S.proj.source } });
-    while (st.state === "running") {
+    while (st.state === "running" || st.state === "queued") {
       label.textContent = "Finding scenes… " + Math.round(st.progress * 100) + "%";
       await new Promise((r) => setTimeout(r, 800));
       st = await api("/api/scenes?id=" + encodeURIComponent(S.proj.source));
@@ -975,7 +1081,8 @@ function renderInspector() {
   R.replaceChildren();
   if (!sel.length) { renderOverview(R); return; }
   const len = sel.reduce((a, p) => a + outLen(p), 0);
-  R.append(el("div", { class: "side-h" }, el("h2", { text: sel.length === 1 ? "Piece" : sel.length + " pieces" }), el("span", { class: "note num", text: fmtTime(len) + " long" })));
+  const nsc = scenesOn() ? chosenScenes().size : 0;
+  R.append(el("div", { class: "side-h" }, el("h2", { text: nsc ? (nsc === 1 ? "1 scene" : nsc + " scenes") : sel.length === 1 ? "Piece" : sel.length + " pieces" }), el("span", { class: "note num", text: fmtTime(len) + " long" })));
   const all = (f) => sel.every(f);
   // basics first: speed, sound, length
   const speeds = [0.25, 0.5, 1, 1.5, 2, 3, 4];
@@ -1218,6 +1325,7 @@ async function openProject() {
   api("/api/recipes").then((x) => { S.recipes = x.recipes; renderRecipes(); }).catch(() => {});
   api("/api/projects").then(({ projects }) => { const pl = $("projList"); for (const p of projects.filter((q) => q.id !== S.id && !q.trashed && !q.missing && (q.stage || "edit") === S.mode).slice(0, 30)) pl.append(projItem(p)); if (!pl.children.length) pl.append(el("p", { class: "hint", text: "No other projects." })); }).catch(() => {});
   if (S.mode === "edit") renderVersionList(); else openPanel("sound");
+  if (S.mode === "edit") { try { const r = await api("/api/projects/" + S.id + "/task"); followTask(r.task); } catch (e) { /* only a help */ } }
   renderSteps();
   if (S.migrated) { S.migrated = false; scheduleSave(); }
   $("saveState").textContent = "Saved";
@@ -1257,6 +1365,7 @@ async function renderVersionList() {
 /** Scenes found by step 3: sections that share a scene number. (After step 2 every section has its own number, so that is not scenes.) */
 function sceneCount() {
   const K = kept(), units = new Set(K.map((p) => p.unit).filter((u) => u !== undefined && u !== null));
+  if (S.viewStep === null && S.proj.rule && S.proj.rule.scenes) return units.size;
   return units.size && units.size < K.length ? units.size : 0;
 }
 /** Which steps are done on this version: shown on the step bar. */
@@ -1291,22 +1400,57 @@ async function secThin() {
   } catch (e) { secNote(errText(e), true); }
   finally { b.disabled = false; }
 }
+/** Separate scenes: the app does it in the background (one video at a time, the others wait in line), so you can
+ *  open other projects meanwhile. The result is put into this project also when this page is closed. */
 async function secScenes() {
   if (locked()) { lockedNote(); return; }
-  const b = $("secScenes"), label = $("secScenesLabel"); b.disabled = true; secNote("");
   try {
-    let r = await secCall("scenes");
-    while (r.state === "running") {
-      label.textContent = "Looking at the pictures… " + Math.round((r.progress || 0) * 100) + "%";
-      await new Promise((ok) => setTimeout(ok, 900));
-      r = await secCall("scenes");
-    }
-    r.pieces.forEach(fixPiece);
-    change(() => { S.proj.pieces = r.pieces; S.proj.rule = { interval: 0, group: 1, picks: [], action: "", hand: true }; S.sel.clear(); S.t = 0; });
-    fitZoom();
-    secNote(r.scenes + (r.scenes === 1 ? " scene" : " scenes") + " found. Each cut is at the end of a scene. Undo brings the old cut back.");
+    await saved();
+    const t = await api("/api/projects/" + S.id + "/scenes", { method: "POST", json: {} });
+    followTask(t);
+    if (typeof Activity !== "undefined") Activity.refresh();
   } catch (e) { secNote(errText(e), true); }
-  finally { b.disabled = false; label.textContent = "Separate scenes"; }
+}
+function followTask(t) {
+  S.task = t;
+  clearTimeout(S.taskTimer);
+  const b = $("secScenes"), label = $("secScenesLabel");
+  if (t.state === "running" || t.state === "queued") {
+    S.waiting = true; b.disabled = true; document.body.classList.add("is-waiting");
+    const pct = Math.round((t.progress || 0) * 100);
+    label.textContent = t.state === "queued" ? "Waiting in line" + (t.place ? " (" + t.place + ")" : "") + "…" : "Separating scenes… " + pct + "%";
+    secNote("");
+    const n = $("secNote");
+    n.append(el("span", { text: t.state === "queued" ? "Other videos are being looked at first. " : "Looking at every picture. " }),
+      el("span", { text: "You can open other projects meanwhile: the scenes are put in here when they are ready. " }),
+      el("button", { type: "button", class: "linkbtn", id: "taskStop", text: "Stop", onclick: async () => { const r = await api("/api/projects/" + S.id + "/scenes-stop", { method: "POST", json: {} }); followTask(r); secNote("Stopped. Nothing was changed."); } }));
+    if (!S.wasWaiting) renderTimeline();
+    S.wasWaiting = true;
+    S.taskTimer = setTimeout(async () => {
+      try { const r = await api("/api/projects/" + S.id + "/task"); followTask(r.task); } catch (e) { S.taskTimer = setTimeout(() => followTask(S.task), 3000); }
+    }, 1000);
+    return;
+  }
+  const was = S.waiting;
+  S.waiting = false; S.wasWaiting = false; b.disabled = false; label.textContent = "Separate scenes"; document.body.classList.remove("is-waiting");
+  if (t.state === "done" && (was || !t.seen)) takeScenes(t);
+  else if (t.state === "failed" && (was || !t.seen)) { secNote(t.error || "The scenes could not be found.", true); api("/api/projects/" + S.id + "/task-seen", { method: "POST", json: {} }).catch(() => {}); }
+  else if (was) refreshAll({ keepVideo: true });
+}
+/** The scenes are in (put in by the app): load them, and keep the cut from before for Undo. */
+async function takeScenes(t) {
+  try {
+    const r = await api("/api/projects/" + S.id);
+    const done = r.project.task_done || {};
+    const before = snapshot();
+    const old = done.before ? JSON.stringify(Object.assign(JSON.parse(before), { pieces: done.before })) : before;
+    S.proj.pieces = r.project.pieces.map(fixPiece); S.proj.rule = r.project.rule;
+    S.undo.push(old); S.redo = [];
+    S.sel.clear(); S.t = 0;
+    await api("/api/projects/" + S.id + "/task-seen", { method: "POST", json: {} });
+    refreshAll(); fitZoom();
+    secNote(t.scenes + (t.scenes === 1 ? " scene" : " scenes") + " separated. Each cut is at the end of a scene. Click a scene to choose it (Ctrl + click for more). Undo brings the old cut back.");
+  } catch (e) { secNote(errText(e), true); }
 }
 async function sendToFinal() {
   if (!kept().length) { toast("The timeline is empty: put a section back first.", true); return; }
@@ -1398,6 +1542,8 @@ function wire() {
   $("bFit").addEventListener("click", fitZoom);
   $("bUndo").addEventListener("click", undo); $("bRedo").addEventListener("click", redo);
   $("bSplit").addEventListener("click", splitAtPlayhead);
+  $("bCombine").addEventListener("click", combineScenes);
+  try { if (localStorage.getItem("ef.choose") === "sections") S.choose = "sections"; } catch (e) { /* off */ }
   $("bCutB").addEventListener("click", () => cutSide("before")); $("bCutA").addEventListener("click", () => cutSide("after"));
   $("tlScroll").addEventListener("contextmenu", (e) => { if (e.target.closest(".lane-head")) { e.preventDefault(); return; } timelineMenu(e); });
   $("frame").addEventListener("contextmenu", (e) => {
@@ -1424,6 +1570,7 @@ function wire() {
     else if (mod && k.toLowerCase() === "z") { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
     else if (mod && k.toLowerCase() === "y") { e.preventDefault(); redo(); }
     else if (mod && k.toLowerCase() === "a") { e.preventDefault(); S.sel = new Set(kept()); refreshAll({ keepVideo: true }); }
+    else if (mod && k.toLowerCase() === "j") { e.preventDefault(); combineScenes(); }
     else if (mod && k.toLowerCase() === "d") { e.preventDefault(); duplicateSelected(); }
     else if (mod && k.toLowerCase() === "b") { e.preventDefault(); splitAtPlayhead(); }
     else if (k.toLowerCase() === "s" && !mod) { e.preventDefault(); splitAtPlayhead(); }

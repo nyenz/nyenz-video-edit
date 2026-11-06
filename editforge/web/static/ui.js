@@ -53,6 +53,7 @@ const ICONS = {
   info: "M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0-18 0M12 16v-4M12 8h.01",
   warn: "M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01",
   clock: "M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0-18 0M12 7v5l3 3",
+  pulse: "M3 12h4l3-8 4 16 3-8h4",
   layers: "M12 2 2 7l10 5 10-5zM2 17l10 5 10-5M2 12l10 5 10-5",
   bookmark: "M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z",
   export: "M14 3h7v7M10 14 21 3M21 14v7H3V3h7",
@@ -180,12 +181,13 @@ function parseTime(text) {
 function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
 
 // ------------------------------------------------------------------ toasts
-function toast(text, bad) {
+function toast(text, bad, action) {
   let box = document.querySelector(".toasts");
   if (!box) { box = el("div", { class: "toasts", "aria-live": "polite" }); document.body.append(box); }
   const t = el("div", { class: "toast" + (bad ? " bad" : "") }, icon(bad ? "warn" : "check", "s"), el("span", { text }));
+  if (action) t.append(el("button", { type: "button", class: "toast-act", text: action[0], onclick: () => { t.remove(); action[1](); } }));
   box.append(t);
-  setTimeout(() => t.remove(), bad ? 6500 : 3200);
+  setTimeout(() => t.remove(), action ? 9000 : bad ? 6500 : 3200);
 }
 
 // ------------------------------------------------------------------ top bar (same on every page)
@@ -207,8 +209,8 @@ function topBar(active, extra) {
     el("a", { class: "brand", href: "/", title: "Home" }, el("img", { src: "/static/logo.svg", alt: "" }), el("span", { text: APP_NAME })),
     nav, el("div", { class: "grow" }), Update.pill());
   for (const x of extra || []) bar.append(x);
-  bar.append(exportsButton());
-  Exports.start();
+  bar.append(activityButton(), exportsButton());
+  Exports.start(); Activity.start();
   document.body.prepend(bar);
   return bar;
 }
@@ -537,6 +539,100 @@ const Exports = {
     this.timer = setInterval(() => { n++; if (this.busy || this.visible || n % 5 === 0 || document.hasFocus() && n % 3 === 0) this.refresh(); }, 1000);
   },
 };
+// ------------------------------------------------------------------ Activity: everything the app is working on, on every page
+/** The top-bar button shows how many things are being worked on, with one bar for all of them. The panel lists each
+ *  one with its own bar, the project it belongs to (click to go there) and Stop. A toast says when one is finished. */
+function activityButton() {
+  const b = el("button", { type: "button", class: "btn ghost act-btn", id: "activityBtn", title: "Everything the app is working on", onclick: () => Activity.show() },
+    icon("pulse", "s"), el("span", { class: "act-label", text: "Activity" }), el("span", { class: "count", id: "activityCount", hidden: true }),
+    el("span", { class: "act-bar", hidden: true }, el("i")));
+  return b;
+}
+const ACT_ICON = { scenes: "layers", clips: "scissors", export: "download", copy: "film", split: "music" };
+const Activity = {
+  items: [], busy: 0, visible: false, timer: null, seen: null, n: 0,
+  key(i) { return i.kind + "|" + (i.link || "") + "|" + i.title; },
+  async refresh() {
+    let data;
+    try { data = await api("/api/activity"); } catch (e) { return; }
+    const before = this.seen;
+    this.items = data.items; this.busy = data.busy;
+    // tell when something finished while you were looking at something else
+    const now = new Map(data.items.map((i) => [this.key(i), i]));
+    if (before) for (const [k, st] of before) {
+      const i = now.get(k);
+      if ((st === "running" || st === "queued") && i && (i.state === "done" || i.state === "failed") && !location.search.includes(i.project || "~"))
+        toast(i.title + ": " + i.what, i.state === "failed", i.link ? ["Open", () => { location.href = i.link; }] : null);
+    }
+    this.seen = new Map(data.items.map((i) => [this.key(i), i.state]));
+    this.paintButton();
+    if (this.visible) this.paint();
+    document.dispatchEvent(new CustomEvent("activity", { detail: data }));
+  },
+  paintButton() {
+    const c = $("activityCount"), b = $("activityBtn");
+    if (!b) return;
+    const run = this.items.filter((i) => i.state === "running" || i.state === "queued");
+    c.textContent = String(run.length); c.hidden = !run.length;
+    b.classList.toggle("busy", run.length > 0);
+    const bar = b.querySelector(".act-bar");
+    bar.hidden = !run.length;
+    if (run.length) bar.firstChild.style.width = Math.round(100 * run.reduce((a, i) => a + (i.progress || 0), 0) / run.length) + "%";
+    b.title = run.length ? run.map((i) => i.title + ": " + i.what + (i.state === "running" ? " " + Math.round((i.progress || 0) * 100) + "%" : "")).join("\n") : "Everything the app is working on";
+  },
+  row(i) {
+    const pct = Math.round((i.progress || 0) * 100);
+    const going = i.state === "running" || i.state === "queued";
+    let eta = "";
+    if (i.state === "running" && i.progress > 0.03 && i.since) { const el2 = Date.now() / 1000 - i.since, left = el2 * (1 - i.progress) / i.progress; if (left > 2 && left < 36000) eta = " · about " + fmtTime(left, 0) + " left"; }
+    const label = i.state === "running" ? pct + "%" : i.state === "queued" ? "Waiting" : i.state === "done" ? "Done" : "Failed";
+    const node = el("div", { class: "job act-row " + i.state + (i.link ? " link" : ""), title: i.link ? "Click to open" : "" },
+      el("div", { class: "hd" }, icon(ACT_ICON[i.kind] || "clock", "s"), el("b", { text: i.title }), el("span", { class: "st " + (i.state === "queued" ? "queued" : i.state), text: label })),
+      el("div", { class: "facts", text: i.what + eta }));
+    if (going) { const bar = el("div", { class: "prog" + (i.state === "queued" ? " wait" : "") }, el("i")); bar.firstChild.style.width = (i.state === "queued" ? 0 : pct) + "%"; node.append(bar); }
+    const acts = el("div", { class: "btns" });
+    if (i.link) acts.append(el("a", { class: "btn sm" + (i.state === "done" ? " primary" : ""), href: i.link }, icon("chevr", "s"), el("span", { text: "Open" })));
+    if (going && i.stop) acts.append(btn("Stop", { icon: "x", cls: "sm ghost", onclick: async (e) => { e.stopPropagation(); await api(i.stop, { method: "POST", json: {} }).catch((er) => toast(errText(er), true)); this.refresh(); } }));
+    if (going && i.job) acts.append(btn("Stop", { icon: "x", cls: "sm ghost", onclick: async (e) => { e.stopPropagation(); await api("/api/jobs/" + i.job + "/cancel", { method: "POST", json: {} }); this.refresh(); } }));
+    if (acts.childNodes.length) node.append(acts);
+    if (i.link) node.addEventListener("click", (e) => { if (!e.target.closest("button, a")) location.href = i.link; });
+    return node;
+  },
+  paint() {
+    const body = $("activityBody"); if (!body) return;
+    body.replaceChildren();
+    const groups = [["Working now", (i) => i.state === "running"], ["Waiting in line", (i) => i.state === "queued"], ["Finished (last 15 minutes)", (i) => i.state === "done" || i.state === "failed"]];
+    let any = false;
+    for (const [title, f] of groups) {
+      const list = this.items.filter(f); if (!list.length) continue;
+      any = true;
+      body.append(el("div", { class: "act-group" }, el("span", { text: title }), el("span", { class: "num", text: String(list.length) })));
+      for (const i of list) body.append(this.row(i));
+    }
+    if (!any) body.append(el("div", { class: "howto" }, el("b", { text: "Nothing is being worked on." }),
+      el("p", { class: "hint", text: "Slow work (separating scenes, making clips, exporting) shows here with its own bar. It goes on while you work on other projects: start it, then open something else." })));
+  },
+  show() {
+    if ($("activityDrawer")) return;
+    this.visible = true;
+    const close = () => { this.visible = false; scrim.remove(); drawer.remove(); document.removeEventListener("keydown", esc); };
+    const esc = (e) => { if (e.key === "Escape") close(); };
+    const scrim = el("div", { class: "scrim", onclick: close });
+    const drawer = el("aside", { class: "drawer", id: "activityDrawer", "aria-label": "Activity" },
+      el("div", { class: "side-h" }, el("h2", { text: "Activity" }), btn("", { icon: "x", cls: "ghost", title: "Close", onclick: close })),
+      el("div", { class: "body", id: "activityBody" }));
+    document.body.append(scrim, drawer);
+    document.addEventListener("keydown", esc);
+    this.paint(); this.refresh();
+  },
+  // every 2 seconds while something is being worked on or the panel is open; otherwise every 6 seconds
+  start() {
+    if (this.timer) return;
+    this.refresh();
+    this.timer = setInterval(() => { this.n++; if (this.busy || this.visible || this.n % 3 === 0) this.refresh(); }, 2000);
+  },
+};
+
 // ------------------------------------------------------------------ right-click menu (used on every page)
 /** Show a menu at the mouse. items: [label, icon, fn, {danger, off, why, key}] or "-" for a line. Esc, a click outside,
  *  scrolling or the window losing focus closes it. Arrow keys and Enter work too. */

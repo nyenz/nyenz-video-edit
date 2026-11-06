@@ -789,3 +789,49 @@ label.swl.inline { padding: 0; gap: 8px; font-size: 12.5px; }
 .multi-box { display: flex; flex-direction: column; gap: 10px; }
 .multi-box .list { max-height: 240px; overflow: auto; }
 .multi-box .list .item { cursor: default; }
+
+/* ---- Activity (top bar button + panel) ---- */
+.act-btn { position: relative; }
+.act-btn.busy { color: var(--ink); border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent-soft); }
+.act-btn.busy .ic { color: var(--accent); animation: actpulse 1.4s ease-in-out infinite; }
+@keyframes actpulse { 50% { opacity: .35; } }
+.act-btn .act-bar { position: absolute; left: 10px; right: 10px; bottom: 3px; height: 2px; border-radius: 2px; background: #2c303b; overflow: hidden; }
+.act-btn .act-bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .4s; }
+.act-group { display: flex; align-items: center; gap: 8px; margin: 6px 2px -2px; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.act-group .num { color: var(--faint); }
+.act-row.link { cursor: pointer; }
+.act-row.link:hover { border-color: var(--line); background: var(--sunk); }
+.act-row .st.queued { background: #2c303b; color: var(--muted); }
+.act-row .st.running { background: var(--accent-soft); color: var(--accent); }
+.act-row .st.failed { background: rgba(255, 90, 90, .14); color: #ff9a9a; }
+.prog.wait i { width: 30% !important; animation: actwait 1.6s linear infinite; opacity: .5; }
+@keyframes actwait { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+.toast-act { margin-left: 10px; height: 26px; padding: 0 12px; border: 0; border-radius: 6px; background: var(--accent); color: var(--accent-ink); font: 600 12px/1 var(--font); cursor: pointer; }
+
+/* ---- Home: choose several cards, background work on a card ---- */
+.pcard .pick-box { position: absolute; top: 8px; left: 8px; width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center;
+  background: rgba(10, 12, 16, .7); border: 1.5px solid rgba(255, 255, 255, .55); color: transparent; opacity: 0; transition: opacity .12s; z-index: 2; cursor: pointer; }
+.pcard:hover .pick-box, .pcard.picked .pick-box, .proj-grid:has(.picked) .pick-box { opacity: 1; }
+.pcard.picked .pick-box { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.pcard.picked .pthumb { box-shadow: 0 0 0 2px var(--accent); }
+.pcard .pick-box .ic { width: 14px; height: 14px; }
+.ptask { position: absolute; left: 6px; right: 6px; bottom: 6px; padding: 6px 8px; border-radius: 8px; background: rgba(10, 12, 16, .82);
+  backdrop-filter: blur(4px); display: flex; flex-direction: column; gap: 5px; font-size: 12px; font-weight: 600; color: var(--ink); z-index: 2; }
+.ptask.done { color: var(--green); }
+.ptask.failed { color: #ff9a9a; }
+.ptask .prog { height: 3px; }
+.pick-bar { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; padding: 8px 10px 8px 16px;
+  border-radius: 12px; background: var(--raised); border: 1px solid var(--line); box-shadow: 0 16px 40px rgba(0, 0, 0, .5); z-index: 40; }
+.pick-bar b { margin-right: 6px; }
+/* ---- Edit: scenes on the timeline ---- */
+.clipb.sc0::before, .clipb.sc1::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 4px; z-index: 2; background: #3ec7d9; pointer-events: none; }
+.clipb.sc1::before { background: #b38cff; }
+.clipb.sc-first { border-left: 2px solid rgba(255, 255, 255, .85); }
+.clipb .scene-tag { position: absolute; top: 5px; left: 5px; z-index: 3; padding: 2px 6px; border-radius: 5px; background: rgba(10, 12, 16, .78);
+  color: #fff; font: 600 11px/1.2 var(--font); white-space: nowrap; pointer-events: none; }
+.clipb.narrow .scene-tag { display: none; }
+.choose-seg { display: flex; align-items: center; margin-left: 4px; }
+.choose-seg .seg button { height: 28px; padding: 0 10px; font-size: 12px; }
+.linkbtn { border: 0; background: none; padding: 0 2px; color: var(--accent); font: inherit; font-weight: 600; cursor: pointer; text-decoration: none; }
+.linkbtn:hover { color: var(--ink); }
+body.is-waiting #laneV { opacity: .55; filter: saturate(.6); }

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import secrets
 import threading
@@ -140,17 +141,25 @@ class SceneFinder:
     """Finds the scene changes of a video once (in the background) and keeps them in <home>/scenes/<fingerprint>.json.
 
     Next to the list of changes it keeps a small picture fingerprint of every sampled frame (<fingerprint>.npz), so a
-    project can later compare the pictures on both sides of any join without reading the video again."""
+    project can later compare the pictures on both sides of any join without reading the video again.
+
+    Several videos can be asked for at once: they wait in a queue and SLOTS of them are looked at at the same time
+    (looking at a movie uses the whole computer). on_done(src) is called when one is finished (or failed)."""
 
     THRESHOLD = 0.3        # only used when numpy is missing (FFmpeg's own score)
     MIN_SCENE = 0.6
 
-    def __init__(self, folder: Path, fingerprint: Callable[[str], str]):
+    def __init__(self, folder: Path, fingerprint: Callable[[str], str], *, read_from: Optional[Callable[[str, float], Optional[str]]] = None,
+                 on_done: Optional[Callable[[str], None]] = None, slots: Optional[int] = None):
         self.folder = Path(folder)
         self.folder.mkdir(parents=True, exist_ok=True)
         self.fingerprint = fingerprint
+        self.read_from = read_from               # a smaller copy of the same video, quicker to read (None: the video itself)
+        self.on_done = on_done
         self._lock = threading.Lock()
         self._jobs: Dict[str, Dict[str, Any]] = {}
+        cpus = os.cpu_count() or 2
+        self._slots = threading.Semaphore(slots or (2 if cpus >= 8 else 1))
 
     def _file(self, src: str) -> Path:
         return self.folder / (self.fingerprint(src) + ".json")
@@ -164,9 +173,18 @@ class SceneFinder:
         except (OSError, ValueError, KeyError, TypeError):
             pass
         with self._lock:
-            job = dict(self._jobs.get(str(f)) or {"state": "none", "progress": 0.0, "error": ""})
-        job["scenes"] = []
-        return job
+            job = self._jobs.get(str(f))
+            out = {k: v for k, v in job.items() if k != "cancel"} if job else {"state": "none", "progress": 0.0, "error": ""}
+            if out.get("state") == "queued":
+                waiting = sorted((j["since"], k) for k, j in self._jobs.items() if j.get("state") == "queued")
+                out["place"] = 1 + [k for _, k in waiting].index(str(f))
+        out["scenes"] = []
+        return out
+
+    def jobs(self) -> List[Dict[str, Any]]:
+        """Every video being looked at or waiting (for the Activity list)."""
+        with self._lock:
+            return [{k: v for k, v in j.items() if k != "cancel"} for j in self._jobs.values() if j.get("state") in ("queued", "running")]
 
     def features(self, src: str) -> Any:
         """The saved picture fingerprints (None when there are none: numpy missing, or not found yet)."""
@@ -182,25 +200,64 @@ class SceneFinder:
         if not has_video:
             raise EditForgeError("This file has no picture, so it has no scenes.", "Choose a video.")
         st = self.status(src)
-        if st["state"] in ("ready", "running"):
+        if st["state"] in ("ready", "running", "queued"):
             return st
         f = self._file(src)
         with self._lock:
-            self._jobs[str(f)] = {"state": "running", "progress": 0.0, "error": ""}
+            self._jobs[str(f)] = {"state": "queued", "progress": 0.0, "error": "", "since": time.time(), "src": src,
+                                  "name": Path(src).name, "duration": duration, "cancel": threading.Event()}
         threading.Thread(target=self._run, args=(src, duration, f), name="editforge-scenes", daemon=True).start()
         return self.status(src)
+
+    def stop(self, src: str) -> bool:
+        """Stop looking at this video (or take it out of the queue)."""
+        f = self._file(src)
+        with self._lock:
+            job = self._jobs.get(str(f))
+            if not job or job.get("state") not in ("queued", "running"):
+                return False
+            job["cancel"].set()
+            job["state"] = "stopped"
+            return True
 
     def _run(self, src: str, duration: float, f: Path) -> None:
         from .analysis import shots
         from .core.cache import atomic_write_json
+        from .core.errors import Cancelled
+        key = str(f)
+        with self._lock:
+            job = self._jobs[key]
+            cancel = job["cancel"]
 
-        def prog(k: float) -> None:
-            with self._lock:
-                self._jobs[str(f)]["progress"] = round(min(0.99, k), 3)
+        def mine() -> bool:                       # a stopped job may have been started again meanwhile: that one is not ours
+            return self._jobs.get(key) is job
+        self._slots.acquire()
         try:
+            if cancel.is_set():
+                raise Cancelled()
+            with self._lock:
+                job.update(state="running", started=time.time())
+
+            def prog(k: float) -> None:
+                with self._lock:
+                    job["progress"] = round(min(0.99, k), 3)
             if shots.available():
-                feats = shots.extract_features(src, duration, progress=lambda t: prog(0.85 * t / max(duration, 0.1)))
-                cuts = shots.refine_all(src, shots.find_cuts(feats), progress=lambda k: prog(0.85 + 0.14 * k))
+                quick = None
+                if self.read_from:
+                    try:
+                        quick = self.read_from(src, duration)
+                    except Exception:  # noqa: BLE001 - then the video itself
+                        quick = None
+                try:
+                    feats, fine = shots.extract_all(src, duration, read_from=quick, cancel=cancel,
+                                                    progress=lambda t: prog(0.97 * t / max(duration, 0.1)))
+                except Cancelled:
+                    raise
+                except Exception:                         # noqa: BLE001 - the smaller copy could not be read: the video itself
+                    if not quick:
+                        raise
+                    feats, fine = shots.extract_all(src, duration, cancel=cancel, progress=lambda t: prog(0.97 * t / max(duration, 0.1)))
+                cuts = shots.refine_fine(shots.find_cuts(feats), fine)
                 import numpy as np
                 tmp = f.with_suffix(".tmp.npz")
                 np.savez_compressed(str(tmp), fps=feats.fps, thumbs=feats.thumbs, hist=feats.hist)
@@ -213,10 +270,25 @@ class SceneFinder:
                 scenes = scenes_from_scores(scores, self.THRESHOLD, self.MIN_SCENE, duration)
                 atomic_write_json(f, {"v": SCENE_VERSION, "scenes": scenes, "kinds": [], "duration": duration, "when": time.time()})
             with self._lock:
-                self._jobs.pop(str(f), None)
+                if mine():
+                    self._jobs.pop(key, None)
+        except Cancelled:
+            with self._lock:
+                if mine():
+                    self._jobs.pop(key, None)
+            return
         except Exception as exc:  # noqa: BLE001 - shown to the person
             with self._lock:
-                self._jobs[str(f)] = {"state": "failed", "progress": 0.0, "error": getattr(exc, "message", None) or str(exc)}
+                if mine():
+                    self._jobs[key] = {"state": "failed", "progress": 0.0, "error": getattr(exc, "message", None) or str(exc),
+                                   "since": time.time(), "src": src, "name": Path(src).name, "cancel": threading.Event()}
+        finally:
+            self._slots.release()
+        if self.on_done:
+            try:
+                self.on_done(src)
+            except Exception:  # noqa: BLE001 - a project that cannot be updated must not stop the finder
+                pass
 
 
 def scene_ranges(bounds: List[float], duration: float) -> List[Tuple[float, float]]:
