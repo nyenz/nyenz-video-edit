@@ -75,10 +75,10 @@ def test_the_three_buttons_in_order(live, page, movie_id):
     page.wait_for_function("() => S.proj.steps.length === 1", timeout=20000)
     # 3: separate scenes in the video as it is now: the movie has 9 colours
     page.click("#secScenes")
-    page.wait_for_function("() => /scenes? found/.test(document.getElementById('secNote').textContent)", timeout=90000)
+    page.wait_for_function("() => /scenes? separated/.test(document.getElementById('secNote').textContent)", timeout=90000)
     scenes = page.evaluate("() => new Set(kept().map(p => p.unit)).size")
     assert scenes == 9
-    assert "9 scenes found" in page.inner_text("#secNote")
+    assert "9 scenes separated" in page.inner_text("#secNote")
     assert "done" in page.get_attribute("#secScenes", "class") and "9 scenes" in page.inner_text("#secScenes")
     # the work is saved: reload and it is all still there
     page.evaluate("() => saveNow()")

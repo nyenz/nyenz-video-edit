@@ -463,7 +463,10 @@ async function sceneStatus(start) {
     const st = start ? await api("/api/scenes", { method: "POST", json: { id: C.cs.source } }) : await api("/api/scenes?id=" + encodeURIComponent(C.cs.source));
     C.sceneState = st.state;
     if (st.state === "ready") { C.scenes = st.scenes; $("sceneLabel").textContent = st.scenes.length + 1 + " scenes"; $("sceneBtn").disabled = true; renderLane(); }
-    else if (st.state === "running") { $("sceneLabel").textContent = "Finding scenes… " + Math.round(st.progress * 100) + "%"; $("sceneBtn").disabled = true; setTimeout(() => sceneStatus(false), 1000); }
+    else if (st.state === "running" || st.state === "queued") {
+      $("sceneLabel").textContent = st.state === "queued" ? "Waiting (" + (st.place || 1) + " in line)…" : "Finding scenes… " + Math.round(st.progress * 100) + "%";
+      $("sceneBtn").disabled = true; setTimeout(() => sceneStatus(false), 1000);
+    }
     else if (st.state === "failed") { $("sceneLabel").textContent = "Find scenes"; $("sceneBtn").disabled = false; toast("Scenes could not be found: " + st.error, true); }
     else { $("sceneLabel").textContent = "Find scenes"; $("sceneBtn").disabled = false; }
   } catch (e) { toast(errText(e), true); }

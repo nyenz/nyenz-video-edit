@@ -108,10 +108,8 @@ def _summarise(block: Any) -> Tuple[Any, Any]:
     small = f.reshape(n, TH, H // TH, TW, W // TW, 3).mean(axis=(2, 4))
     q = (block.astype(np.int32) * BINS) // 256
     idx = (q[..., 0] * BINS + q[..., 1]) * BINS + q[..., 2]
-    hist = np.zeros((n, BINS ** 3), dtype=np.float32)
-    flat = idx.reshape(n, -1)
-    for i in range(n):
-        hist[i] = np.bincount(flat[i], minlength=BINS ** 3)
+    flat = idx.reshape(n, -1) + (np.arange(n, dtype=np.int64) * BINS ** 3)[:, None]     # all frames in one count
+    hist = np.bincount(flat.ravel(), minlength=n * BINS ** 3).reshape(n, BINS ** 3).astype(np.float32)
     hist /= float(H * W)
     return np.rint(small).astype(np.uint8).reshape(n, -1), hist
 
@@ -133,6 +131,102 @@ def extract_features(path: str, duration: float, *, fps: float = FPS, cancel: Op
     if not thumbs:
         raise FeatureUnavailable("No picture could be read from this video.", "Choose a video that has a picture.")
     return Features(fps, np.concatenate(thumbs), np.concatenate(hists))
+
+
+def _native_rate(path: str) -> float:
+    """The video's own frame rate (kept at most 31: a 60 fps video is read at 30)."""
+    try:
+        from ..core.media import probe_media
+        r = float(probe_media(path).fps or 0)
+    except Exception:  # noqa: BLE001 - unknown: a common rate
+        r = 0.0
+    if not (5.0 <= r <= 240.0):
+        r = 24.0
+    while r > 31.0:
+        r /= 2.0
+    return r
+
+
+@dataclass
+class Fine:
+    """How much the picture jumps from every frame to the next, at the video's own frame rate. With it the exact frame
+    of a hard cut is known without reading the video again (that took about a quarter of a second for every cut)."""
+    rate: float
+    jump: Any                # (N-1,) float32: frame j -> j+1
+
+
+def extract_all(path: str, duration: float, *, read_from: Optional[str] = None, fps: float = FPS,
+                cancel: Optional[threading.Event] = None, progress: Optional[Callable[[float], None]] = None) -> Tuple[Features, Fine]:
+    """One pass over the video: every frame is looked at (for the exact frame of cuts), and 12 frames a second are kept
+    as picture fingerprints (for finding the scenes). read_from: a smaller copy of the same video to read instead
+    (much quicker; it has the same frames at the same times)."""
+    import numpy as np
+    if not available():
+        raise FeatureUnavailable("Finding scenes needs the 'numpy' add-on.", "Install it with:  pip install numpy")
+    src = read_from or path
+    rate = _native_rate(src)
+    args = [get_tools().ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-hwaccel", "auto", "-i", src, "-map", "0:v:0", "-an",
+            "-vf", f"fps={rate:.6f},scale={W}:{H}:flags=area,format=rgb24", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
+    thumbs: List[Any] = []
+    hists: List[Any] = []
+    jumps: List[Any] = []
+    prev = None
+    j0 = 0                                   # native index of the first frame of this block
+    m = 0                                    # next 12-a-second frame to keep
+    for block in _tiny_frames(args, int(duration * rate), cancel, (lambda n: progress(n / rate)) if progress else None):
+        n = block.shape[0]
+        t_all, h_all = _summarise(block)                   # every frame (the same measure the exact-frame look used)
+        if prev is not None:
+            t_all, h_all = np.vstack([prev[0][None, :], t_all]), np.vstack([prev[1][None, :], h_all])
+        jumps.append(_dist(t_all[:-1], h_all[:-1], t_all[1:], h_all[1:]).astype(np.float32))
+        prev = (t_all[-1], h_all[-1])
+        keep = []
+        while True:
+            j = int(round(m * rate / fps))
+            if j >= j0 + n:
+                break
+            keep.append(j - j0)
+            m += 1
+        if keep:
+            off = 0 if j0 == 0 else 1                       # t_all has the last frame of the previous block in front
+            sel = np.asarray(keep) + off
+            thumbs.append(t_all[sel])
+            hists.append(h_all[sel])
+        j0 += n
+    if not thumbs:
+        raise FeatureUnavailable("No picture could be read from this video.", "Choose a video that has a picture.")
+    jump = np.concatenate(jumps) if jumps else np.zeros(0, dtype=np.float32)
+    return Features(fps, np.concatenate(thumbs), np.concatenate(hists)), Fine(rate, jump)
+
+
+def refine_fine(cuts: Sequence[Cut], fine: Fine, radius: float = 0.3) -> List[Cut]:
+    """The exact frame of every hard cut: the biggest jump between two frames close to the rough time. Other kinds of
+    change keep their time. Two cuts that land on the same frame become one."""
+    import numpy as np
+    out: List[Cut] = []
+    J, R = fine.jump, fine.rate
+    for c in cuts:
+        t = c.t
+        if c.kind == "cut" and len(J):
+            lo = max(0, int(np.floor((t - radius) * R)))
+            hi = min(len(J) - 1, int(np.ceil((t + radius) * R)))
+            if hi > lo:
+                idx = np.arange(lo, hi + 1)
+                mids = (idx + 0.5) / R
+                score = J[lo: hi + 1] - 0.02 * np.abs(mids - t)
+                b = int(idx[int(np.argmax(score))])
+                if J[b] >= HARD_MIN * 0.8:
+                    t = round((b + 0.5) / R, 4)
+        out.append(Cut(round(t, 4), c.kind, c.score, c.frame, c.span))
+    out.sort(key=lambda c: c.t)
+    merged: List[Cut] = []
+    for c in out:
+        if merged and c.t - merged[-1].t < MIN_SCENE:
+            if c.score > merged[-1].score:
+                merged[-1] = c
+            continue
+        merged.append(c)
+    return merged
 
 
 # ------------------------------------------------------------------------------------------------ distances

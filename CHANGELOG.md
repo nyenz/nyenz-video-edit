@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.16.0
+* **Work on several projects at once.** Slow work goes on in the background while you open other projects:
+  * **Activity** (top right, on every page) lists everything the app is working on, each with its own bar and time left:
+    separating scenes, making clips, exporting, light copies, splitting sound. Click one to open its project; **Stop** stops it.
+    A message tells you when something is finished, with an **Open** button.
+  * Home cards show the bar too ("Separating scenes 45%", "Waiting · 2 in line", "9 scenes separated").
+* **Separate scenes in many projects at once:** on Home, hold **Ctrl** and click Edit projects (Shift + click: all in between,
+  Ctrl + A: all), then **Separate scenes** in the bar at the bottom (or right-click). They wait in line and are done one after another.
+  * The result is put into each project even when its page is closed (and also after the app is closed and opened again).
+  * Undo on the Edit page still brings back the cut from before.
+* **Separating scenes is quicker:** every picture is read once (the exact frame of each cut no longer needs a second look, which
+  took a quarter of a second for every cut), and when a light copy exists it is read instead of the full movie (about 3× quicker).
+* **Edit whole scenes on the timeline:** after Separate scenes, a click chooses a whole scene (labelled Scene 1, 2, …).
+  * **Ctrl + click** more scenes, **Shift + click** all in between. **Combine** (Ctrl + J) makes them one scene, **Delete** removes them,
+    **drag** to move them, **Split** (S) starts a new scene at the playhead, **Duplicate** (Ctrl + D). Right-click for all of it.
+  * Switch **Scenes / Sections** on the timeline bar to choose single sections again.
+
 ## 1.15.2
 * **Deleting a project now frees its space at once.** When you delete a project for good (Trash → Delete forever, or Empty trash)
   and no other project uses that movie, the app's own copies of it are deleted right away: the light copy (often GBs for a long movie),

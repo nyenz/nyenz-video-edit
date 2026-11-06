@@ -283,7 +283,7 @@ def clean_project(raw: Any, duration: float) -> Dict[str, Any]:
 
 STAGES = ("edit", "final")
 _PARENT = re.compile(r"^[0-9a-f]{12}$")
-META_KEYS = ("stage", "parent", "version")
+META_KEYS = ("stage", "parent", "version", "task", "task_done")     # task: work the app does for it in the background
 
 
 def clean_meta(raw: Any) -> Dict[str, str]:
@@ -321,7 +321,10 @@ def clean_rule(raw: Any) -> Optional[Dict[str, Any]]:
     except (TypeError, ValueError):
         return None
     action = raw.get("action") if raw.get("action") in ("remove", "keep") else ""
-    return {"interval": interval, "group": group, "picks": picks if action else [], "action": action, "hand": bool(raw.get("hand"))}
+    out = {"interval": interval, "group": group, "picks": picks if action else [], "action": action, "hand": bool(raw.get("hand"))}
+    if raw.get("scenes"):
+        out["scenes"] = True                     # the sections are scenes (Separate scenes): the page chooses whole scenes
+    return out
 
 
 def out_len(p: Dict[str, Any]) -> float:

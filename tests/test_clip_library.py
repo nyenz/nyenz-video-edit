@@ -46,6 +46,10 @@ def test_made_clips_stay_after_the_clip_project_is_deleted(web, media):
     assert set(lib) == {"Fight", "Chase"}
     assert all(x["clipset"] == cid and x["current"] and not x["in_use"] and x["size"] > 0 and x["length"] > 0.5 for x in lib.values())
     assert lib["Fight"]["movie"]
+    # Activity shows the clip project's making as one item (finished now)
+    act = [i for i in c.json("GET", "/api/activity")[1]["items"] if i["kind"] == "clips"]
+    assert len(act) == 1 and act[0]["title"] == "Movie" and act[0]["state"] == "done" and "2 clips made" in act[0]["what"]
+    assert act[0]["link"] == f"/clips?c={cid}"
     # trash, then delete the clip project for good: the clips are still there, and still play
     c.json("POST", f"/api/clipsets/{cid}/trash", {})
     assert library(c)["Fight"]["clipset_trashed"]

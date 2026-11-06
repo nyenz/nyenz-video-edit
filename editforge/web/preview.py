@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -80,7 +81,7 @@ class PreviewMaker:
         with self._lock:
             if self._jobs.get(str(out), {}).get("state") == "running":
                 return dict(self._jobs[str(out)])
-            self._jobs[str(out)] = {"state": "running", "progress": 0.0, "error": ""}
+            self._jobs[str(out)] = {"state": "running", "progress": 0.0, "error": "", "name": Path(source).name, "since": time.time()}
         threading.Thread(target=self._both, args=(source, out, info.duration, info.has_audio, quick), name="editforge-preview", daemon=True).start()
         return {"state": "running", "progress": 0.0, "error": ""}
 

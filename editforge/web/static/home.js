@@ -6,7 +6,8 @@ const PHASES = [
   ["edit", "Edit", "layers", "Versions, sections and scenes"],
   ["final", "Final", "check", "Sound, picture and export"],
 ];
-const H = { phase: "clips", clipsets: [], projects: [], final: [], library: [], trash: false, view: "grid", q: "", sub: "projects", lib: "all" };
+const H = { phase: "clips", clipsets: [], projects: [], final: [], library: [], trash: false, view: "grid", q: "", sub: "projects", lib: "all",
+  pick: new Set(), anchor: "" };                // pick: cards chosen together (Ctrl / Shift + click)
 try {
   if (localStorage.getItem("ef.home.sub") === "made") H.sub = "made";
   H.view = localStorage.getItem("ef.home.view") === "list" ? "list" : "grid";
@@ -69,6 +70,9 @@ function renderSub() {
   }
 }
 function render() {
+  const view = H.phase + H.sub + H.trash;
+  if (H.pickView !== view) { H.pick.clear(); H.pickView = view; }
+  $("pickBar").hidden = true;
   renderPhases();
   renderSub();
   const final = H.phase === "final", made = madeView();
@@ -106,6 +110,9 @@ function render() {
     return;
   }
   for (const p of list) grid.append(H.phase === "clips" ? clipCard(p) : p.job ? finalCard(p) : card(p));
+  const ids = new Set(list.map((x) => x.id));
+  for (const id of [...H.pick]) if (!ids.has(id)) H.pick.delete(id);
+  paintPicks();
 }
 function thumbBox(missing, extraCls) { return el("div", { class: "pthumb" + (missing ? " missing" : "") + (extraCls ? " " + extraCls : "") }); }
 function addImg(pic, url) {
@@ -117,13 +124,85 @@ function cardShell(p, pic, lines, open, title, items) {
   const list = items || (() => menuItems(p));
   const more = btn("", { icon: "more", cls: "ghost more", title: "More (or right-click the card)", onclick: (e) => { e.stopPropagation(); menuAt(more, list()); } });
   pic.append(more);
-  const node = el("div", { class: "pcard" + (p.missing && !p.freed ? " is-missing" : ""), tabindex: "0", role: "button", title: title || "", "aria-label": p.name },
+  const pickable = !p.job && !madeView();
+  const node = el("div", { class: "pcard" + (p.missing && !p.freed ? " is-missing" : "") + (H.pick.has(p.id) ? " picked" : ""), tabindex: "0", role: "button",
+    title: (title || "") + (pickable ? "\nCtrl + click: choose more than one" : ""), "aria-label": p.name, "data-id": p.id || "" },
     pic, el("div", { class: "pinfo" }, el("b", { class: "ellip", text: p.name }), ...lines));
-  node.addEventListener("click", open);
+  if (pickable) pic.append(el("span", { class: "pick-box", "aria-hidden": "true" }, icon("check", "s")));
+  node.addEventListener("click", (e) => {
+    if (pickable && (e.ctrlKey || e.metaKey || e.shiftKey || (H.pick.size && e.target.closest(".pick-box")))) { e.preventDefault(); pickCard(p, e); return; }
+    if (pickable && e.target.closest(".pick-box")) { pickCard(p, { ctrlKey: true }); return; }
+    open();
+  });
   node.addEventListener("keydown", (e) => { if (e.key === "Enter") open(); else if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) { e.preventDefault(); menuAt(more, list()); } });
   onRightClick(node, list);
   return node;
 }
+// ------------------------------------------------------------------ choosing several cards (Ctrl / Shift + click)
+function pickCard(p, e) {
+  if (e.shiftKey && H.anchor) {
+    const ids = shown().map((x) => x.id), a = ids.indexOf(H.anchor), b = ids.indexOf(p.id);
+    if (a >= 0 && b >= 0) { for (let k = Math.min(a, b); k <= Math.max(a, b); k++) H.pick.add(ids[k]); paintPicks(); return; }
+  }
+  if (H.pick.has(p.id)) H.pick.delete(p.id); else H.pick.add(p.id);
+  H.anchor = p.id; paintPicks();
+}
+function picked() { return shown().filter((x) => H.pick.has(x.id)); }
+function paintPicks() {
+  for (const n of document.querySelectorAll("#grid .pcard")) n.classList.toggle("picked", H.pick.has(n.dataset.id));
+  const bar = $("pickBar"), list = picked();
+  bar.hidden = !list.length;
+  if (!list.length) return;
+  bar.replaceChildren(el("b", { class: "num", text: list.length + " chosen" }));
+  const edit = H.phase === "edit" && !H.trash;
+  if (edit) bar.append(btn("Separate scenes", { icon: "layers", cls: "primary", title: "Find and separate the scenes of every chosen project. They wait in line and go on while you work.", onclick: () => scenesFor(list) }));
+  if (H.trash) bar.append(btn("Restore", { icon: "restore", onclick: () => manyDo(list, "restore") }));
+  else bar.append(btn("Move to trash", { icon: "trash", onclick: () => manyDo(list, "trash") }));
+  bar.append(btn("Clear", { icon: "x", cls: "ghost", title: "Esc", onclick: () => { H.pick.clear(); paintPicks(); } }));
+}
+async function manyDo(list, what) {
+  const base = H.phase === "clips" ? "/api/clipsets/" : "/api/projects/";
+  for (const p of list) await api(base + p.id + "/" + what, { method: "POST", json: {} }).catch((e) => toast(errText(e), true));
+  toast((what === "trash" ? "Moved " : "Brought back ") + list.length + " project" + (list.length > 1 ? "s" : "") + (what === "trash" ? " to the trash." : "."));
+  H.pick.clear(); loadAll();
+}
+/** Separate scenes in one or more Edit projects. The app does them one after another; you can open other projects meanwhile. */
+async function scenesFor(list) {
+  let ok = 0;
+  for (const p of list) {
+    try { await api("/api/projects/" + p.id + "/scenes", { method: "POST", json: {} }); ok++; } catch (e) { toast(p.name + ": " + errText(e), true); }
+  }
+  if (ok) toast(ok === 1 ? "Separating the scenes of '" + list[0].name + "'. See Activity (top right) for how far it is." : "Separating the scenes of " + ok + " projects, one after another. See Activity (top right).");
+  H.pick.clear(); await loadAll(); Activity.refresh();
+}
+/** A project's background work, on its card: a bar while it runs, a tag when it is done. */
+function taskBadge(t) {
+  if (!t || t.state === "none") return null;
+  const box = el("div", { class: "ptask " + t.state });
+  const pct = Math.round((t.progress || 0) * 100);
+  const text = t.state === "running" ? "Separating scenes " + pct + "%" : t.state === "queued" ? "Waiting to separate scenes" + (t.place ? " · " + t.place + " in line" : "")
+    : t.state === "done" ? (t.seen ? "" : t.scenes + " scenes separated") : "Scenes failed";
+  if (!text) return null;
+  box.append(el("span", { text }));
+  if (t.state === "running" || t.state === "queued") { const bar = el("div", { class: "prog" + (t.state === "queued" ? " wait" : "") }, el("i")); bar.firstChild.style.width = (t.state === "queued" ? 0 : pct) + "%"; box.append(bar); }
+  return box;
+}
+/** The Activity list changed: move the bars on the cards, and load again when one finished. */
+let lastTaskSig = "";
+document.addEventListener("activity", (e) => {
+  const items = e.detail.items.filter((i) => i.kind === "scenes" && i.project);
+  const sig = items.map((i) => i.project + i.state).join();
+  if (lastTaskSig && sig !== lastTaskSig) { lastTaskSig = sig; loadAll(); return; }
+  lastTaskSig = sig;
+  for (const i of items) {
+    const p = H.projects.find((x) => x.id === i.project);
+    if (!p || !p.task || (i.state !== "running" && i.state !== "queued")) continue;
+    p.task.progress = i.progress; p.task.state = i.state;
+    const node = document.querySelector('#grid .pcard[data-id="' + i.project + '"] .ptask');
+    if (node) node.replaceWith(taskBadge(p.task));
+  }
+});
+
 /** Stage 1 result: one made clip. It stays here when its clip project is deleted. */
 function madeCard(c) {
   const pic = thumbBox(false);
@@ -181,6 +260,8 @@ function card(p) {
   else pic.append(icon("music", "l"));
   if (p.version) pic.append(el("span", { class: "chip-tag top", text: p.version.charAt(0).toUpperCase() + p.version.slice(1) }));
   if (p.steps) pic.append(el("span", { class: "chip-tag", text: (p.steps + 1) + " steps" }));
+  const tb = taskBadge(p.task);
+  if (tb) pic.append(tb);
   const edited = "Edited: " + fmtTime(p.length, 0) + " · " + p.pieces + " pieces" + (p.where ? "\n" + (p.linked ? "Used where it is: " : "Copy: ") + p.where : "");
   const open = () => { if (H.trash) return; if (p.missing) relink(p); else location.href = pageOf(p); };
   return cardShell(p, pic, [el("small", { class: "num", text: meta }),
@@ -225,7 +306,18 @@ function menuItems(p) {
     return [["Open", "scissors", () => { location.href = "/clips?c=" + p.id; }], ["Rename", "edit", () => rename(base, p)],
       ["Move to trash", "trash", () => act(base, p, "trash")]];
   }
-  return [["Open", "layers", () => { if (p.missing) relink(p); else location.href = pageOf(p); }], ["Rename", "edit", () => rename(base, p)],
+  const group = picked();
+  if (group.length > 1 && H.pick.has(p.id)) {
+    return [stageOf(p) === "edit" ? ["Separate scenes in " + group.length + " projects", "layers", () => scenesFor(group)] : null,
+      ["Move " + group.length + " to the trash", "trash", () => manyDo(group, "trash")], "-",
+      ["Clear the choice", "x", () => { H.pick.clear(); paintPicks(); }, { key: "Esc" }]];
+  }
+  const busy = p.task && (p.task.state === "running" || p.task.state === "queued");
+  return [["Open", "layers", () => { if (p.missing) relink(p); else location.href = pageOf(p); }],
+    stageOf(p) === "edit" && !p.missing ? (busy ? ["Stop separating scenes", "x", async () => { await api("/api/projects/" + p.id + "/scenes-stop", { method: "POST", json: {} }); loadAll(); Activity.refresh(); }]
+      : ["Separate scenes", "layers", () => scenesFor([p])]) : null,
+    ["Choose more (Ctrl + click)", "check", () => { H.pick.add(p.id); H.anchor = p.id; paintPicks(); }],
+    "-", ["Rename", "edit", () => rename(base, p)],
     ["Duplicate", "copy", () => act(base, p, "duplicate")], ["Move to trash", "trash", () => act(base, p, "trash")]];
 }
 async function act(base, p, what) {
@@ -336,10 +428,18 @@ async function storagePanel() {
       onclick: (e) => { e.preventDefault(); H.phase = "clips"; H.sub = "made"; H.trash = false; try { localStorage.setItem("ef.home.phase", "clips"); localStorage.setItem("ef.home.sub", "made"); } catch (er) { /* off */ } render(); } },
       icon("film"), el("span", { text: "Made clips" })));
   }
-  $("homeTop").append(el("span", { class: "grow" }), Update.pill(), exportsButton());
-  Exports.start();
+  $("homeTop").append(el("span", { class: "grow" }), Update.pill(), activityButton(), exportsButton());
+  Exports.start(); Activity.start();
   Exports.onFiles = () => loadAll();
   paintIcons();
+  document.addEventListener("keydown", (e) => {
+    const tag = (e.target.tagName || "").toLowerCase();
+    if (tag === "input" || tag === "textarea" || document.querySelector(".dialog")) return;
+    if (e.key === "Escape" && H.pick.size) { H.pick.clear(); paintPicks(); }
+    else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a" && !madeView()) {
+      e.preventDefault(); for (const x of shown()) if (!x.job) H.pick.add(x.id); paintPicks();
+    }
+  });
   const create = $("create");
   create.addEventListener("click", () => createProject());
   create.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); createProject(); } });
