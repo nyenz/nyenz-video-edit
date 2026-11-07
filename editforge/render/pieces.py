@@ -169,7 +169,7 @@ def build_piece_command(job: PieceJob, ctx: RenderContext) -> BuiltCommand:
             vlabels.append(b.video_chain(g, f"{k * b.stride}:v:0", it))
         if want_a:
             m = samples_at(it.g0 + it.n, F, ctx.sr) - samples_at(it.g0, F, ctx.sr)
-            alabels.append(b.audio_chain(g, b.audio_input(g, k), it, m if job.kind == "clips" else job.a_samples))
+            alabels.append(b.audio_chain(g, b.audio_input(g, k, it.seg), it, m if job.kind == "clips" else job.a_samples))
     vcur = acur = None
     if job.kind == "join":
         assert job.join is not None
@@ -274,7 +274,7 @@ def build_copy_audio_command(job: PieceJob, ctx: RenderContext, samples: int) ->
     it = job.items[0]
     a, length = b.source_window(it)
     args = ["-y"] + b.input_args(it, ctx.src, 1, extra=1.0)
-    lab = b.audio_chain(g, b.audio_input(g, 0), it, samples)
+    lab = b.audio_chain(g, b.audio_input(g, 0, it.seg), it, samples)
     gname = f"g{job.index}_{job.key[:8]}.txt"
     files = {gname: g.text()}
     outp = ["-map", f"[{lab}]", "-c:a", "pcm_s16le", "-ar", str(ctx.sr), "-ac", "1" if ctx.layout == "mono" else "2",

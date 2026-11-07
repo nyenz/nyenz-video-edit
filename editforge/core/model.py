@@ -119,6 +119,7 @@ class Segment:
     lines: List[int] = field(default_factory=list)
     rev_group: int = -1
     place: Optional[Dict[str, float]] = None  # this piece's own position of the video layer (x, y, scale, rotate), over the frame's
+    layer_gain: Optional[Dict[str, float]] = None  # this piece's own loudness of the split sound layers (voices / music / effects)
 
     @property
     def speed(self) -> float:

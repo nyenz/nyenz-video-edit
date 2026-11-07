@@ -12,7 +12,9 @@ const Layers = (() => {
 
   const st = () => S.proj.settings;
   const gainOf = (n) => { const v = st()["mix_" + n]; return v === undefined ? 1 : +v; };
-  const changed = () => NAMES.some((n) => Math.abs(gainOf(n) - 1) > 0.001);
+  /** A piece's own loudness of a layer (1 = as the slider says; 0 = muted). */
+  const ownGain = (p, n) => { const m = p && p.mix && p.mix[n]; return m ? (m.mute ? 0 : +m.volume) : 1; };
+  const changed = () => NAMES.some((n) => Math.abs(gainOf(n) - 1) > 0.001) || (S.proj && S.proj.pieces.some((p) => !p.off && p.mix && Object.keys(p.mix).length));
 
   /** The part of the video to split: what the pieces use (plus a little margin), or everything. */
   function range() {
@@ -134,6 +136,7 @@ const Layers = (() => {
       L.info = await api("/api/split?id=" + encodeURIComponent(S.proj.source) + "&start=" + a.toFixed(3) + "&end=" + b.toFixed(3));
     } catch (e) { L.info = null; return; }
     const sp = L.info.split;
+    document.dispatchEvent(new CustomEvent("layers-info"));
     if (sp && st().mix_split !== sp.id && !(st().mix_split && L.info.job && L.info.job.state === "running")) {
       st().mix_split = sp.id; scheduleSave();               // a finished split of this video is attached to the project by itself
     }
@@ -177,7 +180,7 @@ const Layers = (() => {
     if (!L.gains) return;
     const p = piece || (typeof V !== "undefined" && V.seg && V.seg.p);
     const f = S.mutedAll || (p && p.mute) || !st().original_sound ? 0 : (p ? Math.max(0, p.volume) : 1);
-    L.gains[n].gain.value = Math.max(0, v) * f;
+    L.gains[n].gain.value = Math.max(0, v) * f * ownGain(p, n);
   }
   function gainsNow(p) { for (const n of NAMES) setGain(n, gainOf(n), p); }
   function on() { return usable(); }
@@ -227,5 +230,7 @@ const Layers = (() => {
   }
   /** What the live sound is doing (for the tests). */
   const state = () => (L.els ? Object.fromEntries(NAMES.map((n) => [n, { paused: L.els[n].paused, time: L.els[n].currentTime, gain: L.gains[n].gain.value, rate: L.els[n].playbackRate }])) : null);
-  return { init, open: refresh, play, pause, follow, apply, on, paint, state };
+  /** The split attached to this project ({id, start, end}), or null. */
+  const split = () => (S.proj && L.info && L.info.split && st().mix_split === L.info.split.id ? L.info.split : null);
+  return { init, open: refresh, play, pause, follow, apply, on, paint, state, split, NAMES, TITLE, ICON, gainOf, ownGain };
 })();

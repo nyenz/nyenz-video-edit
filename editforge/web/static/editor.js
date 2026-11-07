@@ -182,6 +182,7 @@ function lockedNote(kind) {
 function refreshAll(opts) {
   S.sel = new Set([...S.sel].filter((p) => !p.off && cur().includes(p)));
   renderTimeline(); renderInspector(); renderLengths(); renderSteps(); renderStepbar(); if (S.mode === "edit") renderChoose();
+  if (S.mode === "final" && Frame.editing) { const sig = selList().length + ":" + placeScopeKey(); if (sig !== S.panelSig) { S.panelSig = sig; Frame.renderPanel(); } }
   if (!(opts && opts.keepVideo)) showFrame();
 }
 
@@ -404,18 +405,36 @@ function effectiveFrame() {
   if (p && p.place) return Object.assign(Frame.full(base), p.place);
   return base;
 }
-function storeFrame(fr, live) {
+function storeFrame(fr, live, force) {
   const t = placeTargets(), base = Frame.full(S.proj.settings.frame);
+  const prev = S.dragFrom || Frame.full(effectiveFrame());
+  if (live && !S.dragFrom) S.dragFrom = prev;                  // a drag: compare with where it started
+  if (!live) S.dragFrom = null;
+  const shape = fr.ratio !== base.ratio;                       // a new shape: it sets the starting size for every section
+  const changed = PLACE_KEYS.filter((k) => (force && force.includes(k)) || Math.abs((fr[k] || 0) - (prev[k] || 0)) > 1e-6);
   const apply = () => {
     const nb = Object.assign({}, fr);
-    for (const p of t) p.place = PLACE_KEYS.reduce((o, k) => (o[k] = fr[k], o), {});   // the sections move, the shape stays for all
+    if (shape) { S.proj.settings.frame = nb; return; }
+    // only what was changed is written: sections chosen together keep their own other values
+    for (const p of t) {
+      const own = Object.assign({}, PLACE_KEYS.reduce((o, k) => (o[k] = base[k], o), {}), p.place || {});
+      for (const k of changed) own[k] = fr[k];
+      if (changed.length || p.place) p.place = own;
+    }
     for (const k of PLACE_KEYS) nb[k] = base[k];
     S.proj.settings.frame = nb;
   };
   if (live) { apply(); sizeFrame(); return; }
   change(apply, { keepVideo: true }); sizeFrame();
 }
-function placeScopeInfo() { return { n: placeTargets().length, chosen: selList().length }; }
+function placeScopeKey() { const m = placeScopeInfo().mixed; return PLACE_KEYS.map((k) => (m[k] ? 1 : 0)).join(""); }
+function placeScopeInfo() {
+  const t = placeTargets(), base = Frame.full(S.proj.settings.frame);
+  const val = (p, k) => (p.place ? p.place[k] : base[k]);
+  const mixed = {};
+  for (const k of PLACE_KEYS) mixed[k] = t.length > 1 && t.some((p) => Math.abs(val(p, k) - val(t[0], k)) > 1e-6);   // different: the box stays empty
+  return { n: t.length, chosen: selList().length, mixed };
+}
 /** Reset position: back to the middle, not turned (the size stays). */
 function resetPlace() {
   const t = placeTargets(); if (!t.length) return;
@@ -527,6 +546,7 @@ function renderTimeline() {
     d.style.left = px(0) + "px"; d.style.width = Math.max(40, px(total) - px(0)) + "px"; row.append(d); lm.append(row);
   });
   renderAudioLane();
+  renderStemLanes();
   renderPlayhead();
 }
 
@@ -548,7 +568,7 @@ async function loadPeaks() {
 }
 function renderAudioLane() {
   const la = $("laneA");
-  if (!S.info.has_audio) { la.hidden = true; return; }
+  if (!S.info.has_audio || stemsOn()) { la.hidden = true; return; }       // with a split, the three tracks show instead
   la.hidden = false;
   let cv = la.querySelector("canvas");
   if (!cv) {
@@ -583,6 +603,169 @@ function renderAudioLane() {
     }
   }
   if (!P) { g.fillStyle = "rgba(255,255,255,.4)"; g.font = "500 11px system-ui, sans-serif"; g.fillText("Reading the sound…", Math.max(8, X0() - left + 8), mid + 4); }
+}
+
+// ---- the split sound on the timeline (Final): one track each for voices, music and effects (like CapCut). Every part of a
+// track lines up with a video section; click parts (Ctrl / Shift for more), or a track's name for the whole track.
+S.asel = new Map();                          // piece -> Set of layers chosen on the sound tracks
+S.stemPeaks = {};
+function stemsOn() { return S.mode === "final" && typeof Layers !== "undefined" && !!Layers.split(); }
+function aselList() { const out = []; for (const p of kept()) { const set = S.asel.get(p); if (set) for (const n of Layers.NAMES) if (set.has(n)) out.push({ p, n }); } return out; }
+function aselHas(p, n) { const set = S.asel.get(p); return !!(set && set.has(n)); }
+function aselSet(p, n, on) { let set = S.asel.get(p); if (!set) { set = new Set(); S.asel.set(p, set); } if (on) set.add(n); else set.delete(n); if (!set.size) S.asel.delete(p); }
+function aselLayers() { const out = new Set(); for (const set of S.asel.values()) for (const n of set) out.add(n); return Layers.NAMES.filter((n) => out.has(n)); }
+async function loadStemPeaks() {
+  const sp = stemsOn() ? Layers.split() : null;
+  if (!sp || S.stemFor === sp.id) return;
+  S.stemFor = sp.id; S.stemPeaks = {};
+  await Promise.all(Layers.NAMES.map(async (n) => {
+    for (let tries = 0; tries < 200 && S.stemFor === sp.id; tries++) {
+      const r = await fetch("/api/peaks?split=" + encodeURIComponent(sp.id) + "&layer=" + n, { headers: { "X-EditForge-Token": TOKEN } }).catch(() => null);
+      if (!r) return;
+      if (r.status === 200) { S.stemPeaks[n] = new Uint8Array(await r.arrayBuffer()); renderStemLanes(); return; }
+      if (r.status !== 202) return;
+      await new Promise((ok) => setTimeout(ok, 1500));
+    }
+  }));
+}
+document.addEventListener("layers-info", () => setTimeout(() => { loadStemPeaks(); if (S.proj) renderTimeline(); }, 0));
+function renderStemLanes() {
+  const box = $("laneStems"), on = stemsOn();
+  box.hidden = !on;
+  if (S.mode === "final" && S.info.has_audio) $("laneA").hidden = on;           // the split tracks take the place of the one sound track
+  if (!on) return;
+  const sp = Layers.split();
+  if (box.dataset.for !== sp.id) {
+    box.dataset.for = sp.id; box.replaceChildren();
+    for (const n of Layers.NAMES) {
+      box.append(el("div", { class: "lane audio stem", "data-layer": n },
+        el("div", { class: "lane-head stem-head", "data-layer": n, title: "Click: the whole " + Layers.TITLE[n] + " track · Ctrl + click: add it" },
+          icon(Layers.ICON[n], "s"), el("span", { class: "ellip", text: Layers.TITLE[n] })),
+        el("canvas", { class: "wave" })));
+    }
+  }
+  const sc = $("tlScroll"), left = sc.scrollLeft, w = sc.clientWidth, H = 32, dpr = Math.min(2, window.devicePixelRatio || 1), R = S.peakRate || 50;
+  const colour = { voices: "#5ab8ff", music: "#c08cff", effects: "#ffb35a" };
+  for (const lane of box.querySelectorAll(".lane.stem")) {
+    const n = lane.dataset.layer, cv = lane.querySelector("canvas"), P = S.stemPeaks[n];
+    const whole = kept().length && kept().every((p) => aselHas(p, n));
+    const head = lane.querySelector(".stem-head");
+    head.classList.toggle("on", whole);
+    const lb = head.querySelector(".lock-btn"); if (lb) lb.remove();
+    head.append(lockBtn("sound"));
+    lane.classList.toggle("track-locked", trackLocked("sound"));
+    const g0 = Layers.gainOf(n);
+    lane.classList.toggle("muted", g0 < 0.001);
+    if (cv.width !== Math.round(w * dpr) || cv.height !== H * dpr) { cv.width = Math.round(w * dpr); cv.height = H * dpr; }
+    cv.style.left = left + "px"; cv.style.width = w + "px"; cv.style.height = H + "px";
+    const g = cv.getContext("2d");
+    g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, H);
+    for (const r of layout()) {
+      const x0 = px(r.out0), x1 = px(r.out1);
+      if (x1 < left || x0 > left + w) continue;
+      const p = r.p, own = Layers.ownGain(p, n), sel = aselHas(p, n), quiet = p.mute || own < 0.001 || g0 < 0.001;
+      g.fillStyle = sel ? "rgba(62, 199, 217, .22)" : "rgba(255, 255, 255, .04)";
+      g.fillRect(x0 - left + 1, 2, Math.max(1, x1 - x0 - 2), H - 4);
+      if (sel) { g.strokeStyle = "#3ec7d9"; g.lineWidth = 1.5; g.strokeRect(x0 - left + 1.5, 2.5, Math.max(1, x1 - x0 - 3), H - 5); }
+      if (!P) continue;
+      const amp = quiet ? 0 : Math.min(2, (p.volume === undefined ? 1 : p.volume) * own * g0);
+      g.fillStyle = quiet ? "rgba(160,160,170,.45)" : colour[n];
+      for (let x = Math.floor(Math.max(x0, left)); x < Math.min(x1, left + w); x++) {
+        const t0 = timeAt(x) - r.out0, t1 = timeAt(x + 1) - r.out0;
+        let s0 = p.start + t0 * p.speed, s1 = p.start + t1 * p.speed;
+        if (p.reverse) { s0 = p.end - t1 * p.speed; s1 = p.end - t0 * p.speed; }
+        const i0 = Math.max(0, Math.floor((s0 - sp.start) * R)), i1 = Math.min(P.length, Math.max(i0 + 1, Math.ceil((s1 - sp.start) * R)));
+        let m = 0; for (let i = i0; i < i1; i++) if (P[i] > m) m = P[i];
+        const hgt = quiet ? 1 : Math.max(1, (m / 255) * amp * (H / 2 - 3));
+        g.fillRect(x - left, H / 2 - hgt, 1, hgt * 2);
+      }
+    }
+    if (!P) { g.fillStyle = "rgba(255,255,255,.4)"; g.font = "500 11px system-ui, sans-serif"; g.fillText("Reading the sound…", Math.max(8, X0() - left + 8), H / 2 + 4); }
+  }
+}
+/** A click on a sound track: a part (Ctrl adds, Shift chooses all in between), or the track's name for the whole track. */
+function onStemDown(e) {
+  const lane = e.target.closest(".lane.stem"); if (!lane) return false;
+  if (e.target.closest(".lock-btn")) return true;
+  const n = lane.dataset.layer, add = e.ctrlKey || e.metaKey;
+  S.sel.clear();
+  if (e.target.closest(".stem-head")) {
+    const whole = kept().every((p) => aselHas(p, n));
+    if (!add) S.asel = new Map();
+    for (const p of kept()) aselSet(p, n, !(add && whole));
+  } else {
+    const sc = $("tlScroll"), rect = sc.getBoundingClientRect(), t = clamp(timeAt(e.clientX - rect.left + sc.scrollLeft), 0, Math.max(0, rawTotal() - 0.01));
+    const at = segAt(t); if (!at) return true;
+    const p = at.s.p;
+    if (e.shiftKey && S.aAnchor && kept().includes(S.aAnchor.p)) {
+      const K = kept(), a = K.indexOf(S.aAnchor.p), b = K.indexOf(p);
+      if (!add) S.asel = new Map();
+      for (let k = Math.min(a, b); k <= Math.max(a, b); k++) { aselSet(K[k], S.aAnchor.n, true); aselSet(K[k], n, true); }
+    } else if (add) aselSet(p, n, !aselHas(p, n));
+    else { S.asel = new Map(); aselSet(p, n, true); }
+    S.aAnchor = { p, n };
+    seek(t);
+  }
+  refreshAll({ keepVideo: true });
+  return true;
+}
+function stemChange(fn) {
+  const list = aselList(); if (!list.length) return;
+  change(() => {
+    for (const { p, n } of list) {
+      const m = Object.assign({}, p.mix || {}), cur = Object.assign({ volume: 1, mute: false }, m[n] || {});
+      fn(cur);
+      if (!cur.mute && Math.abs(cur.volume - 1) < 0.001) delete m[n]; else m[n] = cur;
+      if (Object.keys(m).length) p.mix = m; else delete p.mix;
+    }
+  }, { sound: true });
+  Layers.apply();
+}
+function stemMenu(e) {
+  const lane = e.target.closest(".lane.stem"); if (!lane) return false;
+  e.preventDefault();
+  const n = lane.dataset.layer;
+  if (!aselList().length || e.target.closest(".stem-head")) { S.sel.clear(); S.asel = new Map(); for (const p of kept()) aselSet(p, n, true); refreshAll({ keepVideo: true }); }
+  const list = aselList(), allMuted = list.every(({ p, n: k }) => Layers.ownGain(p, k) < 0.001), lk = trackLocked("sound");
+  const names = aselLayers().map((k) => Layers.TITLE[k]).join(" + ");
+  ctxMenu([
+    [allMuted ? "Turn these parts on" : "Mute these parts", allMuted ? "vol" : "mute", () => stemChange((c) => { c.mute = !allMuted; }), { key: "Del", off: lk }],
+    ["Full loudness again", "restore", () => stemChange((c) => { c.mute = false; c.volume = 1; }), { off: lk }],
+    "-",
+    ["Choose the whole " + Layers.TITLE[n] + " track", "list", () => { S.asel = new Map(); for (const p of kept()) aselSet(p, n, true); refreshAll({ keepVideo: true }); }],
+    ["Also choose the other tracks here", "layers", () => { for (const { p } of aselList()) for (const k of Layers.NAMES) aselSet(p, k, true); refreshAll({ keepVideo: true }); }],
+    "-",
+    ["Split here (cuts the video section too)", "split", () => splitAtPlayhead(), { key: "S", off: locked() }],
+  ].filter(Boolean), e.clientX, e.clientY);
+  void names;
+  return true;
+}
+function renderStemInspector(R) {
+  const list = aselList(), layersIn = aselLayers();
+  const nParts = new Set(list.map((x) => x.p)).size;
+  R.append(el("div", { class: "side-h" }, el("h2", { text: layersIn.map((k) => Layers.TITLE[k]).join(" + ") }),
+    el("span", { class: "note num", text: nParts + (nParts === 1 ? " part" : " parts") })));
+  const vols = [...new Set(list.map(({ p, n }) => (p.mix && p.mix[n] ? +p.mix[n].volume : 1)))];
+  const mutes = [...new Set(list.map(({ p, n }) => !!(p.mix && p.mix[n] && p.mix[n].mute)))];
+  const lk = trackLocked("sound");
+  const val = el("b", { class: "num", text: vols.length === 1 ? Math.round(vols[0] * 100) + "%" : "—" });
+  const vol = el("input", { type: "range", class: "rng", min: "0", max: "200", step: "5", value: String(Math.round((vols.length === 1 ? vols[0] : 1) * 100)), "aria-label": "Loudness of the chosen parts" });
+  vol.addEventListener("input", () => { val.textContent = vol.value + "%"; paintRange(vol); });
+  vol.addEventListener("change", () => stemChange((c) => { c.volume = vol.value / 100; c.mute = false; }));
+  const mute = el("input", { type: "checkbox", class: "sw", "aria-label": "Mute the chosen parts" });
+  mute.checked = mutes.length === 1 && mutes[0]; mute.indeterminate = mutes.length > 1;
+  mute.addEventListener("change", () => stemChange((c) => { c.mute = mute.checked; }));
+  vol.disabled = mute.disabled = lk;
+  const pad = el("div", { class: "pad" },
+    el("div", { class: "field" }, el("span", {}, "Loudness ", val), vol),
+    el("label", { class: "swl" }, el("span", { text: "Mute" }), mute),
+    el("div", { class: "btns" },
+      btn("Full loudness", { icon: "restore", onclick: () => stemChange((c) => { c.mute = false; c.volume = 1; }) }),
+      btn("Split", { icon: "split", title: "Split at the playhead (S). The video section is cut there too.", onclick: () => splitAtPlayhead() })),
+    el("p", { class: "hint", text: "Click parts on the Voices, Music or Effects track (Ctrl + click for more, Shift + click for all in between), or a track's name for the whole track. Ctrl + click a second track's name to choose two tracks together. Cuts are shared with the video sections." }));
+  if (lk) pad.append(el("p", { class: "hint warn", text: "The sound track is locked. Click its lock to change these." }));
+  R.append(pad);
+  paintRange(vol);
 }
 
 // ---- pointer work on the timeline: select, drag to move, drag edges to trim, marquee, scrub
@@ -801,7 +984,8 @@ function pickAtPlayhead(e) {
   const at = segAt(S.t); if (!at) return;
   const p = at.s.p, grp = scenesOn() ? sceneOf(p) : [p];
   if (e && (e.ctrlKey || e.metaKey)) { const on = grp.every((q) => S.sel.has(q)); for (const q of grp) { if (on) S.sel.delete(q); else S.sel.add(q); } }
-  else { if (grp.every((q) => S.sel.has(q))) return; S.sel = new Set(grp); }
+  else { if (grp.every((q) => S.sel.has(q)) && !S.asel.size) return; S.sel = new Set(grp); }
+  S.asel = new Map();
   S.anchor = p;
   refreshAll({ keepVideo: true });
   if (Frame.editing) Frame.renderPanel();
@@ -1236,6 +1420,7 @@ function renderInspector() {
   const R = $("right"), sel = selList();
   const open = new Set([...R.querySelectorAll("details[open] > summary span")].map((s) => s.textContent));
   R.replaceChildren();
+  if (stemsOn() && aselList().length) { renderStemInspector(R); return; }
   if (!sel.length) { renderOverview(R); return; }
   const len = sel.reduce((a, p) => a + outLen(p), 0);
   const nsc = scenesOn() ? chosenScenes().size : 0;
@@ -1690,7 +1875,8 @@ function wire() {
   // a press on the picture chooses the section that is showing there (also before dragging it in Picture)
   $("frame").addEventListener("pointerdown", (e) => { if (e.button === 0 && !e.target.closest("#drawLayer")) pickAtPlayhead(e); }, true);
   // timeline
-  $("tlScroll").addEventListener("pointerdown", (e) => { if (e.target.closest(".lane-head, .mrow")) return; if (e.target.closest("#ruler")) onRulerDown(e); else onLaneDown(e); });
+  $("tlScroll").addEventListener("pointerdown", (e) => { if (e.button === 0 && e.target.closest(".lane.stem")) { onStemDown(e); return; } if (e.target.closest(".lane-head, .mrow")) return;
+    if (S.asel.size && e.target.closest("#laneV")) S.asel = new Map(); if (e.target.closest("#ruler")) onRulerDown(e); else onLaneDown(e); });
   let raf = 0; $("tlScroll").addEventListener("scroll", () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(renderTimeline); });
   $("tlScroll").addEventListener("wheel", (e) => {
     if (e.ctrlKey || e.metaKey) { e.preventDefault(); const r = $("tlScroll").getBoundingClientRect(); zoomTo(S.pps * (e.deltaY < 0 ? 1.2 : 1 / 1.2), timeAt(e.clientX - r.left + $("tlScroll").scrollLeft)); }
@@ -1706,7 +1892,7 @@ function wire() {
   $("lockV").addEventListener("click", () => toggleLock("video")); $("lockA").addEventListener("click", () => toggleLock("sound"));
   try { if (localStorage.getItem("ef.choose") === "sections") S.choose = "sections"; } catch (e) { /* off */ }
   $("bCutB").addEventListener("click", () => cutSide("before")); $("bCutA").addEventListener("click", () => cutSide("after"));
-  $("tlScroll").addEventListener("contextmenu", (e) => { if (e.target.closest(".lane-head")) { e.preventDefault(); return; } timelineMenu(e); });
+  $("tlScroll").addEventListener("contextmenu", (e) => { if (stemMenu(e)) return; if (e.target.closest(".lane-head")) { e.preventDefault(); return; } timelineMenu(e); });
   $("frame").addEventListener("contextmenu", (e) => {
     e.preventDefault();
     ctxMenu([[S.playing ? "Pause" : "Play", S.playing ? "pause" : "play", togglePlay, { key: "Space" }], "-",
@@ -1730,6 +1916,7 @@ function wire() {
     if (k === " ") { e.preventDefault(); togglePlay(); }
     else if (mod && k.toLowerCase() === "z") { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
     else if (mod && k.toLowerCase() === "y") { e.preventDefault(); redo(); }
+    else if (mod && k.toLowerCase() === "a" && S.asel.size) { e.preventDefault(); const ls = aselLayers(); for (const p of kept()) for (const n of ls) aselSet(p, n, true); refreshAll({ keepVideo: true }); }
     else if (mod && k.toLowerCase() === "a") { e.preventDefault(); S.sel = new Set(kept()); refreshAll({ keepVideo: true }); }
     else if (mod && k.toLowerCase() === "j") { e.preventDefault(); combineScenes(); }
     else if (mod && k.toLowerCase() === "d") { e.preventDefault(); duplicateSelected(); }
@@ -1738,8 +1925,9 @@ function wire() {
     else if (k.toLowerCase() === "p" && !mod && !e.altKey) { e.preventDefault(); startPreview(); }
     else if (k.toLowerCase() === "q" && !mod && !e.altKey) { e.preventDefault(); cutSide("before"); }
     else if (k.toLowerCase() === "w" && !mod && !e.altKey) { e.preventDefault(); cutSide("after"); }
+    else if ((k === "Delete" || k === "Backspace") && aselList().length) { e.preventDefault(); stemChange((c) => { c.mute = true; }); }
     else if (k === "Delete" || k === "Backspace") { e.preventDefault(); removeSelected(); }
-    else if (k === "Escape") { S.sel.clear(); refreshAll({ keepVideo: true }); }
+    else if (k === "Escape") { S.sel.clear(); S.asel = new Map(); refreshAll({ keepVideo: true }); }
     else if (k === "ArrowLeft") { e.preventDefault(); seek(S.t - (e.shiftKey ? 1 : frame())); }
     else if (k === "ArrowRight") { e.preventDefault(); seek(S.t + (e.shiftKey ? 1 : frame())); }
     else if (k === "Home") seek(0); else if (k === "End") seek(rawTotal());

@@ -163,8 +163,9 @@ class ItemBuilder:
                 args += ["-threads", "1", "-ss", f"{sa:.6f}", "-t", f"{length + extra:.6f}", "-i", self.mix["files"][name]]
         return args
 
-    def audio_input(self, g: "Graph", k: int) -> Optional[str]:
-        """The label of the video's sound for item ``k`` (None = silence): the original track, or the mix of the layers."""
+    def audio_input(self, g: "Graph", k: int, seg: Any = None) -> Optional[str]:
+        """The label of the video's sound for item ``k`` (None = silence): the original track, or the mix of the layers
+        (each layer at the project's loudness times this piece's own loudness of it)."""
         if not self.media.has_audio:
             return None
         base = k * self.stride
@@ -176,6 +177,9 @@ class ItemBuilder:
         loud = False
         for j, name in enumerate(self.layers):
             gain = float(self.mix["gain"].get(name, 1.0))
+            own = getattr(seg, "layer_gain", None) if seg is not None else None
+            if own and name in own:
+                gain *= float(own[name])
             loud = loud or gain > 1.0
             labels.append(g.add(f"{base + 1 + j}:a:0", f"aformat=sample_fmts=fltp:sample_rates={self.sr}:channel_layouts=stereo,volume={gain:.5f}", "sx"))
         if len(labels) == 1:

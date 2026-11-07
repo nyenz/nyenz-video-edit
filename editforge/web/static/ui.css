@@ -870,3 +870,9 @@ body.previewing .frame-ov, body.previewing #badge { display: none !important; }
   background: repeating-linear-gradient(135deg, rgba(255, 196, 107, .07) 0 8px, transparent 8px 16px); }
 .locks { display: flex; gap: 4px; }
 .lock-tl.on { color: #ffc46b; border-color: rgba(255, 196, 107, .4); }
+/* ---- split sound tracks (voices / music / effects) ---- */
+.lane.stem { height: 32px; margin: 0 0 3px; cursor: pointer; }
+.lane.stem .stem-head { cursor: pointer; }
+.lane.stem .stem-head:hover { color: var(--ink); background: var(--raised); }
+.lane.stem .stem-head.on { color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.lane.stem.muted canvas { opacity: .4; }
