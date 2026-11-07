@@ -68,3 +68,25 @@ def test_preview_and_the_sound_track(live, page, movie_id):
     page.click("#pvBar button:has-text('Close')")
     assert page.query_selector("#pvBar") is None
     assert page.errors == []
+
+
+def test_a_click_on_the_picture_chooses_the_section_showing_there(live, page, movie_id):
+    pid = live.call("POST", "/api/projects", {"source": movie_id, "name": "Pick", "stage": "final", "interval": 4})["project"]["id"]
+    page.goto(f"{live.base}/final?p={pid}")
+    page.wait_for_function("() => typeof S !== 'undefined' && S.proj && S.info && document.querySelector('#laneV .clipb')", timeout=30000)
+    page.evaluate("() => seek(layout()[2].out0 + 0.5)")
+    page.click("#frame")
+    assert page.evaluate("() => selList().map(p => kept().indexOf(p))") == [2]
+    page.evaluate("() => { pause(); seek(layout()[0].out0 + 0.5); }")
+    page.click("#frame", modifiers=["Control"])                    # Ctrl adds it
+    assert sorted(page.evaluate("() => selList().map(p => kept().indexOf(p))")) == [0, 2]
+    # in Picture, the press chooses it before you drag, and the panel counts it
+    page.evaluate("() => pause()")
+    page.click(".ftabs button[data-panel=frame]")
+    page.click("#framePanel button:has-text('Chosen sections')")
+    page.evaluate("() => seek(layout()[1].out0 + 0.5)")
+    page.click("#frame")
+    assert page.evaluate("() => selList().map(p => kept().indexOf(p))") == [1]
+    assert "Chosen sections (1)" in page.inner_text("#framePanel")
+    assert page.evaluate("() => S.playing") is False                 # in Picture a click does not start playing
+    assert page.errors == []

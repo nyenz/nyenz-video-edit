@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.17.1
+* **Click the picture to choose what is showing.** A click on the video picture chooses the section playing there (in Scenes: the
+  whole scene) on Edit and Final, and the clip playing there on the Clips page. The playhead stays where it is.
+  **Ctrl + click** adds it to the chosen ones. In Final → Picture, the press chooses the section first, so a drag moves that one;
+  a click there no longer starts playing.
+
 ## 1.17.0
 * **Each section can have its own position** (Final → Picture). "Position for: **Whole video** / **Chosen sections**".
   * Click a section (Ctrl + click for more, **Ctrl + A** for all), choose Chosen sections, then drag on the viewer or type numbers.
