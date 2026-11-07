@@ -378,7 +378,14 @@ const Frame = (function () {
       const ar = a || F.srcAspect;
       const pic = el("i", { class: "ratio-pic" });
       if (ar >= 1) { pic.style.width = "26px"; pic.style.height = Math.max(8, Math.round(26 / ar)) + "px"; } else { pic.style.height = "26px"; pic.style.width = Math.max(8, Math.round(26 * ar)) + "px"; }
-      shapes.append(el("button", { type: "button", class: "ratio" + (f.ratio === k ? " on" : ""), onclick: () => change((fr) => { fr.ratio = k; }) }, el("span", { class: "pic-box" }, pic), el("small", { text: name })));
+      shapes.append(el("button", { type: "button", class: "ratio" + (f.ratio === k ? " on" : ""), onclick: () => change((fr) => {
+        const first = !active(F.get()) || fr.ratio === "original";
+        fr.ratio = k;
+        if (first && k !== "original") {                      // the starting look you use most: soft edges 17%, and 260% in 9:16
+          if (!(fr.edge > 0)) fr.edge = 17;
+          if (k === "9:16" && Math.abs(fr.scale - 1) < 1e-3) fr.scale = 2.6;
+        }
+      }) }, el("span", { class: "pic-box" }, pic), el("small", { text: name })));
     }
     host.append(el("div", { class: "field" }, el("span", { text: "Shape of the video" }), shapes));
     // background layer
@@ -400,22 +407,27 @@ const Frame = (function () {
     host.append(el("p", { class: "hint", text: "Drag the picture to move it. Drag a square corner to resize. Drag the round knob to turn. Lines show when it snaps to the middle or the edges." }));
     // exact numbers: X and Y in pixels of the finished video (0 = in the middle), size in %, turn in degrees
     const out = outSize(f);
-    const num = (label, val, unit, min, max, onv) => {
-      const inp = el("input", { type: "number", class: "inp num", value: String(val), min: String(min), max: String(max), step: "1", "aria-label": label });
+    const mix = (sc && sc.mixed) || {};
+    const num = (label, val, unit, min, max, onv, key) => {
+      const inp = el("input", { type: "number", class: "inp num", value: mix[key] ? "" : String(val), placeholder: mix[key] ? "—" : "", min: String(min), max: String(max), step: "1", "aria-label": label,
+        title: mix[key] ? "The chosen sections have different values. Type one to give it to all of them." : "" });
       const set = () => {
         if (inp.dataset.done === inp.value) return;          // Enter and then leaving the box: only once
         inp.dataset.done = inp.value;
-        const v = Math.max(min, Math.min(max, +inp.value || 0)); change((fr) => onv(fr, v));
+        if (inp.value === "") return;
+        const v = Math.max(min, Math.min(max, +inp.value || 0));
+        const fr = full(F.get()); onv(fr, v);
+        F.set(fr, false, [key]); show(); renderPanel();             // this value goes to every chosen section, even when it was the same here
       };
       inp.addEventListener("change", set);
       inp.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); set(); } e.stopPropagation(); });
       return el("label", { class: "numf" }, el("span", { text: label }), inp, el("small", { text: unit }));
     };
     host.append(el("div", { class: "nums4" },
-      num("X", Math.round(f.x * out.w / 2), "px", -Math.round(out.w * 2), Math.round(out.w * 2), (fr, v) => { fr.x = +(v / (out.w / 2)).toFixed(4); }),
-      num("Y", Math.round(f.y * out.h / 2), "px", -Math.round(out.h * 2), Math.round(out.h * 2), (fr, v) => { fr.y = +(v / (out.h / 2)).toFixed(4); }),
-      num("Size", Math.round(f.scale * 100), "%", 10, 400, (fr, v) => { fr.scale = v / 100; }),
-      num("Turn", Math.round(f.rotate), "°", -180, 180, (fr, v) => { fr.rotate = v; })));
+      num("X", Math.round(f.x * out.w / 2), "px", -Math.round(out.w * 2), Math.round(out.w * 2), (fr, v) => { fr.x = +(v / (out.w / 2)).toFixed(4); }, "x"),
+      num("Y", Math.round(f.y * out.h / 2), "px", -Math.round(out.h * 2), Math.round(out.h * 2), (fr, v) => { fr.y = +(v / (out.h / 2)).toFixed(4); }, "y"),
+      num("Size", Math.round(f.scale * 100), "%", 10, 400, (fr, v) => { fr.scale = v / 100; }, "scale"),
+      num("Turn", Math.round(f.rotate), "°", -180, 180, (fr, v) => { fr.rotate = v; }, "rotate")));
     host.append(el("button", { type: "button", class: "btn wide", id: "resetPlace", title: "X = 0, Y = 0, not turned (the size stays)", onclick: () => F.resetPlace() },
       icon("restore", "s"), el("span", { text: sc.chosen > 1 ? "Reset position of " + sc.chosen + " sections" : "Reset position" })));
     host.append(slider("Size", 10, 400, 1, Math.round(f.scale * 100), (v) => Math.round(v) + "%", (fr, v) => { fr.scale = v / 100; }));

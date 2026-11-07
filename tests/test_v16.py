@@ -423,3 +423,25 @@ def test_the_light_copy_pass_also_makes_one_timeline_picture_per_second(tmp_path
 def FFMPEG_EXE():
     from editforge.core import ffmpeg as ff
     return ff.find_executable("ffmpeg")
+
+
+def test_each_piece_can_have_its_own_layer_loudness(web, film):
+    """1.19: the split sound tracks on the timeline: one piece mutes the music, the other keeps it (sliders all at 100%)."""
+    c, state = web
+    pieces = [{"start": 0.0, "end": 2.0, "mix": {"music": {"volume": 1.0, "mute": True}, "voices": {"volume": 1, "mute": False}}},
+              {"start": 2.0, "end": 4.0}]
+    job = export(c, film, {"mix_split": film["split"]}, pieces=pieces)
+    assert job["status"] == "done", job
+    saved = c.json("GET", f"/api/projects/{film['proj']['id']}")[1]["project"]
+    assert saved["pieces"][0]["mix"] == {"music": {"volume": 1.0, "mute": True}}        # untouched layers are left out
+    assert "mix" not in saved["pieces"][1]
+    y = decode(job["output_path"])
+    first, second = y[int(44100 * 0.3): int(44100 * 1.7)], y[int(44100 * 2.3): int(44100 * 3.7)]
+    assert level(first, 1000) < 0.003 and level(first, 300) > 0.03 and level(first, 3000) > 0.03
+    assert level(second, 1000) > 0.03
+    # half loud voices on the second piece only
+    pieces[1]["mix"] = {"voices": {"volume": 0.5, "mute": False}}
+    job = export(c, film, {"mix_split": film["split"]}, pieces=pieces)
+    z = decode(job["output_path"])
+    a, b = z[int(44100 * 0.3): int(44100 * 1.7)], z[int(44100 * 2.3): int(44100 * 3.7)]
+    assert 0.35 < level(b, 300) / level(a, 300) < 0.65

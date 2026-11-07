@@ -146,6 +146,9 @@ def clean_piece(raw: Any, duration: float) -> Optional[Dict[str, Any]]:
     place = clean_place(raw.get("place"))
     if place:
         extra["place"] = place                # this piece's own position of the video layer (Final, Picture)
+    mix = clean_piece_mix(raw.get("mix"))
+    if mix:
+        extra["mix"] = mix                    # this piece's own loudness / mute of each split sound layer (Final, Sound)
     return {**extra,
         "start": round(start, 4), "end": round(end, 4), "off": bool(raw.get("off")),
         "speed": round(_num(raw.get("speed"), 1.0, 0.1, 16.0), 4), "reverse": bool(raw.get("reverse")),
@@ -157,6 +160,29 @@ def clean_piece(raw: Any, duration: float) -> Optional[Dict[str, Any]]:
         "follow": {"mode": follow_mode, "zoom": round(_num(follow_raw.get("zoom"), 1.6, 1.1, 4.0), 3),
                    "path": points if follow_mode == "object" else []},
     }
+
+
+def clean_piece_mix(raw: Any) -> Optional[Dict[str, Dict[str, Any]]]:
+    """A piece's own loudness of the split sound layers: {'voices': {'volume': 0..2, 'mute': bool}, ...}.
+    Layers left at full loudness and not muted are left out."""
+    if not isinstance(raw, dict):
+        return None
+    out: Dict[str, Dict[str, Any]] = {}
+    for layer in MIX_LAYERS:
+        v = raw.get(layer)
+        if not isinstance(v, dict):
+            continue
+        vol, mute = round(_num(v.get("volume"), 1.0, 0.0, 2.0), 3), bool(v.get("mute"))
+        if mute or abs(vol - 1.0) > 0.001:
+            out[layer] = {"volume": vol, "mute": mute}
+    return out or None
+
+
+def piece_layer_gain(piece: Dict[str, Any]) -> Optional[Dict[str, float]]:
+    mix = piece.get("mix")
+    if not mix:
+        return None
+    return {k: 0.0 if v.get("mute") else float(v.get("volume", 1.0)) for k, v in mix.items()}
 
 
 def clean_place(raw: Any) -> Optional[Dict[str, float]]:
@@ -497,6 +523,8 @@ class _ProjectPlanner(Planner):
         seg.volume = float(piece["volume"])
         if piece.get("place"):
             seg.place = dict(piece["place"])
+        if piece.get("mix"):
+            seg.layer_gain = piece_layer_gain(piece)
         if self.has_video:
             seg.effects = [EffectSpec(name, 0.5) for name in piece["fx"]]
             zoom, amount = piece["zoom"]["mode"], float(piece["zoom"]["amount"])
@@ -579,7 +607,8 @@ def _layer_mix(st: Dict[str, Any], live: List[Dict[str, Any]], src_path: str, pl
     for layer in MIX_LAYERS:
         if layer in st["mute"] or (_solo_any(st) and layer not in st["solo"]):
             gains[layer] = 0.0
-    if not st["mix_split"] or all(abs(g - 1.0) < 0.001 for g in gains.values()):
+    own = any(p.get("mix") for p in live)                 # some pieces have their own layer loudness
+    if not st["mix_split"] or (all(abs(g - 1.0) < 0.001 for g in gains.values()) and not own):
         return None
     from .splitter import SplitStore
     info = SplitStore(stems_home).resolve(st["mix_split"])

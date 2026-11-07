@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.19.0
+* **The split sound is on the timeline** (Final): after Split, **Voices**, **Music** and **Effects** each get their own track under the
+  video, with their waveforms.
+  * Click a part (it lines up with a video section), **Ctrl + click** for more, **Shift + click** for all in between.
+  * Click a track's name for the **whole track**; **Ctrl + click** a second name to choose two tracks together (e.g. Voices + Music).
+  * The right side then has **Loudness** and **Mute** for exactly what you chose, **Full loudness** and **Split**.
+    **Delete** mutes the chosen parts (it never removes video). Right-click for more.
+  * Cut it yourself: **S** splits at the playhead (the video section is cut there too, so they stay lined up).
+  * The export and the live sound use each part's own loudness. The sound lock covers these tracks.
+* **Different values show as empty boxes**: with several sections chosen (e.g. Ctrl + A), X / Y / Size / Turn stay empty ("—")
+  when they differ. Typing a value gives it to all of them and leaves their other values alone (moving no longer copies all four).
+* **A new shape starts ready**: choosing 9:16 the first time sets the size to 260 % and soft edges to 17 % (other shapes: soft
+  edges 17 %). Blur stays at 50 %.
+
 ## 1.18.0
 * **Positions work like CapCut.** The "Position for" switch is gone. Press on the picture and drag: only the section showing
   moves (it is chosen by the press, no need to go to the timeline). Ctrl + A on the timeline chooses all sections to move them together.

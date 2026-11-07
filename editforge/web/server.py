@@ -1457,11 +1457,20 @@ class Handler(BaseHTTPRequestHandler):
                 query = self._guard()
                 if query is None:
                     return
-                try:
-                    src = self.state.resolve_input((query.get("id") or [""])[0])
-                except EditForgeError:
-                    self._error(404, "No sound for that.")
-                    return
+                layer = (query.get("layer") or [""])[0]
+                if layer:                               # one split sound layer (voices / music / effects)
+                    from ..splitter import LAYERS
+                    found = self.state.splitter.store.resolve((query.get("split") or [""])[0])
+                    if not found or layer not in LAYERS:
+                        self._error(404, "That sound layer was not found.")
+                        return
+                    src = found["files"][layer]
+                else:
+                    try:
+                        src = self.state.resolve_input((query.get("id") or [""])[0])
+                    except EditForgeError:
+                        self._error(404, "No sound for that.")
+                        return
                 f = self.state.peaks(src)
                 if f is None:
                     self._json({"state": "making"}, 202)
