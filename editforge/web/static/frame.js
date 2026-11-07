@@ -7,7 +7,7 @@ const Frame = (function () {
   const RATIOS = [["original", "Original", null], ["16:9", "16:9", 16 / 9], ["4:3", "4:3", 4 / 3], ["2.35:1", "2.35:1", 2.35], ["2:1", "2:1", 2],
     ["1.85:1", "1.85:1", 1.85], ["9:16", "9:16", 9 / 16], ["3:4", "3:4", 3 / 4], ["1:1", "1:1", 1], ["4:5", "4:5", 4 / 5], ["5.8in", "5.8-inch", 9 / 19.5]];
   const MASKS = [["none", "None"], ["strip", "Strip"], ["vstrip", "Side strip"], ["rect", "Rectangle"], ["circle", "Circle"], ["split", "Split"]];
-  const DEF = () => ({ ratio: "original", bg: "blur", blur: 50, scale: 1, x: 0, y: 0, rotate: 0,
+  const DEF = () => ({ ratio: "original", bg: "blur", blur: 50, scale: 1, x: 0, y: 0, rotate: 0, edge: 0,
     mask: { shape: "none", x: 0.5, y: 0.5, w: 1, h: 0.35, feather: 20, invert: false, rot: 0 } });
   const F = { get: null, set: null, video: null, srcAspect: 16 / 9, cv: null, top: null, maskCv: null, maskKey: "", fadeCv: null, last: "", raf: 0, host: null,
     ov: null, editing: false, target: "video", grid: false, drag: null, guides: [] };
@@ -21,7 +21,7 @@ const Frame = (function () {
   function active(fr) {
     if (!fr) return false;
     const f = full(fr);
-    return f.ratio !== "original" || Math.abs(f.scale - 1) > 1e-3 || Math.abs(f.x) > 1e-4 || Math.abs(f.y) > 1e-4 || Math.abs(f.rotate) > 1e-3 || f.mask.shape !== "none";
+    return f.ratio !== "original" || Math.abs(f.scale - 1) > 1e-3 || Math.abs(f.x) > 1e-4 || Math.abs(f.y) > 1e-4 || Math.abs(f.rotate) > 1e-3 || f.mask.shape !== "none" || f.edge > 0.5;
   }
   function aspect(fr) {
     const r = RATIOS.find((x) => x[0] === full(fr).ratio);
@@ -55,9 +55,11 @@ const Frame = (function () {
     F.fadeCv = c;
     return c;
   }
+  /** How far in the picture's own edges fade into the layer below (Soft edges of the video layer). */
+  function edgeR(f, W, H) { return (f.edge || 0) / 100 * Math.min(W, H) * 0.16; }
   function maskCanvas(f, W, H) {
     const m = f.mask;
-    const key = JSON.stringify([m, f.scale, f.x, f.y, f.rotate]) + W + "x" + H;
+    const key = JSON.stringify([m, f.scale, f.x, f.y, f.rotate, f.edge]) + W + "x" + H;
     if (key === F.maskKey && F.maskCv) return F.maskCv;
     const c = F.maskCv || document.createElement("canvas");
     c.width = W; c.height = H;
@@ -82,7 +84,8 @@ const Frame = (function () {
     else shape();
     x.restore();
     x.filter = "none";
-    if (soft > 0.3) { x.save(); x.globalCompositeOperation = "destination-in"; x.drawImage(fadeCanvas(pictureBox(f, W, H), W, H, 2 * soft), 0, 0); x.restore(); }
+    const fade = Math.max(soft > 0.3 ? 2 * soft : 0, edgeR(f, W, H));
+    if (fade > 0.5) { x.save(); x.globalCompositeOperation = "destination-in"; x.drawImage(fadeCanvas(pictureBox(f, W, H), W, H, fade), 0, 0); x.restore(); }
     F.maskCv = c; F.maskKey = key;
     return c;
   }
@@ -129,6 +132,8 @@ const Frame = (function () {
     t.restore();
     if (f.mask.shape !== "none") {
       t.save(); t.globalCompositeOperation = "destination-in"; t.drawImage(maskCanvas(f, W, H), 0, 0); t.restore();
+    } else if (f.edge > 0.5) {
+      t.save(); t.globalCompositeOperation = "destination-in"; t.drawImage(fadeCanvas(pictureBox(f, W, H), W, H, edgeR(f, W, H)), 0, 0); t.restore();
     }
     ctx.drawImage(F.top, 0, 0);
     F.cv.style.filter = v.style.filter;          // the piece's own look (colour, black and white ...)
@@ -333,7 +338,7 @@ const Frame = (function () {
         const L = pic.cx - bw, R = pic.cx + bw, T = pic.cy - bh, B = pic.cy + bh;
         x.strokeStyle = accent; x.lineWidth = 1;
         const edge = (x1, y1, x2, y2, v, lx, ly) => {
-          if (Math.abs(x2 - x1) + Math.abs(y2 - y1) < 3) return;
+          if (v < 1 || Math.abs(x2 - x1) + Math.abs(y2 - y1) < 3) return;      // the picture reaches past this edge: no gap to show
           x.beginPath(); x.moveTo(x1, y1); x.lineTo(x2, y2); x.stroke();
           label(Math.round(v * kx) + " px", lx, ly);
         };
@@ -358,6 +363,11 @@ const Frame = (function () {
     return box;
   }
   function renderPanel() {
+    if (F.painting) return;                     // a box losing focus while the panel is drawn again must not draw it twice
+    F.painting = true;
+    try { paintPanel(); } finally { F.painting = false; }
+  }
+  function paintPanel() {
     const host = $("framePanel");
     if (!host || host.closest("section").hidden) return;
     const f = full(F.get());
@@ -377,6 +387,16 @@ const Frame = (function () {
     if (f.bg === "blur") host.append(slider("Blur strength", 0, 100, 1, f.blur, (v) => Math.round(v) + "%", (fr, v) => { fr.blur = v; }));
     // the picture
     host.append(el("div", { class: "layer-h" }, icon("film", "s"), el("b", { text: "Video layer" }), el("small", { text: "on top" })));
+    // Whole video, or only the chosen sections (each section can have its own position)
+    const sc = F.scope ? F.scope() : { mode: "all", n: 0, own: 0, here: false };
+    host.append(el("div", { class: "field" }, el("span", { text: "Position for" }),
+      segmented([["all", "Whole video"], ["chosen", sc.n ? "Chosen sections (" + sc.n + ")" : "Chosen sections"]], sc.mode, (v) => { F.setScope(v); renderPanel(); show(); })));
+    if (sc.mode === "chosen" && !sc.n) host.append(el("p", { class: "hint warn", text: "Click a section on the timeline first (Ctrl + click for more, Ctrl + A for all). Then move it here." }));
+    if (sc.mode === "chosen" && sc.n) host.append(el("p", { class: "hint", text: "What you change now is only for the " + (sc.n === 1 ? "chosen section" : sc.n + " chosen sections") + ". Typing a number sets it on all of them." }));
+    if (sc.mode === "all" && sc.here) host.append(el("div", { class: "own-note" }, el("span", { text: "The section at the playhead has its own position, so changes here do not move it." }),
+      el("div", { class: "btns" }, btn("Change it", { cls: "sm", onclick: () => { F.pickHere(); renderPanel(); show(); } }),
+        btn("Use the whole video's", { cls: "sm ghost", onclick: () => { F.resetPlace(true); renderPanel(); show(); } }))));
+    if (sc.mode === "all" && sc.own && !sc.here) host.append(el("p", { class: "hint", text: sc.own + (sc.own === 1 ? " section has" : " sections have") + " its own position (it plays like that)." }));
     if (F.target === "mask" && f.mask.shape === "none") F.target = "video";
     host.append(el("div", { class: "field" }, el("span", { text: "Drag on the viewer" }),
       segmented(f.mask.shape === "none" ? [["video", "Video layer"]] : [["video", "Video layer"], ["mask", "Mask"]], F.target, (v) => { F.target = v; paintOverlay(); renderPanel(); })));
@@ -384,11 +404,31 @@ const Frame = (function () {
     gr.addEventListener("change", () => { F.grid = gr.checked; try { localStorage.setItem("ef.grid", F.grid ? "1" : "0"); } catch (e) { /* ignore */ } paintOverlay(); });
     host.append(el("label", { class: "swl" }, el("span", { text: "Show the grid and edge distances" }), gr));
     host.append(el("p", { class: "hint", text: "Drag the picture to move it. Drag a square corner to resize. Drag the round knob to turn. Lines show when it snaps to the middle or the edges." }));
+    // exact numbers: X and Y in pixels of the finished video (0 = in the middle), size in %, turn in degrees
+    const out = outSize(f);
+    const num = (label, val, unit, min, max, onv) => {
+      const inp = el("input", { type: "number", class: "inp num", value: String(val), min: String(min), max: String(max), step: "1", "aria-label": label });
+      const set = () => {
+        if (inp.dataset.done === inp.value) return;          // Enter and then leaving the box: only once
+        inp.dataset.done = inp.value;
+        const v = Math.max(min, Math.min(max, +inp.value || 0)); change((fr) => onv(fr, v));
+      };
+      inp.addEventListener("change", set);
+      inp.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); set(); } e.stopPropagation(); });
+      return el("label", { class: "numf" }, el("span", { text: label }), inp, el("small", { text: unit }));
+    };
+    host.append(el("div", { class: "nums4" },
+      num("X", Math.round(f.x * out.w / 2), "px", -Math.round(out.w * 2), Math.round(out.w * 2), (fr, v) => { fr.x = +(v / (out.w / 2)).toFixed(4); }),
+      num("Y", Math.round(f.y * out.h / 2), "px", -Math.round(out.h * 2), Math.round(out.h * 2), (fr, v) => { fr.y = +(v / (out.h / 2)).toFixed(4); }),
+      num("Size", Math.round(f.scale * 100), "%", 10, 400, (fr, v) => { fr.scale = v / 100; }),
+      num("Turn", Math.round(f.rotate), "°", -180, 180, (fr, v) => { fr.rotate = v; })));
     host.append(slider("Size", 10, 400, 1, Math.round(f.scale * 100), (v) => Math.round(v) + "%", (fr, v) => { fr.scale = v / 100; }));
     host.append(el("div", { class: "grid2" },
       slider("Left / right", -100, 100, 1, Math.round(f.x * 100), (v) => String(Math.round(v)), (fr, v) => { fr.x = v / 100; }),
       slider("Up / down", -100, 100, 1, Math.round(f.y * 100), (v) => String(Math.round(v)), (fr, v) => { fr.y = v / 100; })));
     host.append(slider("Turn", -180, 180, 1, f.rotate, (v) => Math.round(v) + "°", (fr, v) => { fr.rotate = v; }));
+    host.append(slider("Soft edges", 0, 100, 1, f.edge || 0, (v) => Math.round(v) + "%", (fr, v) => { fr.edge = v; }));
+    host.append(el("p", { class: "hint", text: "Soft edges: the border of the video layer fades into the background layer, so no hard line is left." }));
     const fill = () => { const a = aspect(F.get()), s = F.srcAspect; return Math.max(a / s, s / a); };
     host.append(el("div", { class: "btns wrap" },
       btn("Fit", { cls: "sm-txt", title: "The whole picture inside the frame", onclick: () => change((fr) => { fr.scale = 1; fr.x = 0; fr.y = 0; }) }),
@@ -412,7 +452,7 @@ const Frame = (function () {
         sh === "strip" || sh === "split" ? null : slider("Mask left / right", 0, 100, 1, Math.round(f.mask.x * 100), (v) => Math.round(v) + "%", (fr, v) => { fr.mask.x = v / 100; }),
         sh === "vstrip" ? null : slider("Mask up / down", 0, 100, 1, Math.round(f.mask.y * 100), (v) => Math.round(v) + "%", (fr, v) => { fr.mask.y = v / 100; })));
       host.append(slider("Turn the mask", -180, 180, 1, f.mask.rot || 0, (v) => Math.round(v) + "°", (fr, v) => { fr.mask.rot = v; }));
-      host.append(slider("Soft edges", 0, 100, 1, f.mask.feather, (v) => Math.round(v) + "%", (fr, v) => { fr.mask.feather = v; }));
+      host.append(slider("Soft mask edges", 0, 100, 1, f.mask.feather, (v) => Math.round(v) + "%", (fr, v) => { fr.mask.feather = v; }));
       const inv = el("input", { type: "checkbox", class: "sw" }); inv.checked = !!f.mask.invert;
       inv.addEventListener("change", () => change((fr) => { fr.mask.invert = inv.checked; }));
       host.append(el("label", { class: "swl" }, el("span", { text: "Turn the mask inside out" }), inv));
@@ -424,6 +464,7 @@ const Frame = (function () {
   /** get(): the project's frame; set(frame, live): store it (live = while dragging); video(): the playing video element. */
   function init(opts) {
     F.get = opts.get; F.set = opts.set; F.video = opts.video; F.host = opts.host; F.srcAspect = opts.srcAspect || 16 / 9;
+    F.scope = opts.scope; F.setScope = opts.setScope || (() => {}); F.pickHere = opts.pickHere || (() => {}); F.resetPlace = opts.resetPlace || (() => {});
     F.cv = el("canvas", { class: "frame-cv", hidden: true });
     F.host.prepend(F.cv);
     F.ov = el("canvas", { class: "frame-ov", hidden: true });
@@ -435,5 +476,7 @@ const Frame = (function () {
   }
   /** The handles on the viewer work while the Frame panel is open. */
   function setEditing(on) { F.editing = !!on; if (!on) { F.drag = null; F.guides = []; } paintOverlay(); }
-  return { init, active, aspect, renderPanel, show, full, draw, setEditing };
+  /** Draw now (the section at the playhead changed, so its own position may be different). */
+  function refresh() { F.last = ""; show(); }
+  return { init, active, aspect, renderPanel, show, full, draw, setEditing, refresh, get editing() { return F.editing; } };
 })();

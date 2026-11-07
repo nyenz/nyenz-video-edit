@@ -31,7 +31,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from ..api import plan_text, prepare, read_script, validate_script
 from ..core.cache import atomic_write_json, home_dir
 from ..core.errors import EditForgeError
-from ..core.ffmpeg import run_ffmpeg
+from ..core.ffmpeg import get_tools, run_ffmpeg
 from ..core.fingerprint import file_fingerprint
 from ..core.media import probe_media
 from ..jobs.manager import JobManager
@@ -353,6 +353,67 @@ class AppState:
         if info["has_video"] and info["preview"]["state"] == "ready":
             self.previews.ensure_strip(src)
         return info
+
+    PEAK_RATE = 50                                    # loudness values a second for the sound track on the timeline
+
+    def peaks(self, src: str) -> Optional[Path]:
+        """How loud the sound is, PEAK_RATE values a second (one byte each), for the sound track drawn under the
+        video. Made once in the background (low priority) and kept in <home>/thumbs. None while it is being made."""
+        fp = self.fingerprint(src)
+        out = self.thumbs / (fp + "_peaks.u8")
+        if out.is_file():
+            return out
+        with self._task_lock:
+            busy = getattr(self, "_peaks_busy", None)
+            if busy is None:
+                busy = self._peaks_busy = set()
+            if fp in busy:
+                return None
+            busy.add(fp)
+        threading.Thread(target=self._make_peaks, args=(src, out, fp), name="editforge-peaks", daemon=True).start()
+        return None
+
+    def _make_peaks(self, src: str, out: Path, fp: str) -> None:
+        import subprocess
+        try:
+            import numpy as np
+            sr, step = 8000, 8000 // self.PEAK_RATE
+            cmd = [get_tools().ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-i", src, "-map", "0:a:0", "-vn",
+                   "-ac", "1", "-ar", str(sr), "-f", "s16le", "-"]
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, preexec_fn=_nice_fn(),
+                                    creationflags=_low_flags())
+            vals: List[Any] = []
+            rest = b""
+            assert proc.stdout is not None
+            while True:
+                buf = proc.stdout.read(step * 2 * 2000)
+                if not buf:
+                    break
+                buf = rest + buf
+                n = len(buf) // (step * 2)
+                rest = buf[n * step * 2:]
+                if n:
+                    a = np.abs(np.frombuffer(buf[: n * step * 2], dtype="<i2").astype(np.int32)).reshape(n, step).max(axis=1)
+                    vals.append(a)
+            proc.wait()
+            if rest:
+                vals.append(np.array([np.abs(np.frombuffer(rest[: len(rest) // 2 * 2], dtype="<i2").astype(np.int32)).max(initial=0)]))
+            arr = np.concatenate(vals) if vals else np.zeros(0, dtype=np.int32)
+            # square root: quiet talk still shows, loud parts do not fill everything
+            u8 = np.clip(np.sqrt(arr / 32768.0) * 255.0, 0, 255).astype(np.uint8)
+            self.thumbs.mkdir(parents=True, exist_ok=True)
+            tmp = out.with_suffix(".tmp")
+            tmp.write_bytes(u8.tobytes())
+            tmp.replace(out)
+        except Exception:  # noqa: BLE001 - no sound track: nothing to draw
+            try:
+                self.thumbs.mkdir(parents=True, exist_ok=True)
+                out.write_bytes(b"")
+            except OSError:
+                pass
+        finally:
+            with self._task_lock:
+                self._peaks_busy.discard(fp)
 
     def thumbnail(self, src: str, at: float, height: int = 96) -> Optional[Path]:
         """A small JPEG of the picture at ``at`` seconds (made once, then kept). None if it cannot be made."""
@@ -702,7 +763,7 @@ class AppState:
                 freed += gone(f)
         if not busy.intersection(f.name for f in self.previews.folder.glob(fp + ".*")):
             _unlink(self.thumbs / (fp + "_s.done"))
-            for f in list(self.thumbs.glob(fp + "_*.jpg")):
+            for f in list(self.thumbs.glob(fp + "_*.jpg")) + list(self.thumbs.glob(fp + "_peaks.u8")):
                 freed += gone(f)
         return freed
 
@@ -1053,6 +1114,8 @@ class AppState:
                 _unlink(f)
             for f in self.thumbs.glob("*.jpg"):
                 n += _unlink(f)
+            for f in self.thumbs.glob("*_peaks.u8"):
+                n += _unlink(f)
         elif what == "uploads":                  # copies of videos sent in by dragging, that no project uses
             used = self.used_uploads()
             for d in list(self.uploads.iterdir()):
@@ -1197,6 +1260,17 @@ def _unlink(p: Path) -> int:
         return 1
     except OSError:
         return 0
+
+
+def _nice_fn() -> Any:
+    """Background work runs at low priority, so the app stays quick (posix)."""
+    if os.name != "posix":
+        return None
+    return lambda: os.nice(10)
+
+
+def _low_flags() -> int:
+    return 0x4000 if os.name == "nt" else 0              # BELOW_NORMAL_PRIORITY_CLASS on Windows
 
 
 def _thumb_time(pieces: List[Dict[str, Any]], duration: float) -> float:
@@ -1379,6 +1453,22 @@ class Handler(BaseHTTPRequestHandler):
                 self._media()
             elif path == "/thumb":
                 self._thumb()
+            elif path == "/api/peaks":
+                query = self._guard()
+                if query is None:
+                    return
+                try:
+                    src = self.state.resolve_input((query.get("id") or [""])[0])
+                except EditForgeError:
+                    self._error(404, "No sound for that.")
+                    return
+                f = self.state.peaks(src)
+                if f is None:
+                    self._json({"state": "making"}, 202)
+                    return
+                body = f.read_bytes()
+                self._headers(200, "application/octet-stream", len(body), {"X-Peak-Rate": str(self.state.PEAK_RATE), "Cache-Control": "private, max-age=86400"})
+                self.wfile.write(body)
             elif path == "/api/projects":
                 if self._guard() is None:
                     return

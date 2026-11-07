@@ -260,11 +260,14 @@ class ItemBuilder:
             chain += f",pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:black"
         return g.add(cur, chain, "fp"), Dims(W, H)
 
-    def _frame(self, g: Graph, cur: str, dims: Dims, n: int) -> Tuple[str, Dims]:
+    def _frame(self, g: Graph, cur: str, dims: Dims, n: int, place: Optional[Dict[str, float]] = None) -> Tuple[str, Dims]:
         """Two layers on a canvas of the chosen shape (like CapCut):
         below, the same picture filling the canvas (blurred, or black / white);
-        above, the picture fitted, then scaled, moved and turned, and optionally cut to a mask shape with soft edges."""
-        fr = self.out.frame or {}
+        above, the picture fitted, then scaled, moved and turned, and optionally cut to a mask shape with soft edges.
+        place: this piece's own position of the picture (over the frame's)."""
+        fr = dict(self.out.frame or {})
+        if place:
+            fr.update({k: place[k] for k in ("x", "y", "scale", "rotate") if k in place})
         W, H = self.out.width, self.out.height
         cw, ch = dims.w, dims.h
         a, b, bg, bg1, bg2, fg, top = (g.label(x) for x in ("ka", "kb", "kg", "kg1", "kg2", "kf", "kt"))
@@ -288,6 +291,11 @@ class ItemBuilder:
         g.add_raw(f"[{b}]{front}[{fg}]")
         dx, dy = float(fr.get("x", 0.0)) * W / 2, float(fr.get("y", 0.0)) * H / 2
         mask = (fr.get("mask") or {}).get("shape", "none")
+        edge = float(fr.get("edge", 0.0) or 0.0)
+        edge_r = edge / 100.0 * min(W, H) * 0.16                  # soft edges of the picture itself (into the layer below)
+        if mask == "none" and edge > 0.5:
+            fr = dict(fr, mask={"shape": "all", "feather": 0.0})
+            mask = "all"
         if mask == "none":
             g.add_raw(f"[{bg}][{fg}]overlay=x='(W-w)/2+{dx:.1f}':y='(H-h)/2+{dy:.1f}':format=auto,format=yuv420p[{top}]")
             return top, Dims(W, H)
@@ -297,12 +305,12 @@ class ItemBuilder:
         pcx, pcy = W / 2 + dx, H / 2 + dy
         rect = {"l": pcx - fw / 2, "r": pcx + fw / 2, "t": pcy - fh / 2, "b": pcy + fh / 2, "W": W, "H": H,
                 "rot": rot if abs(rot) > 0.01 else 0.0, "cx": pcx, "cy": pcy, "hw": fw / 2, "hh": fh / 2}
-        g.add_raw(f"{self.mask_source(fr['mask'], W, H, n, rect)}[{alpha}]")
+        g.add_raw(f"{self.mask_source(fr['mask'], W, H, n, rect, edge_r)}[{alpha}]")
         g.add_raw(f"[{sharp}][{alpha}]alphamerge[{cut}]")
         g.add_raw(f"[{bg2}][{cut}]overlay=0:0:format=auto,format=yuv420p[{res}]")
         return res, Dims(W, H)
 
-    def mask_source(self, m: Dict[str, Any], W: int, H: int, n: int, rect: Optional[Dict[str, Any]] = None) -> str:
+    def mask_source(self, m: Dict[str, Any], W: int, H: int, n: int, rect: Optional[Dict[str, Any]] = None, edge_r: float = 0.0) -> str:
         """A grey picture (white = the sharp picture shows) drawn ONCE and repeated for ``n`` frames.
 
         ``rect`` is where the sharp picture sits ({l, t, r, b, rot, cx, cy, hw, hh}); with a soft edge the picture's own
@@ -325,17 +333,21 @@ class ItemBuilder:
             e = f"gte({v},0)"
         elif shape == "vstrip":
             e = f"lte(abs({u}),{hw:.1f})"
+        elif shape == "all":                                    # no mask: only the soft edges of the picture
+            e = "1"
         else:                                                   # "strip": a band across the whole width
             e = f"lte(abs({v}),{hh:.1f})"
         if m.get("invert"):
             e = f"1-{e}"
         chain = (f"color=c=black:s={W}x{H}:r={fps_str(self.F)},trim=end_frame=1,format=gray,geq=lum='255*({e})'")
         feather = float(m.get("feather", 0.0))
+        fade = edge_r
         if feather > 0.5:
             sigma = feather / 100.0 * min(W, H) * 0.08
             chain += f",gblur=sigma={sigma:.2f}:steps=3"
-            if rect:
-                chain += f",geq=lum='lum(X,Y)*({self._edge_fade(rect, 2.0 * sigma)})'"
+            fade = max(fade, 2.0 * sigma)
+        if rect and fade > 0.5:
+            chain += f",geq=lum='lum(X,Y)*({self._edge_fade(rect, fade)})'"
         chain += f",loop=loop={max(0, n - 1)}:size=1:start=0,setpts=N/({self.Ff:.9f}*TB)"
         return chain
 
@@ -510,7 +522,7 @@ class ItemBuilder:
         elif seg.reframe is not None:
             cur, dims = self._reframe(g, cur, it, dims)
         if self.out.frame:
-            cur, dims = self._frame(g, cur, dims, it.n)
+            cur, dims = self._frame(g, cur, dims, it.n, seg.place)
         else:
             cur, dims = self._fit(g, cur, dims)
         if seg.reverse:
