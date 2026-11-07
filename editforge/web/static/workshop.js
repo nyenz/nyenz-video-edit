@@ -585,6 +585,19 @@ async function deleteChosen() {
   const gone = new Set(list.map((c) => c.id));
   commit(() => { C.cs.clips = clips().filter((c) => !gone.has(c.id)); C.multi.clear(); });
 }
+/** A click on the picture chooses the clip that is playing there (the playhead stays where it is).
+ *  Ctrl + click adds it to the chosen clips. */
+function pickAtPlayhead(e) {
+  if (!C.info) return;
+  const t = video.currentTime || 0, inside = (p) => t >= p.start && t < p.end;
+  const cur = selClip();
+  let c = cur && cur.parts.some(inside) ? cur : clips().find((x) => x.parts.some(inside));
+  if (!c) return;
+  const part = c.parts.findIndex(inside);
+  if (e && (e.ctrlKey || e.metaKey)) { pick(c.id, e); return; }
+  if (C.sel === c.id && C.selPart === part && C.multi.size < 2) return;
+  C.multi.clear(); C.anchor = c.id; C.sel = c.id; C.selPart = part; renderAll();
+}
 function select(id) { C.sel = id; C.selPart = 0; C.queue = null; renderAll(); const c = selClip(); if (c && C.info) seek(c.parts[0].start); }
 function watch(c, file) {
   dialogBox(c.name, [el("div", { class: "watch" }, miniPlayer(mediaUrl(file, false)))], [["Close", null, "ghost"]], (done, dlg) => dlg.classList.add("wide"));
@@ -949,7 +962,7 @@ function showKeys() {
 // ------------------------------------------------------------------ wiring
 function wire() {
   $("tPlay").addEventListener("click", togglePlay);
-  $("frame").addEventListener("click", (e) => { if (!e.target.closest(".empty")) togglePlay(); });
+  $("frame").addEventListener("click", (e) => { if (e.target.closest(".empty")) return; pickAtPlayhead(e); togglePlay(); });
   $("tBack").addEventListener("click", () => { video.pause(); seek(video.currentTime - frameLen()); });
   $("tFwd").addEventListener("click", () => { video.pause(); seek(video.currentTime + frameLen()); });
   $("tBack10").addEventListener("click", () => seek(video.currentTime - 10));

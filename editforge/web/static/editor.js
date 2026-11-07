@@ -769,6 +769,16 @@ function startPreview(fromStart) {
   if (fromStart) seek(0);
   play();
 }
+/** The section showing in the picture becomes the chosen one (a whole scene in Scenes). Ctrl adds it to the chosen ones. */
+function pickAtPlayhead(e) {
+  const at = segAt(S.t); if (!at) return;
+  const p = at.s.p, grp = scenesOn() ? sceneOf(p) : [p];
+  if (e && (e.ctrlKey || e.metaKey)) { const on = grp.every((q) => S.sel.has(q)); for (const q of grp) { if (on) S.sel.delete(q); else S.sel.add(q); } }
+  else { if (S.sel.size === grp.length && grp.every((q) => S.sel.has(q))) return; S.sel = new Set(grp); }
+  S.anchor = p;
+  refreshAll({ keepVideo: true });
+  if (Frame.editing) Frame.renderPanel();
+}
 /** The right-click menu of the timeline. */
 function timelineMenu(e) {
   e.preventDefault();
@@ -1654,7 +1664,9 @@ function wire() {
   $("tBack").addEventListener("click", () => seek(S.t - frame()));
   $("tFwd").addEventListener("click", () => seek(S.t + frame()));
   $("tMute").addEventListener("click", () => { S.mutedAll = !S.mutedAll; $("tMute").replaceChildren(icon(S.mutedAll ? "mute" : "vol")); showFrame(); musicMute(); });
-  $("frame").addEventListener("click", (e) => { if (e.target.closest("#drawLayer")) return; togglePlay(); });
+  $("frame").addEventListener("click", (e) => { if (e.target.closest("#drawLayer")) return; if (!Frame.editing) togglePlay(); });
+  // a press on the picture chooses the section that is showing there (also before dragging it in Picture)
+  $("frame").addEventListener("pointerdown", (e) => { if (e.button === 0 && !e.target.closest("#drawLayer")) pickAtPlayhead(e); }, true);
   // timeline
   $("tlScroll").addEventListener("pointerdown", (e) => { if (e.target.closest(".lane-head, .mrow")) return; if (e.target.closest("#ruler")) onRulerDown(e); else onLaneDown(e); });
   let raf = 0; $("tlScroll").addEventListener("scroll", () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(renderTimeline); });

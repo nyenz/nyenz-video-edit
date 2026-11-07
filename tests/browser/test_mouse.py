@@ -222,3 +222,19 @@ def test_ctrl_click_clips_and_combine_them(live, page, movie_id):
     page.click(".dialog .btn.danger-fill, .dialog button:has-text('Delete 3')")
     assert len(clips(page)) == 1
     assert page.errors == []
+
+
+def test_a_click_on_the_picture_chooses_the_clip_playing_there(live, page, movie_id):
+    open_clips(live, page, movie_id)
+    drag_mark(page, 10, 20); page.click("#addNew")
+    drag_mark(page, 50, 60); page.click("#addNew")
+    page.evaluate("() => select(clips()[0].id)")
+    set_playhead(page, 55.0)
+    page.click("#frame")
+    assert page.evaluate("() => selClip().id") == page.evaluate("() => clips()[1].id")
+    assert abs(page.evaluate("() => video.currentTime") - 55.0) < 1.0   # the playhead stays where it was
+    page.evaluate("() => video.pause()")
+    set_playhead(page, 15.0)
+    page.click("#frame", modifiers=["Control"])
+    assert page.inner_text("#clipHead") == "2 clips chosen"
+    assert page.errors == []
