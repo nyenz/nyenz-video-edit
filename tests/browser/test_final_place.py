@@ -13,36 +13,76 @@ def movie_id(live, movie):
     return live.upload(movie)
 
 
-def test_position_of_one_section_or_all_chosen(live, page, movie_id):
-    pid = live.call("POST", "/api/projects", {"source": movie_id, "name": "Placed", "stage": "final", "interval": 4})["project"]["id"]
+def open_placed(live, page, movie_id, name):
+    pid = live.call("POST", "/api/projects", {"source": movie_id, "name": name, "stage": "final", "interval": 4})["project"]["id"]
     page.goto(f"{live.base}/final?p={pid}")
     page.wait_for_function("() => typeof S !== 'undefined' && S.proj && S.info && document.querySelector('#laneV .clipb')", timeout=30000)
+    return pid
+
+
+def test_moving_the_picture_moves_only_the_section_showing(live, page, movie_id):
+    """Like CapCut: no 'Position for' switch. A press on the picture chooses the section showing; moving changes only it.
+    Ctrl + A on the timeline, then moving, changes all. Reset position puts it back in the middle, not turned."""
+    pid = open_placed(live, page, movie_id, "Placed")
     page.click(".ftabs button[data-panel=frame]")
     page.wait_for_selector("#framePanel .nums4")
+    assert "Position for" not in page.inner_text("#framePanel")
     n = page.evaluate("() => kept().length")
     assert n >= 3
-    # whole video: X moves everything (nothing has its own position)
-    page.fill("#framePanel .numf:has-text('X') input", "100"); page.keyboard.press("Enter")
-    assert page.evaluate("() => S.proj.settings.frame.x") > 0 and page.evaluate("() => kept().filter(p => p.place).length") == 0
-    # one section: choose it, switch to Chosen sections, type Y
-    page.locator("#laneV .clipb").nth(1).click()
-    page.click("#framePanel button:has-text('Chosen sections')")
+    page.evaluate("() => seek(layout()[1].out0 + 0.5)")
+    page.click("#frame")                                                 # chooses section 2
     page.fill("#framePanel .numf:has-text('Y') input", "-50"); page.keyboard.press("Enter")
-    places = page.evaluate("() => kept().map(p => p.place ? Math.round(p.place.y * 1000) : null)")
-    assert places[1] is not None and places[1] < 0 and places[0] is None and places[2] is None
-    assert page.evaluate("() => S.proj.settings.frame.y") == 0                         # the whole video did not move
-    # all sections: Ctrl + A, then type X: every section gets it
-    page.locator("#laneV .clipb").nth(0).click()
+    ys = page.evaluate("() => kept().map(p => p.place ? p.place.y : null)")
+    assert ys[1] is not None and ys[1] < 0 and ys[0] is None and ys[2] is None
+    # drag on the picture of section 3: only section 3 moves
+    page.evaluate("() => seek(layout()[2].out0 + 0.5)")
+    box = page.query_selector("#frame").bounding_box()
+    cx, cy = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+    page.mouse.move(cx, cy); page.mouse.down(); page.mouse.move(cx + 40, cy, steps=5); page.mouse.up()
+    xs = page.evaluate("() => kept().map(p => p.place ? p.place.x : null)")
+    assert xs[2] is not None and xs[2] > 0.05 and (xs[1] or 0) == 0 and xs[0] is None
+    assert page.evaluate("() => selList().map(p => kept().indexOf(p))") == [2]
+    # Ctrl + A, then a typed X: every section gets it
     page.keyboard.press("Control+a")
     page.fill("#framePanel .numf:has-text('X') input", "-80"); page.keyboard.press("Enter")
     xs = page.evaluate("() => kept().map(p => p.place && p.place.x)")
     assert len(set(xs)) == 1 and xs[0] < 0
-    # it is saved with the project, and soft edges too
-    page.click("#framePanel button:has-text('Whole video')")
-    page.evaluate("() => { const f = Frame.full(S.proj.settings.frame); f.edge = 40; storeFrame(f); }")
+    # Reset position: all chosen go back to the middle, not turned (size stays)
+    page.evaluate("() => { const f = Frame.full(effectiveFrame()); f.rotate = 30; f.scale = 1.5; storeFrame(f); }")
+    page.click("#resetPlace")
+    places = page.evaluate("() => kept().map(p => p.place)")
+    assert all(p["x"] == 0 and p["y"] == 0 and p["rotate"] == 0 and p["scale"] == 1.5 for p in places)
     page.evaluate("() => saveNow()")
     saved = live.call("GET", f"/api/projects/{pid}")["project"]
-    assert all(p.get("place") for p in saved["pieces"] if not p["off"]) and saved["settings"]["frame"]["edge"] == 40
+    assert all(p.get("place") for p in saved["pieces"] if not p["off"])
+    assert page.errors == []
+
+
+def test_locked_tracks_cannot_be_changed_by_mistake(live, page, movie_id):
+    pid = open_placed(live, page, movie_id, "Locked")
+    n = page.evaluate("() => kept().length")
+    page.click("#laneV .lane-head .lock-btn")
+    assert page.evaluate("() => S.proj.settings.locks.video") is True
+    page.locator("#laneV .clipb").nth(1).click()
+    page.keyboard.press("Delete")
+    page.evaluate("() => seek(layout()[0].out0 + 1)"); page.keyboard.press("s")
+    assert page.evaluate("() => kept().length") == n                      # nothing removed or split
+    page.wait_for_selector(".toast:has-text('video track is locked')")
+    # the picture can still be placed on a locked track
+    page.click(".ftabs button[data-panel=frame]")
+    page.fill("#framePanel .numf:has-text('X') input", "30"); page.keyboard.press("Enter")
+    assert page.evaluate("() => kept()[1].place.x") > 0                     # the chosen section (2)
+    # the sound track: loudness and mute are locked
+    page.wait_for_selector("#laneA .lane-head .lock-btn")
+    page.click("#laneA .lane-head .lock-btn")
+    page.locator("#laneV .clipb").nth(1).click()
+    assert page.is_disabled("#right input[aria-label=Loudness]")
+    page.evaluate("() => saveNow()")
+    assert live.call("GET", f"/api/projects/{pid}")["project"]["settings"]["locks"] == {"video": True, "sound": True}
+    page.click("#laneV .lane-head .lock-btn")                             # unlock: Delete works again
+    page.locator("#laneV .clipb").nth(1).click()
+    page.keyboard.press("Delete")
+    assert page.evaluate("() => kept().length") == n - 1
     assert page.errors == []
 
 
@@ -71,22 +111,17 @@ def test_preview_and_the_sound_track(live, page, movie_id):
 
 
 def test_a_click_on_the_picture_chooses_the_section_showing_there(live, page, movie_id):
-    pid = live.call("POST", "/api/projects", {"source": movie_id, "name": "Pick", "stage": "final", "interval": 4})["project"]["id"]
-    page.goto(f"{live.base}/final?p={pid}")
-    page.wait_for_function("() => typeof S !== 'undefined' && S.proj && S.info && document.querySelector('#laneV .clipb')", timeout=30000)
+    open_placed(live, page, movie_id, "Pick")
     page.evaluate("() => seek(layout()[2].out0 + 0.5)")
     page.click("#frame")
     assert page.evaluate("() => selList().map(p => kept().indexOf(p))") == [2]
     page.evaluate("() => { pause(); seek(layout()[0].out0 + 0.5); }")
     page.click("#frame", modifiers=["Control"])                    # Ctrl adds it
     assert sorted(page.evaluate("() => selList().map(p => kept().indexOf(p))")) == [0, 2]
-    # in Picture, the press chooses it before you drag, and the panel counts it
     page.evaluate("() => pause()")
     page.click(".ftabs button[data-panel=frame]")
-    page.click("#framePanel button:has-text('Chosen sections')")
     page.evaluate("() => seek(layout()[1].out0 + 0.5)")
     page.click("#frame")
     assert page.evaluate("() => selList().map(p => kept().indexOf(p))") == [1]
-    assert "Chosen sections (1)" in page.inner_text("#framePanel")
     assert page.evaluate("() => S.playing") is False                 # in Picture a click does not start playing
     assert page.errors == []
