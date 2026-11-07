@@ -233,6 +233,8 @@ def clean_settings(raw: Any) -> Dict[str, Any]:
         s["mix_" + layer] = round(_num(raw.get("mix_" + layer), 1.0, 0.0, 2.0), 3)
     fr = clean_frame(raw.get("frame")) if isinstance(raw.get("frame"), dict) else None
     s["frame"] = fr if frame_active(fr) else None
+    lk = raw.get("locks") if isinstance(raw.get("locks"), dict) else {}
+    s["locks"] = {"video": bool(lk.get("video")), "sound": bool(lk.get("sound"))}   # locked tracks (like CapCut)
     return s
 
 

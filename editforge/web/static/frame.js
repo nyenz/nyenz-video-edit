@@ -387,19 +387,13 @@ const Frame = (function () {
     if (f.bg === "blur") host.append(slider("Blur strength", 0, 100, 1, f.blur, (v) => Math.round(v) + "%", (fr, v) => { fr.blur = v; }));
     // the picture
     host.append(el("div", { class: "layer-h" }, icon("film", "s"), el("b", { text: "Video layer" }), el("small", { text: "on top" })));
-    // Whole video, or only the chosen sections (each section can have its own position)
-    const sc = F.scope ? F.scope() : { mode: "all", n: 0, own: 0, here: false };
-    host.append(el("div", { class: "field" }, el("span", { text: "Position for" }),
-      segmented([["all", "Whole video"], ["chosen", sc.n ? "Chosen sections (" + sc.n + ")" : "Chosen sections"]], sc.mode, (v) => { F.setScope(v); renderPanel(); show(); })));
-    if (sc.mode === "chosen" && !sc.n) host.append(el("p", { class: "hint warn", text: "Click a section on the timeline first (Ctrl + click for more, Ctrl + A for all). Then move it here." }));
-    if (sc.mode === "chosen" && sc.n) host.append(el("p", { class: "hint", text: "What you change now is only for the " + (sc.n === 1 ? "chosen section" : sc.n + " chosen sections") + ". Typing a number sets it on all of them." }));
-    if (sc.mode === "all" && sc.here) host.append(el("div", { class: "own-note" }, el("span", { text: "The section at the playhead has its own position, so changes here do not move it." }),
-      el("div", { class: "btns" }, btn("Change it", { cls: "sm", onclick: () => { F.pickHere(); renderPanel(); show(); } }),
-        btn("Use the whole video's", { cls: "sm ghost", onclick: () => { F.resetPlace(true); renderPanel(); show(); } }))));
-    if (sc.mode === "all" && sc.own && !sc.here) host.append(el("p", { class: "hint", text: sc.own + (sc.own === 1 ? " section has" : " sections have") + " its own position (it plays like that)." }));
+    // like CapCut: moving the picture moves the section showing (a press on the picture chooses it), or every chosen section
+    const sc = F.scope ? F.scope() : { n: 1, chosen: 0 };
+    host.append(el("p", { class: "hint", text: sc.chosen > 1 ? "Moving changes the " + sc.chosen + " chosen sections together. Click one section on the timeline (or the picture) to move only that one."
+      : "Press on the picture and drag: only the section showing moves. Ctrl + A on the timeline chooses all sections to move them together." }));
     if (F.target === "mask" && f.mask.shape === "none") F.target = "video";
-    host.append(el("div", { class: "field" }, el("span", { text: "Drag on the viewer" }),
-      segmented(f.mask.shape === "none" ? [["video", "Video layer"]] : [["video", "Video layer"], ["mask", "Mask"]], F.target, (v) => { F.target = v; paintOverlay(); renderPanel(); })));
+    if (f.mask.shape !== "none") host.append(el("div", { class: "field" }, el("span", { text: "Drag on the viewer" }),
+      segmented([["video", "Video layer"], ["mask", "Mask"]], F.target, (v) => { F.target = v; paintOverlay(); renderPanel(); })));
     const gr = el("input", { type: "checkbox", class: "sw" }); gr.checked = F.grid;
     gr.addEventListener("change", () => { F.grid = gr.checked; try { localStorage.setItem("ef.grid", F.grid ? "1" : "0"); } catch (e) { /* ignore */ } paintOverlay(); });
     host.append(el("label", { class: "swl" }, el("span", { text: "Show the grid and edge distances" }), gr));
@@ -422,6 +416,8 @@ const Frame = (function () {
       num("Y", Math.round(f.y * out.h / 2), "px", -Math.round(out.h * 2), Math.round(out.h * 2), (fr, v) => { fr.y = +(v / (out.h / 2)).toFixed(4); }),
       num("Size", Math.round(f.scale * 100), "%", 10, 400, (fr, v) => { fr.scale = v / 100; }),
       num("Turn", Math.round(f.rotate), "°", -180, 180, (fr, v) => { fr.rotate = v; })));
+    host.append(el("button", { type: "button", class: "btn wide", id: "resetPlace", title: "X = 0, Y = 0, not turned (the size stays)", onclick: () => F.resetPlace() },
+      icon("restore", "s"), el("span", { text: sc.chosen > 1 ? "Reset position of " + sc.chosen + " sections" : "Reset position" })));
     host.append(slider("Size", 10, 400, 1, Math.round(f.scale * 100), (v) => Math.round(v) + "%", (fr, v) => { fr.scale = v / 100; }));
     host.append(el("div", { class: "grid2" },
       slider("Left / right", -100, 100, 1, Math.round(f.x * 100), (v) => String(Math.round(v)), (fr, v) => { fr.x = v / 100; }),
@@ -464,7 +460,7 @@ const Frame = (function () {
   /** get(): the project's frame; set(frame, live): store it (live = while dragging); video(): the playing video element. */
   function init(opts) {
     F.get = opts.get; F.set = opts.set; F.video = opts.video; F.host = opts.host; F.srcAspect = opts.srcAspect || 16 / 9;
-    F.scope = opts.scope; F.setScope = opts.setScope || (() => {}); F.pickHere = opts.pickHere || (() => {}); F.resetPlace = opts.resetPlace || (() => {});
+    F.scope = opts.scope; F.resetPlace = opts.resetPlace || (() => {});
     F.cv = el("canvas", { class: "frame-cv", hidden: true });
     F.host.prepend(F.cv);
     F.ov = el("canvas", { class: "frame-ov", hidden: true });

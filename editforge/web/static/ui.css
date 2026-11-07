@@ -859,3 +859,14 @@ body.previewing .frame-ov, body.previewing #badge { display: none !important; }
 .numf small { position: absolute; right: 7px; bottom: 9px; font-size: 11px; color: var(--faint); pointer-events: none; }
 .own-note { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: 9px; background: var(--accent-soft); color: var(--ink-2); font-size: 12px; margin-bottom: 8px; }
 .hint.warn { color: #ffc46b; }
+
+/* ---- locked tracks ---- */
+.lock-btn { margin-left: auto; width: 26px; height: 26px; display: grid; place-items: center; border: 0; border-radius: 6px; background: none; color: var(--faint); cursor: pointer; }
+.lock-btn:hover { background: var(--raised); color: var(--ink); }
+.lock-btn.on { color: #ffc46b; background: rgba(255, 196, 107, .12); }
+.lane.track-locked .clipb { cursor: not-allowed; }
+.lane.track-locked .clipb .h { display: none; }
+.lane.track-locked::after { content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: repeating-linear-gradient(135deg, rgba(255, 196, 107, .07) 0 8px, transparent 8px 16px); }
+.locks { display: flex; gap: 4px; }
+.lock-tl.on { color: #ffc46b; border-color: rgba(255, 196, 107, .4); }

@@ -92,8 +92,8 @@ def test_choose_combine_move_and_remove_whole_scenes(live, page, movie_id):
     page.evaluate("() => fitZoom()")
     blocks = lambda: page.query_selector_all("#laneV .clipb")
     # a click chooses the whole scene; Ctrl + click adds another
-    blocks()[1].click()
-    blocks()[3].click(modifiers=["Control"])
+    page.locator("#laneV .clipb").nth(1).click()
+    page.locator("#laneV .clipb").nth(3).click(modifiers=["Control"])
     assert page.evaluate("() => chosenScenes().size") == 2
     assert "2 scenes selected" in page.inner_text("#iSel")
     page.click("#bCombine")
@@ -115,12 +115,12 @@ def test_choose_combine_move_and_remove_whole_scenes(live, page, movie_id):
     page.keyboard.press("s")
     assert page.evaluate("() => sceneList().length") == 9
     # right-click a scene
-    blocks()[2].click(button="right")
+    page.locator("#laneV .clipb").nth(2).click(button="right")
     assert page.locator(".menu.ctx", has_text="Remove this scene").count() == 1
     page.keyboard.press("Escape")
     # Sections: a click chooses one section again
     page.click("#chooseSeg button:has-text('Sections')")
-    blocks()[0].click()
+    page.locator("#laneV .clipb").nth(0).click()
     assert page.evaluate("() => S.sel.size") == 1
     page.evaluate("() => localStorage.removeItem('ef.choose')")
     assert page.errors == []

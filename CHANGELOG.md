@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.18.0
+* **Positions work like CapCut.** The "Position for" switch is gone. Press on the picture and drag: only the section showing
+  moves (it is chosen by the press, no need to go to the timeline). Ctrl + A on the timeline chooses all sections to move them together.
+  Typed X / Y / Size / Turn go to the chosen sections.
+* **Reset position**: X = 0, Y = 0, not turned (the size stays), for the section showing or all chosen ones.
+* **Lock a track** when you are done with it (lock next to Video and Sound in Final, and on the timeline bar in Edit).
+  * Locked video: its sections cannot be trimmed, moved, split, sped up, duplicated or removed. Their positions on the picture
+    can still be changed.
+  * Locked sound: loudness, mute and the music layers cannot be changed.
+  * The lock is saved with the project.
+
 ## 1.17.1
 * **Click the picture to choose what is showing.** A click on the video picture chooses the section playing there (in Scenes: the
   whole scene) on Edit and Final, and the clip playing there on the Clips page. The playhead stays where it is.

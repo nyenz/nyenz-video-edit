@@ -96,23 +96,24 @@ def test_the_picture_can_be_moved_scaled_and_turned_with_the_mouse(live, page, m
     cx, cy = b["x"] + b["w"] / 2, b["y"] + b["h"] / 2
     # move: drag the picture down and a bit left; close to the middle it snaps back to exactly 0
     _drag(page, cx, cy, cx - 40, cy + 70)
-    fr = page.evaluate("() => S.proj.settings.frame")
+    fr = page.evaluate("() => effectiveFrame()")
     assert fr["x"] < -0.1 and fr["y"] > 0.1
     _drag(page, cx - 40, cy + 70, cx + 2, cy + 2)
-    fr = page.evaluate("() => S.proj.settings.frame")
+    fr = page.evaluate("() => effectiveFrame()")
     assert fr["x"] == 0 and fr["y"] == 0, fr                                     # snapped to the middle lines
     # resize: drag a corner outwards
-    pic = page.evaluate("() => { const f = Frame.full(S.proj.settings.frame), b = document.getElementById('frame').getBoundingClientRect(); const k = Math.min(b.width / (S.info.width / S.info.height), b.height) * f.scale; return { hw: (S.info.width / S.info.height) * k / 2, hh: k / 2 }; }")
+    pic = page.evaluate("() => { const f = Frame.full(effectiveFrame()), b = document.getElementById('frame').getBoundingClientRect(); const k = Math.min(b.width / (S.info.width / S.info.height), b.height) * f.scale; return { hw: (S.info.width / S.info.height) * k / 2, hh: k / 2 }; }")
     _drag(page, cx + pic["hw"] - 3, cy + pic["hh"] - 2, cx + pic["hw"] * 1.5, cy + pic["hh"] * 1.5)
-    assert page.evaluate("() => S.proj.settings.frame.scale") > 1.3
+    assert page.evaluate("() => effectiveFrame().scale") > 1.3
     # turn: drag the round knob to the right of the picture (about 90 degrees)
-    page.evaluate("() => { S.proj.settings.frame.scale = 1; sizeFrame(); }")
+    page.evaluate("() => { const f = Frame.full(effectiveFrame()); f.scale = 1; storeFrame(f); }")
     _drag(page, cx, cy - pic["hh"] - 26, cx + 120, cy)
-    assert page.evaluate("() => S.proj.settings.frame.rotate") == pytest.approx(90, abs=4)
+    assert page.evaluate("() => effectiveFrame().rotate") == pytest.approx(90, abs=4)
     # the grid shows distances without being asked to drag
-    page.evaluate("() => { S.proj.settings.frame.rotate = 0; sizeFrame(); }")
+    page.evaluate("() => { const f = Frame.full(effectiveFrame()); f.rotate = 0; storeFrame(f); }")
     page.check("#framePanel input.sw >> nth=0")
     assert page.evaluate("() => localStorage.getItem('ef.grid')") == "1"
+    assert page.evaluate("() => S.proj.settings.frame.x") == 0                  # the shape is for all; the position is the section's
     page.evaluate("() => saveNow()")
     assert page.errors == []
 
