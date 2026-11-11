@@ -78,7 +78,7 @@ def test_locked_tracks_cannot_be_changed_by_mistake(live, page, movie_id):
     page.locator("#laneV .clipb").nth(1).click()
     assert page.is_disabled("#right input[aria-label=Loudness]")
     page.evaluate("() => saveNow()")
-    assert live.call("GET", f"/api/projects/{pid}")["project"]["settings"]["locks"] == {"video": True, "sound": True}
+    assert live.call("GET", f"/api/projects/{pid}")["project"]["settings"]["locks"] == {"video": True, "sound": True, "voices": False, "music": False, "effects": False}
     page.click("#laneV .lane-head .lock-btn")                             # unlock: Delete works again
     page.locator("#laneV .clipb").nth(1).click()
     page.keyboard.press("Delete")
