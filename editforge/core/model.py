@@ -120,6 +120,9 @@ class Segment:
     rev_group: int = -1
     place: Optional[Dict[str, float]] = None  # this piece's own position of the video layer (x, y, scale, rotate), over the frame's
     layer_gain: Optional[Dict[str, float]] = None  # this piece's own loudness of the split sound layers (voices / music / effects)
+    # even out / fade of this piece's sound, per source ("original" or a split layer): {"env": [[source s, dB]...], "a": source
+    # start of the piece, "b": source end, "fin": s, "fout": s, "rev": bool}
+    shape: Optional[Dict[str, Dict[str, Any]]] = None
 
     @property
     def speed(self) -> float:

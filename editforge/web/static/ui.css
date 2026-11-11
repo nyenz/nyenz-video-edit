@@ -902,3 +902,20 @@ body.previewing .frame-ov, body.previewing #badge { display: none !important; }
 .vsteps i { font-style: normal; width: 16px; height: 16px; border-radius: 5px; display: inline-grid; place-items: center; font-size: 10px; font-weight: 700;
   border: 1px solid var(--line-soft); color: var(--muted); background: var(--sunk); }
 .vsteps i.done { background: var(--accent); border-color: var(--accent); color: #062a31; }
+
+/* 1.22: even out, fades, sound check */
+.even-field .seg button:disabled, .seg button:disabled { opacity: .45; cursor: not-allowed; }
+.even-field > span small { margin-left: 2px; }
+.fade-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.fade-fields .field span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.track-box { border-top: 1px solid var(--line-soft); background: linear-gradient(180deg, rgba(255, 255, 255, .02), transparent 40%); }
+.mix-check { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; animation: fadeUp .25s ease; }
+.check-nums { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.check-nums span { display: flex; flex-direction: column; gap: 2px; padding: 8px; border-radius: 8px; background: var(--sunk); border: 1px solid var(--line-soft);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .03); }
+.check-nums small { color: var(--muted); font-size: 11px; }
+.check-nums b { font-size: 13px; }
+.hint.good { color: #7ee081; }
+.loud-lane { position: relative; height: 30px; }
+.loud-lane canvas { position: absolute; top: 1px; pointer-events: none; }
+@keyframes fadeUp { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }

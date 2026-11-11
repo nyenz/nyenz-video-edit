@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.22.0
+* **Even out** (what most people expect from "normalise"): loud moments go down, quiet moments go up, slowly, so nothing
+  distorts, and the parts that are fine are left exactly as they are. **Off / Gentle / Strong**, for:
+  * chosen parts of the split tracks (Voices, Music, Effects, Found again),
+  * chosen video sections (their own sound, when it is not split),
+  * chosen music parts, and **Auto level** for a whole song (on by itself for music you add).
+  Also in the right-click menus. A green line on a track part shows it is evened out.
+* **Gentle fades**: fade in / fade out (0 to 10 s) for chosen parts of every sound track and video section, and
+  "Song fades in / out" for a whole music track. Right-click: "Gentle fade in and out (1 s)".
+* **"Normalise" is now called "Same loudness"** (each chosen part up or down as a whole) and **"Keep balance"** (all of
+  them by the same amount).
+* **Sound check** (Sound panel): makes a quick version of the mix, measures it like YouTube does and shows a **Loudness**
+  strip under the tracks: green is right, red too loud, yellow too quiet, with the -14 LUFS line. One button evens out the
+  problem spots.
+* Loudness sliders move in **1 %** steps.
+
 ## 1.21.0
 * **Your own music track works like the video now** (Final): click a part of the music track to choose it (Ctrl / Shift for more).
   * **S** cuts the music at the playhead (only the music, the video stays as it is). **Delete** mutes the chosen parts.

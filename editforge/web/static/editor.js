@@ -189,6 +189,7 @@ function lockedNote(kind) {
 function refreshAll(opts) {
   S.sel = new Set([...S.sel].filter((p) => !p.off && cur().includes(p)));
   renderTimeline(); renderInspector(); renderLengths(); renderSteps(); renderStepbar(); if (S.mode === "edit") renderChoose();
+  if (S.check) renderCheck();
   if (S.mode === "final" && Frame.editing) { const sig = selList().length + ":" + placeScopeKey(); if (sig !== S.panelSig) { S.panelSig = sig; Frame.renderPanel(); } }
   if (!(opts && opts.keepVideo)) showFrame();
 }
@@ -331,6 +332,7 @@ function tick() {
     badge(nx.p); prepNext(nx);
   }
   Layers.follow(active(), V.seg.p); musicGains();
+  if (!Layers.on() && V.seg.p) { const vv = active(), pp = V.seg.p; vv.volume = clamp(pp.volume * partShapeGain(pp, "original", vv.currentTime), 0, 1); }
   renderPlayhead(); renderOverlay();
   if (S.followPlay) scrollToPlayhead();
   V.raf = requestAnimationFrame(tick);
@@ -360,7 +362,7 @@ function musicPlayer(file) {
 }
 function setMusicGain(m, v) { if (m._gain) { if (m.volume !== 1) m.volume = 1; m._gain.gain.value = Math.max(0, v); } else m.volume = clamp(v, 0, 1); }
 /** How loud a music track is right now: the track, the part under the playhead, and going down under voices. */
-function musicLevel(x, t) { return Math.max(0, x.volume) * partGain(x, t) * duckGain(x, t); }
+function musicLevel(x, t) { return Math.max(0, x.volume) * partGain(x, t) * duckGain(x, t) * musicShapeGain(x, t); }
 function musicGains() { for (const x of layers()) if (heard(x)) setMusicGain(musicPlayer(x.file), musicLevel(x, S.t)); }
 function musicPlay() {
   const on = new Set();
@@ -568,7 +570,8 @@ function renderTimeline() {
       const chosen = S.msel && S.msel.i === i && S.msel.ks.has(r.k);
       const g = r.q.mute ? 0 : x.volume * r.q.volume;
       const d = el("div", { class: "lane-item music mpart" + (heard(x) ? "" : " off") + (r.q.mute ? " muted" : "") + (chosen ? " sel" : ""), "data-k": String(r.k), ondblclick: () => openPanel("sound") },
-        icon(r.q.mute ? "mute" : "music", "s"), el("span", { text: (r.k === 0 || chosen ? name + " · " : "") + (r.q.mute ? "muted" : Math.round(g * 100) + "%") }));
+        icon(r.q.mute ? "mute" : "music", "s"), el("span", { text: (r.k === 0 || chosen ? name + " · " : "") + (r.q.mute ? "muted" : Math.round(g * 100) + "%") +
+          ((r.q.even === undefined ? x.auto : r.q.even) ? " · " + ((r.q.even === undefined ? x.auto : r.q.even) === 2 ? "evened strong" : "evened") : "") + (r.q.fin || r.q.fout ? " · fades" : "") }));
       d.style.left = px(r.a) + "px"; d.style.width = Math.max(6, px(r.b) - px(r.a) - 2) + "px"; row.append(d);
     }
     if (x.duck && x.duck.on) for (const [a, b] of S.duckSpans) {
@@ -578,6 +581,8 @@ function renderTimeline() {
   });
   renderAudioLane();
   renderStemLanes();
+  renderLoudLane();
+  if (S.mode === "final") prefetchEnvs();
   renderPlayhead();
 }
 
@@ -634,6 +639,185 @@ function renderAudioLane() {
     }
   }
   if (!P) { g.fillStyle = "rgba(255,255,255,.4)"; g.font = "500 11px system-ui, sans-serif"; g.fillText("Reading the sound…", Math.max(8, X0() - left + 8), mid + 4); }
+}
+
+// ---- Even out and gentle fades, for every kind of sound part (the video's own sound, the split tracks, music).
+// Even out: loud moments a little down, quiet moments a little up, slowly, so nothing distorts; parts that are fine stay
+// as they are. The app listens to the sound once (on the PC) and keeps the result; the viewer and the export use the same.
+S.envs = new Map();
+function envPoints(q, s) {
+  const key = (q.file || q.split + "|" + q.layer) + "|" + s, v = S.envs.get(key);
+  if (v && v !== "loading") return v;
+  if (!v) {
+    S.envs.set(key, "loading");
+    const qs = q.file ? "file=" + encodeURIComponent(q.file) : "split=" + encodeURIComponent(q.split) + "&layer=" + q.layer;
+    api("/api/envelope?" + qs + "&s=" + s).then((r) => { S.envs.set(key, r.points || []); renderTimeline(); }).catch(() => S.envs.delete(key));
+  }
+  return null;
+}
+function envDb(pts, t) {
+  if (!pts || pts.length < 2 || t <= pts[0][0] || t >= pts[pts.length - 1][0]) return 0;
+  let lo = 0, hi = pts.length - 1;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (pts[m][0] <= t) lo = m; else hi = m; }
+  const [t0, g0] = pts[lo], [t1, g1] = pts[hi];
+  return g0 + (g1 - g0) * (t - t0) / Math.max(1e-9, t1 - t0);
+}
+const dbGain = (db) => Math.pow(10, db / 20);
+/** Ask for the curves that Even out needs now, so the viewer has them before you press play. */
+function prefetchEnvs() {
+  const sp = typeof Layers !== "undefined" && Layers.split();
+  for (const p of kept()) {
+    if (p.even && !stemsOn()) envPoints({ file: S.proj.source }, p.even);
+    if (sp && p.mix) for (const [n, v] of Object.entries(p.mix)) if (v && v.even) envPoints({ split: sp.id, layer: n }, v.even);
+  }
+  for (const x of layers()) for (const r of mspans(x)) { const e = r.q.even === undefined ? x.auto || 0 : r.q.even; if (e) envPoints({ file: x.file }, e); }
+}
+/** Fade in / out of a part at time t (a..b is the part; for sections played backwards the start is b). */
+function fadeGain(sh, a, b, t, rev) {
+  let g = 1;
+  const fin = +sh.fin || 0, fout = +sh.fout || 0;
+  const s0 = rev ? b - t : t - a, s1 = rev ? t - a : b - t;
+  if (fin > 0) g *= clamp(s0 / fin, 0, 1);
+  if (fout > 0) g *= clamp(s1 / fout, 0, 1);
+  return g;
+}
+/** The live gain of a section's own sound ("original") or of one split layer, at source time t. */
+function partShapeGain(p, n, t) {
+  const sh = n === "original" ? p : p.mix && p.mix[n];
+  if (!sh || !(sh.even || sh.fin || sh.fout)) return 1;
+  let g = fadeGain(sh, p.start, p.end, t, p.reverse);
+  if (sh.even) {
+    const sp = n === "original" ? null : Layers.split();
+    const pts = n === "original" ? envPoints({ file: S.proj.source }, sh.even) : sp && envPoints({ split: sp.id, layer: n }, sh.even);
+    if (pts) g *= dbGain(envDb(pts, t));
+  }
+  return g;
+}
+/** The live gain of a music track's Auto level / Even out and fades at timeline time t. */
+function musicShapeGain(x, t) {
+  let g = 1;
+  const T = rawTotal(), fi = x.fade_in === undefined ? 0.5 : +x.fade_in, fo = x.fade_out === undefined ? 1.5 : +x.fade_out;
+  if (fi > 0) g *= clamp(t / fi, 0, 1);
+  if (fo > 0) g *= clamp((T - t) / fo, 0, 1);
+  const r = mspans(x).find((q) => t >= q.a && t < q.b);
+  if (!r) return g;
+  g *= fadeGain(r.q, r.a, r.b, t, false);
+  const s = r.q.even === undefined ? (x.auto || 0) : r.q.even;
+  if (s) {
+    const pts = envPoints({ file: x.file }, s), m = MUSIC.get(x.file), D = m && m.duration;
+    if (pts && D) g *= dbGain(envDb(pts, t % D));
+  }
+  return g;
+}
+/** Even out (Off / Gentle / Strong) for the chosen parts. cur: 0, 1, 2, or null when they differ. */
+function evenField(cur, onpick, off, note) {
+  const seg = segmented([[0, "Off"], [1, "Gentle"], [2, "Strong"]], cur === null ? "" : cur, (v) => onpick(+v));
+  if (off) for (const b of seg.children) b.disabled = true;
+  return el("div", { class: "field even-field" },
+    el("span", {}, el("b", { text: "Even out" }), el("small", { class: "note", text: " loud moments down, quiet moments up" })), seg,
+    note ? el("p", { class: "hint", text: note }) : null);
+}
+/** Fade in / fade out sliders (seconds, 0 to 10). Values null when the chosen parts differ. */
+function fadeFields(fin, fout, onset, off, labels) {
+  const one = (label, v, key) => {
+    const val = el("b", { class: "num", text: v === null ? "—" : (+v).toFixed(1) + " s" });
+    const r = el("input", { type: "range", class: "rng", min: "0", max: "10", step: "0.1", value: String(v === null ? 0 : v), "aria-label": label });
+    r.addEventListener("input", () => { val.textContent = (+r.value).toFixed(1) + " s"; paintRange(r); });
+    r.addEventListener("change", () => onset(key, +r.value));
+    r.disabled = !!off; setTimeout(() => paintRange(r), 0);
+    return el("div", { class: "field" }, el("span", {}, label + " ", val), r);
+  };
+  const L = labels || ["Fade in", "Fade out"];
+  return el("div", { class: "fade-fields" }, one(L[0], fin, "fin"), one(L[1], fout, "fout"));
+}
+const same = (arr) => { const u = [...new Set(arr)]; return u.length === 1 ? u[0] : null; };
+
+// ---- Sound check: the whole mix, measured the way YouTube does, moment by moment. The strip under the tracks shows it
+// (green = right, yellow / red = too quiet / too loud next to YouTube's level), with one button to even out the problem spots.
+S.check = null;
+async function soundCheck() {
+  if (!kept().length) { toast("The timeline is empty: put a piece back first.", true); return; }
+  const box = $("mixCheck"), b = $("checkMix");
+  box.hidden = false; b.disabled = true;
+  const bar = el("div", { class: "prog" }, el("i")), note = el("p", { class: "hint", text: "Making a quick version of the mix and listening to it…" });
+  box.replaceChildren(note, bar);
+  try {
+    await saveNow();
+    const job = await api("/api/projects/" + S.id + "/render", { method: "POST", json: { preview: true } });
+    let j;
+    for (;;) {
+      j = await api("/api/jobs/" + job.id);
+      if (["done", "failed", "cancelled", "interrupted"].includes(j.status)) break;
+      bar.firstChild.style.width = Math.round((j.progress || 0) * 100) + "%";
+      await new Promise((ok) => setTimeout(ok, 900));
+    }
+    if (j.status !== "done") throw new Error(j.message || "The sound check could not be made.");
+    note.textContent = "Measuring…";
+    const c = await api("/api/jobs/" + job.id + "/curve");
+    S.check = Object.assign(c, { sig: JSON.stringify([S.proj.pieces, S.proj.settings]) });
+  } catch (e) { box.replaceChildren(el("p", { class: "hint warn", text: errText(e) })); return; } finally { b.disabled = false; }
+  renderCheck(); renderTimeline();
+}
+function renderCheck() {
+  const box = $("mixCheck"), c = S.check; if (!box || !c) return;
+  const m = c.loudness, loud = c.problems.filter((x) => x.kind === "loud"), quiet = c.problems.filter((x) => x.kind === "quiet");
+  const old = c.sig !== JSON.stringify([S.proj.pieces, S.proj.settings]);
+  const verdict = !c.problems.length ? ["good", "Ready for YouTube: even and at the right level all the way."]
+    : ["warn", (loud.length ? loud.length + " too loud" : "") + (loud.length && quiet.length ? " and " : "") + (quiet.length ? quiet.length + " too quiet" : "") + " stretch" + (c.problems.length > 1 ? "es" : "") + ". They show on the Loudness strip under the tracks."];
+  box.replaceChildren(
+    el("div", { class: "check-nums" },
+      el("span", {}, el("small", { text: "Whole video" }), el("b", { class: "num", text: m ? m.lufs.toFixed(1) + " LUFS" : "—" })),
+      el("span", {}, el("small", { text: "Highest peak" }), el("b", { class: "num", text: m ? m.true_peak.toFixed(1) + " dB" : "—" })),
+      el("span", {}, el("small", { text: "YouTube" }), el("b", { class: "num", text: "-14 LUFS" }))),
+    el("p", { class: "hint " + verdict[0], text: verdict[1] }),
+    old ? el("p", { class: "hint", text: "You changed things since this check. Press Sound check again to see the new result." }) : null,
+    c.problems.length ? btn("Even out the problem spots", { icon: "pulse", cls: "wide", title: "Switches on Even out (gentle) for the parts under those stretches", onclick: fixProblems }) : null);
+}
+/** Even out (gentle) for everything that plays in the problem stretches: video sections (or their split tracks) and music parts. */
+function fixProblems() {
+  const c = S.check; if (!c || !c.problems.length) return;
+  const hit = (a, b) => c.problems.some((x) => a < x.end && b > x.start);
+  let n = 0;
+  if (!change(() => {
+    for (const r of layout()) {
+      if (!hit(r.out0, r.out1)) continue;
+      const p = r.p;
+      if (stemsOn()) {
+        for (const k of Layers.NAMES) { if (partLocked(p, k)) continue; const m = Object.assign({}, p.mix || {}); m[k] = Object.assign({ volume: 1, mute: false }, m[k] || {}); if (!m[k].even) { m[k].even = 1; n++; } p.mix = m; }
+      } else if (!p.even) { p.even = 1; n++; }
+    }
+    layers().forEach((x, i) => {
+      if (musicLocked(i)) return;
+      const ps = mparts(x).map((q) => Object.assign({ volume: 1, mute: false }, q));
+      mspans(x).forEach((r) => { if (hit(r.a, r.b) && !(r.q.even === undefined ? x.auto : r.q.even)) { ps[r.k].even = 1; n++; } });
+      setLayer(i, { parts: ps });
+    });
+  }, { sound: true, keepVideo: true })) return;
+  toast(n ? "Even out is on for " + n + " part" + (n === 1 ? "" : "s") + ". Press Sound check again to see the result." : "Those parts are already evened out (or locked).");
+  renderCheck();
+}
+/** The Loudness strip under the tracks: short-term loudness against YouTube's level. */
+function renderLoudLane() {
+  const lane = $("laneL"); if (!lane) return;
+  const c = S.check; lane.hidden = !(c && S.mode === "final");
+  if (lane.hidden) return;
+  if (!lane.querySelector(".lane-head")) lane.prepend(el("div", { class: "lane-head" }, icon("pulse", "s"), el("span", { class: "ellip", text: "Loudness" })));
+  const cv = lane.querySelector("canvas"), sc = $("tlScroll"), left = sc.scrollLeft, w = sc.clientWidth, H = 28, dpr = Math.min(2, window.devicePixelRatio || 1);
+  if (cv.width !== Math.round(w * dpr) || cv.height !== H * dpr) { cv.width = Math.round(w * dpr); cv.height = H * dpr; }
+  cv.style.left = left + "px"; cv.style.width = w + "px"; cv.style.height = H + "px";
+  const g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, H);
+  const y = (v) => H - 2 - clamp((v + 40) / 34, 0, 1) * (H - 4);            // -40 .. -6 LUFS
+  for (const x of c.problems) { g.fillStyle = x.kind === "loud" ? "rgba(255, 107, 138, .22)" : "rgba(255, 209, 102, .18)"; g.fillRect(px(x.start) - left, 0, Math.max(2, px(x.end) - px(x.start)), H); }
+  g.strokeStyle = "rgba(255,255,255,.35)"; g.setLineDash([4, 4]); g.beginPath(); g.moveTo(0, y(-14)); g.lineTo(w, y(-14)); g.stroke(); g.setLineDash([]);
+  let prev = null;
+  for (const [t, v] of c.points) {
+    const X = px(t) - left;
+    if (prev && X >= -4 && prev[0] <= w + 4) {
+      g.strokeStyle = v > -8 ? "#ff6b8a" : v < -26 && v > -45 ? "#ffd166" : "#7ee081"; g.lineWidth = 1.6;
+      g.beginPath(); g.moveTo(prev[0], prev[1]); g.lineTo(X, y(v)); g.stroke();
+    }
+    prev = [X, y(v)];
+  }
 }
 
 // ---- the music tracks you added (Final): cut them into parts like the video, change each part on its own, normalise,
@@ -739,9 +923,9 @@ async function normaliseMusic(together) {
       list.forEach((q) => gains.set(q.k, g));
     }
   } else list.forEach((q, j) => { const v = r.levels[j]; if (v.rms > -70) gains.set(q.k, Math.min(Math.pow(10, (TARGET - v.rms) / 20), 0.97 / Math.max(v.peak, 1e-4), 2)); });
-  if (!gains.size) { toast("These parts are silent: nothing to normalise.", true); return; }
+  if (!gains.size) { toast("These parts are silent: nothing to change.", true); return; }
   musicChange((c, k) => { if (gains.has(k)) { c.volume = +gains.get(k).toFixed(3); c.mute = false; } });
-  toast("Normalised " + gains.size + " music part" + (gains.size > 1 ? "s" : "") + (together ? " together." : ", each on its own."));
+  toast("Same loudness for " + gains.size + " music part" + (gains.size > 1 ? "s" : "") + (together ? ", balance kept." : "."));
 }
 async function setDuck(i, on, level) {
   const x = layers()[i]; if (!x) return;
@@ -771,9 +955,12 @@ function musicMenuItems(i, t) {
   return [
     ["Cut the music here", "split", () => cutMusic(i, t), { key: "S", off: lk }],
     n ? [allMuted ? "Turn these parts on" : "Mute these parts", allMuted ? "vol" : "mute", () => musicChange((c) => { c.mute = !allMuted; }), { key: "Del", off: lk }] : null,
-    n ? ["Normalise", "sliders", () => normaliseMusic(false), { off: lk }] : null,
-    n > 1 ? ["Normalise together", "sliders", () => normaliseMusic(true), { off: lk }] : null,
+    n ? ["Same loudness", "sliders", () => normaliseMusic(false), { off: lk }] : null,
+    n > 1 ? ["Same loudness, keep balance", "sliders", () => normaliseMusic(true), { off: lk }] : null,
     n > 1 ? ["Join these parts", "combine", () => joinMusicParts(), { off: lk }] : null,
+    n ? ["Even out these parts (gentle)", "pulse", () => musicChange((c) => { c.even = 1; }), { off: lk }] : null,
+    n ? ["Even out these parts (strong)", "pulse", () => musicChange((c) => { c.even = 2; }), { off: lk }] : null,
+    n ? ["Gentle fade in and out (1 s)", "sliders", () => musicChange((c) => { c.fin = 1; c.fout = 1; }), { off: lk }] : null,
     n ? ["Full loudness again", "restore", () => musicChange((c) => { c.volume = 1; c.mute = false; }), { off: lk }] : null,
     "-",
     [x.duck && x.duck.on ? "Stop going down under voices" : "Go down under voices", "vol", () => setDuck(i, !(x.duck && x.duck.on)), { off: lk }],
@@ -789,7 +976,7 @@ function renderMusicInspector(R) {
   R.append(el("div", { class: "side-h" }, el("h2", { class: "ellip", text: name }), el("span", { class: "note num", text: list.length + (list.length === 1 ? " part" : " parts") + " chosen" })));
   const rng = (label, v, onset, aria) => {
     const val = el("b", { class: "num", text: v === null ? "—" : Math.round(v * 100) + "%" });
-    const r = el("input", { type: "range", class: "rng", min: "0", max: "200", step: "5", value: String(Math.round((v === null ? 1 : v) * 100)), "aria-label": aria });
+    const r = el("input", { type: "range", class: "rng", min: "0", max: "200", step: "1", value: String(Math.round((v === null ? 1 : v) * 100)), "aria-label": aria });
     r.addEventListener("input", () => { val.textContent = r.value + "%"; paintRange(r); });
     r.addEventListener("change", () => onset(r.value / 100));
     r.disabled = lk; setTimeout(() => paintRange(r), 0);
@@ -803,7 +990,7 @@ function renderMusicInspector(R) {
   const dsw = el("input", { type: "checkbox", class: "sw", "aria-label": "Go down while people talk" }); dsw.checked = !!duck.on; dsw.disabled = lk;
   dsw.addEventListener("change", () => setDuck(i, dsw.checked));
   const dval = el("b", { class: "num", text: Math.round(duck.level * 100) + "%" });
-  const dr = el("input", { type: "range", class: "rng", min: "0", max: "80", step: "5", value: String(Math.round(duck.level * 100)), "aria-label": "Music loudness while people talk" });
+  const dr = el("input", { type: "range", class: "rng", min: "0", max: "80", step: "1", value: String(Math.round(duck.level * 100)), "aria-label": "Music loudness while people talk" });
   dr.disabled = lk || !duck.on;
   dr.addEventListener("input", () => { dval.textContent = dr.value + "%"; paintRange(dr); });
   dr.addEventListener("change", () => setDuck(i, true, dr.value / 100));
@@ -815,12 +1002,23 @@ function renderMusicInspector(R) {
     list.length ? rng("Chosen parts", vols.length === 1 ? vols[0] : null, (v) => musicChange((c) => { c.volume = v; c.mute = false; }), "Loudness of the chosen music parts") : null,
     list.length ? el("label", { class: "swl" }, el("span", { text: "Mute the chosen parts" }), mute) : null,
     list.length ? el("div", { class: "btns" },
-      btn("Normalise", { icon: "sliders", title: "Each chosen part to the same clear level (up to 200%)", onclick: () => normaliseMusic(false) }),
-      btn("Normalise together", { icon: "sliders", cls: "ghost", title: "The chosen parts as one, so their balance stays", onclick: () => normaliseMusic(true) })) : null,
+      btn("Same loudness", { icon: "sliders", title: "Each chosen part as a whole goes up or down, so they all sound equally loud (up to 200%). Inside a part nothing changes: for that use Even out.", onclick: () => normaliseMusic(false) }),
+      btn("Keep balance", { icon: "sliders", cls: "ghost", title: "The chosen parts go up or down together by the same amount, so their balance stays", onclick: () => normaliseMusic(true) })) : null,
     el("div", { class: "btns" },
       btn("Cut here", { icon: "split", title: "Cut the music at the playhead (S). The video is not cut.", onclick: () => cutMusic(i, S.t) }),
       list.length > 1 ? btn("Join", { icon: "combine", cls: "ghost", title: "Make the chosen parts one part again", onclick: joinMusicParts }) : btn("Full loudness", { icon: "restore", cls: "ghost", onclick: () => musicChange((c) => { c.volume = 1; c.mute = false; }) })),
-    rng("Whole track", x.volume, (v) => { if (musicLocked(i)) { toast(musicLocked(i), true); return; } change(() => setLayer(i, { volume: v }), { keepVideo: true }); renderMusicLayers(); if (S.playing) musicPlay(); }, "Loudness of the whole music track")));
+    list.length ? evenField(same(list.map((q) => (q.q.even === undefined ? x.auto || 0 : q.q.even))), (v) => musicChange((c) => { c.even = v; }), lk,
+      "Only the chosen parts. Parts that are fine are not changed.") : null,
+    list.length ? fadeFields(same(list.map((q) => q.q.fin || 0)), same(list.map((q) => q.q.fout || 0)), (k, v) => musicChange((c) => { if (v > 0) c[k] = v; else delete c[k]; }), lk) : null));
+  const setTrack = (patch) => { if (musicLocked(i)) { toast(musicLocked(i), true); renderInspector(); return; } change(() => setLayer(i, patch), { keepVideo: true }); renderMusicLayers(); if (S.playing) musicPlay(); };
+  const autoSeg = segmented([[0, "Off"], [1, "Gentle"], [2, "Strong"]], x.auto || 0, (v) => setTrack({ auto: +v }));
+  if (lk) for (const b of autoSeg.children) b.disabled = true;
+  R.append(el("div", { class: "pad track-box" },
+    el("div", { class: "field" }, el("span", {}, el("b", { text: "Whole song" })) ),
+    el("div", { class: "field even-field" }, el("span", {}, "Auto level ", el("small", { class: "note", text: "the song's own loud bits down, quiet bits up" })), autoSeg),
+    rng("Loudness", x.volume, (v) => setTrack({ volume: v }), "Loudness of the whole music track"),
+    fadeFields(x.fade_in === undefined ? 0.5 : x.fade_in, x.fade_out === undefined ? 1.5 : x.fade_out, (k, v) => setTrack(k === "fin" ? { fade_in: v } : { fade_out: v }), lk,
+      ["Song fades in", "Song fades out"])));
   R.append(el("div", { class: "pad duck-box" },
     el("label", { class: "swl" }, el("span", {}, el("b", { text: "Go down while people talk" })), dsw),
     el("div", { class: "field" }, el("span", {}, "Music while they talk ", dval), dr),
@@ -896,6 +1094,8 @@ function renderStemLanes() {
       if (sel) { g.strokeStyle = "#3ec7d9"; g.lineWidth = 1.5; g.strokeRect(x0 - left + 1.5, 2.5, Math.max(1, x1 - x0 - 3), H - 5); }
       const gid = p.mix && p.mix[n] && p.mix[n].group;
       if (gid) { g.fillStyle = groupColour(gid); g.fillRect(x0 - left + 1, H - 5, Math.max(1, x1 - x0 - 2), 3); }
+      const shp = p.mix && p.mix[n];
+      if (shp && (shp.even || shp.fin || shp.fout)) { g.fillStyle = "rgba(126, 224, 129, .85)"; g.fillRect(x0 - left + 2, 3, Math.max(1, x1 - x0 - 4), 2); }   // evened out / fades
       if (partLocked(p, n) && !trackLocked(n)) { g.fillStyle = "rgba(255, 196, 107, .10)"; g.fillRect(x0 - left + 1, 2, Math.max(1, x1 - x0 - 2), H - 4); }
       if (!P) continue;
       const amp = quiet ? 0 : Math.min(2, (p.volume === undefined ? 1 : p.volume) * own * g0);
@@ -954,7 +1154,8 @@ function stemChange(fn) {
     for (const { p, n } of list) {
       const m = Object.assign({}, p.mix || {}), cur = Object.assign({ volume: 1, mute: false }, m[n] || {});
       fn(cur, p, n);
-      if (!cur.mute && Math.abs(cur.volume - 1) < 0.001 && !cur.group) delete m[n]; else m[n] = cur;
+      if (!cur.even) delete cur.even; if (!cur.fin) delete cur.fin; if (!cur.fout) delete cur.fout;
+      if (!cur.mute && Math.abs(cur.volume - 1) < 0.001 && !cur.group && !cur.even && !cur.fin && !cur.fout) delete m[n]; else m[n] = cur;
       if (!cur.group) delete cur.group;
       if (Object.keys(m).length) p.mix = m; else delete p.mix;
     }
@@ -972,9 +1173,13 @@ function stemMenu(e) {
     [allMuted ? "Turn these parts on" : "Mute these parts", allMuted ? "vol" : "mute", () => stemChange((c) => { c.mute = !allMuted; }), { key: "Del", off: lk }],
     ["Full loudness again", "restore", () => stemChange((c) => { c.mute = false; c.volume = 1; }), { off: lk }],
     "-",
-    ["Normalise", "sliders", () => normaliseParts(false), { off: lk }],
-    ["Normalise together", "sliders", () => normaliseParts(true), { off: lk }],
+    ["Same loudness", "sliders", () => normaliseParts(false), { off: lk }],
+    ["Same loudness, keep balance", "sliders", () => normaliseParts(true), { off: lk }],
     aselLayers().length === 1 && aselLayers()[0] !== "found" ? ["Separate these parts again", "layers", () => separateAgain(), { off: lk }] : null,
+    ["Even out (gentle)", "pulse", () => stemChange((c) => { c.even = 1; }), { off: lk }],
+    ["Even out (strong)", "pulse", () => stemChange((c) => { c.even = 2; }), { off: lk }],
+    list.some(({ p, n: k }) => p.mix && p.mix[k] && p.mix[k].even) ? ["Stop evening out", "x", () => stemChange((c) => { c.even = 0; }), { off: lk }] : null,
+    ["Gentle fade in and out (1 s)", "sliders", () => stemChange((c) => { c.fin = 1; c.fout = 1; }), { off: lk }],
     ["Group these parts", "combine", () => makeGroup()],
     ...[...new Set(aselList().map(({ p, n: k }) => p.mix && p.mix[k] && p.mix[k].group).filter(Boolean))].slice(0, 3).map((gid) => {
       const gr = soundGroups().find((x) => x.id === gid); return gr ? ["Choose the group '" + gr.name + "'", "check", () => chooseGroup(gid)] : null;
@@ -1059,12 +1264,12 @@ async function normaliseParts(together) {
       } else its.forEach((it, i) => { const x = r.levels[i]; if (x.rms <= -70) return; let g = Math.pow(10, (TARGET - x.rms) / 20); g = Math.min(g, 0.97 / Math.max(x.peak, 1e-4), 2); gains.set(it, g); });
     }
   } catch (e) { toast(errText(e), true); return; }
-  if (!gains.size) { toast("These parts are silent: nothing to normalise.", true); return; }
+  if (!gains.size) { toast("These parts are silent: nothing to change.", true); return; }
   change(() => {
     for (const [{ p, n }, g] of gains) { const m = Object.assign({}, p.mix || {}); m[n] = Object.assign({ volume: 1, mute: false }, m[n] || {}, { volume: +Math.max(0, g).toFixed(3), mute: false }); p.mix = m; }
   }, { sound: true });
   Layers.apply(); refreshAll({ keepVideo: true });
-  toast("Normalised " + gains.size + " part" + (gains.size > 1 ? "s" : "") + (together ? " together." : ", each on its own."));
+  toast("Same loudness for " + gains.size + " part" + (gains.size > 1 ? "s" : "") + (together ? ", balance kept." : "."));
 }
 /** Separate the chosen parts of one track again (e.g. voices left in the music). The app splits just those parts once more. */
 async function separateAgain() {
@@ -1110,7 +1315,7 @@ function renderStemInspector(R) {
   const mutes = [...new Set(list.map(({ p, n }) => !!(p.mix && p.mix[n] && p.mix[n].mute)))];
   const lk = list.every(({ p, n }) => partLocked(p, n));
   const val = el("b", { class: "num", text: vols.length === 1 ? Math.round(vols[0] * 100) + "%" : "—" });
-  const vol = el("input", { type: "range", class: "rng", min: "0", max: "200", step: "5", value: String(Math.round((vols.length === 1 ? vols[0] : 1) * 100)), "aria-label": "Loudness of the chosen parts" });
+  const vol = el("input", { type: "range", class: "rng", min: "0", max: "200", step: "1", value: String(Math.round((vols.length === 1 ? vols[0] : 1) * 100)), "aria-label": "Loudness of the chosen parts" });
   vol.addEventListener("input", () => { val.textContent = vol.value + "%"; paintRange(vol); });
   vol.addEventListener("change", () => stemChange((c) => { c.volume = vol.value / 100; c.mute = false; }));
   const mute = el("input", { type: "checkbox", class: "sw", "aria-label": "Mute the chosen parts" });
@@ -1124,11 +1329,14 @@ function renderStemInspector(R) {
     el("div", { class: "field" }, el("span", {}, "Loudness ", val, el("small", { class: "note", text: " (up to 200%)" })), vol),
     el("label", { class: "swl" }, el("span", { text: "Mute" }), mute),
     el("div", { class: "btns" },
-      btn("Normalise", { icon: "sliders", title: "Each chosen part to the same clear level (up to 200%)", onclick: () => normaliseParts(false) }),
-      btn("Normalise together", { icon: "sliders", cls: "ghost", title: "The chosen parts as one: the same change for all, so their balance stays", onclick: () => normaliseParts(true) })),
+      btn("Same loudness", { icon: "sliders", title: "Each chosen part as a whole goes up or down, so they all sound equally loud (up to 200%). Inside a part nothing changes: for that use Even out.", onclick: () => normaliseParts(false) }),
+      btn("Keep balance", { icon: "sliders", cls: "ghost", title: "The chosen parts go up or down together by the same amount, so their balance stays", onclick: () => normaliseParts(true) })),
     el("div", { class: "btns" },
       btn("Full loudness", { icon: "restore", onclick: () => stemChange((c) => { c.mute = false; c.volume = 1; }) }),
       btn("Split", { icon: "split", title: "Split at the playhead (S). The video section is cut there too.", onclick: () => splitAtPlayhead() })),
+    evenField(same(list.map(({ p, n }) => (p.mix && p.mix[n] && p.mix[n].even) || 0)), (v) => stemChange((c) => { c.even = v; }), lk),
+    fadeFields(same(list.map(({ p, n }) => (p.mix && p.mix[n] && p.mix[n].fin) || 0)), same(list.map(({ p, n }) => (p.mix && p.mix[n] && p.mix[n].fout) || 0)),
+      (k, v) => stemChange((c) => { c[k] = v; }), lk),
     layersIn.length === 1 && layersIn[0] !== "found" ? el("div", { class: "btns" }, btn("Separate again", { icon: "layers", title: "Split just these parts once more (for example voices left in the music)", onclick: () => separateAgain() }), el("span", { class: "note", id: "resplitNote" })) : null,
     oneGroup ? el("div", { class: "grp-now" }, dotFor(oneGroup.id), el("span", { text: "Group: " + oneGroup.name }),
       btn(oneGroup.locked ? "Unlock" : "Lock", { icon: oneGroup.locked ? "unlock" : "lock", cls: "sm ghost", onclick: () => groupEdit(oneGroup.id, "lock") }))
@@ -1642,7 +1850,7 @@ function renderMusicLayers() {
   const set = (i, patch, keepVideo) => { if (trackLocked("sound")) { lockedNote("sound"); renderMusicLayers(); return; } change(() => { S.proj.settings.layers = layers().map((x, k) => (k === i ? Object.assign({}, x, patch) : x)); }, { keepVideo: true }); if (keepVideo !== false) { renderMusicLayers(); if (S.playing) musicPlay(); } };
   layers().forEach((x, i) => {
     const name = (S.files.find((f) => f.id === x.file) || { name: x.file.split("/").pop() + " (missing)" }).name;
-    const slider = el("input", { type: "range", class: "rng", min: "0", max: "200", step: "5", value: String(Math.round(x.volume * 100)), "aria-label": "Loudness of " + name });
+    const slider = el("input", { type: "range", class: "rng", min: "0", max: "200", step: "1", value: String(Math.round(x.volume * 100)), "aria-label": "Loudness of " + name });
     const val = el("b", { class: "num ly-val", text: Math.round(x.volume * 100) + "%" });
     slider.addEventListener("input", () => { val.textContent = slider.value + "%"; paintRange(slider); const m = MUSIC.get(x.file); if (m) setMusicGain(m, slider.value / 100 * partGain(x, S.t) * duckGain(x, S.t)); });
     slider.addEventListener("change", () => set(i, { volume: slider.value / 100 }, false));
@@ -1802,7 +2010,7 @@ function renderInspector() {
   const cur = all((p) => p.speed === sel[0].speed) ? sel[0].speed : null;
   const chipsBox = el("div", { class: "chips" });
   for (const v of speeds) chipsBox.append(el("button", { class: "chip" + (cur === v ? " on" : ""), type: "button", text: v + "×", onclick: () => onSel((p) => { p.speed = v; }) }));
-  const vol = el("input", { type: "range", class: "rng", min: "0", max: "2", step: "0.05", value: String(sel[0].volume), "aria-label": "Loudness" });
+  const vol = el("input", { type: "range", class: "rng", min: "0", max: "2", step: "0.01", value: String(sel[0].volume), "aria-label": "Loudness" });
   const onSound = (fn) => { if (!change(() => { selList().forEach(fn); markHand(); }, { sound: true })) renderInspector(); };
   vol.addEventListener("change", () => onSound((p) => { p.volume = parseFloat(vol.value); p.mute = false; }));
   const muteSw = el("input", { type: "checkbox", class: "sw" }); muteSw.checked = all((p) => p.mute);
@@ -1812,6 +2020,9 @@ function renderInspector() {
   const volTxt = el("b", { class: "num", text: Math.round(sel[0].volume * 100) + "%" });
   vol.addEventListener("input", () => { volTxt.textContent = Math.round(vol.value * 100) + "%"; });
   if (S.mode === "final") basics.append(el("div", { class: "field" }, el("span", {}, "Loudness ", volTxt, el("small", { class: "note", text: " (up to 200%)" })), vol), el("label", { class: "swl" }, el("span", { text: "Mute" }), muteSw));
+  if (S.mode === "final" && S.info.has_audio && !stemsOn()) basics.append(
+    evenField(same(sel.map((p) => p.even || 0)), (v) => onSound((p) => { if (v) p.even = v; else delete p.even; }), trackLocked("sound")),
+    fadeFields(same(sel.map((p) => p.fin || 0)), same(sel.map((p) => p.fout || 0)), (k, v) => onSound((p) => { if (v > 0) p[k] = v; else delete p[k]; }), trackLocked("sound"), ["Sound fade in", "Sound fade out"]));
   if (sel.length === 1) basics.append(trimFields(sel[0]));
   if (S.mode === "edit") basics.append(nudgeBox(sel));
   basics.append(el("div", { class: "btns" },
@@ -2242,10 +2453,10 @@ function wire() {
   $("musicAdd").addEventListener("click", () => addFileThen("audio", "musicProg", (d) => {
     if (d.has_video) { toast("That is a video. Choose a music file such as an MP3.", true); return; }
     if (layers().length >= 8) { toast("That is the most: 8 music layers.", true); return; }
-    change(() => { S.proj.settings.layers = layers().concat([{ file: d.id, volume: 0.5, mute: false, solo: false }]); }, { keepVideo: true });
+    change(() => { S.proj.settings.layers = layers().concat([{ file: d.id, volume: 0.5, mute: false, solo: false, auto: 1 }]); }, { keepVideo: true });
     renderMusicLayers(); if (S.playing) musicPlay();
   }));
-  $("checkMix").addEventListener("click", () => quickPreview());
+  $("checkMix").addEventListener("click", soundCheck);
   $("beatBtn").addEventListener("click", beatCut);
   for (const id of ["sBass", "sTreble"]) $(id).addEventListener("input", soundLabels);
   $("capAdd").addEventListener("click", () => addFileThen("subtitles", "musicProg", (d) => {

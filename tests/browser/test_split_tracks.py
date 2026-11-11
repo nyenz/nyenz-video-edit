@@ -159,7 +159,7 @@ def test_scroll_lock_one_track_group_and_normalise(live, page, split_movie):
     assert page.evaluate("() => aselList().length") == 2
     # Normalise the whole Music track: the quiet tone (about -21 dB) is brought up, never over 200 %
     page.click("#laneStems .stem-head[data-layer=music]")
-    page.click("#right button:has-text('Normalise')")
+    page.click("#right button:has-text('Same loudness')")
     page.wait_for_function("() => kept().every(p => p.mix && p.mix.music && p.mix.music.volume > 1.2)", timeout=30000)
     assert page.evaluate("() => kept().every(p => p.mix.music.volume <= 2)")
     page.evaluate("() => saveNow()")
@@ -193,7 +193,7 @@ def test_music_track_parts_normalise_and_going_down_under_voices(live, page, spl
     assert page.locator("#laneM .mpart.muted").count() == 1
     # Normalise the second part: the quiet song is brought up
     page.locator("#laneM .mpart").nth(1).click()
-    page.click("#right button:has-text('Normalise')")
+    page.click("#right button:has-text('Same loudness')")
     page.wait_for_function("() => S.proj.settings.layers[0].parts[1].volume > 1.2", timeout=30000)
     # the whole track can go up to 200 %
     page.fill("#right input[aria-label='Loudness of the whole music track']", "200")
@@ -247,3 +247,47 @@ def test_what_separate_again_found_is_its_own_track(live, page, split_movie):
     assert saved["pieces"][0]["mix"]["found"]["mute"] is True
     assert page.errors == []
     shutil.rmtree(d, ignore_errors=True)
+
+
+def test_even_out_fades_auto_level_and_the_sound_check(live, page, split_movie, tmp_path):
+    from tools.make_samples import run
+    song = tmp_path / "Song2.wav"
+    run(["-f", "lavfi", "-i", "sine=frequency=500:duration=60", "-af", "volume='if(between(t,20,30),0.9,0.15)':eval=frame", str(song)])
+    mid = live.upload(str(song))
+    pid = open_split(live, page, split_movie, "Even out")
+    page.wait_for_selector("#laneStems .lane.stem", timeout=30000)
+    # a split track: Even out and fades for the whole Music track
+    page.click("#laneStems .stem-head[data-layer=music]")
+    page.click("#right .even-field .seg button:has-text('Gentle')")
+    assert page.evaluate("() => kept().every(p => p.mix.music.even === 1)")
+    page.fill("#right input[aria-label='Fade in']", "1.5")
+    page.dispatch_event("#right input[aria-label='Fade in']", "change")
+    assert page.evaluate("() => kept().every(p => p.mix.music.fin === 1.5)")
+    assert page.get_attribute("#right input[aria-label='Loudness of the chosen parts']", "step") == "1"
+    page.wait_for_function("() => [...S.envs.values()].some(v => Array.isArray(v))", timeout=30000)
+    # music added now gets Auto level by itself; parts can be evened out or set off on their own
+    page.evaluate("(id) => { change(() => { S.proj.settings.layers = layers().concat([{ file: id, volume: 0.5, mute: false, solo: false, auto: 1 }]); }, { keepVideo: true }); loadFiles(); }", mid)
+    page.wait_for_selector("#laneM .mpart")
+    page.locator("#laneM .mpart").first.click(position={"x": 30, "y": 12})
+    assert "evened" in page.inner_text("#laneM .mpart")
+    page.click("#right .track-box .seg button:has-text('Strong')")
+    assert page.evaluate("() => S.proj.settings.layers[0].auto") == 2
+    page.locator("#laneM .mpart").first.click(position={"x": 30, "y": 12})
+    page.click("#right .pad:not(.track-box) .even-field .seg button:has-text('Off')")
+    assert page.evaluate("() => S.proj.settings.layers[0].parts[0].even") == 0
+    page.fill("#right input[aria-label='Song fades out']", "3")
+    page.dispatch_event("#right input[aria-label='Song fades out']", "change")
+    assert page.evaluate("() => S.proj.settings.layers[0].fade_out") == 3
+    page.keyboard.press("Escape")
+    # the sound check: a quick version, measured; the Loudness strip shows; one button evens out the problem spots
+    page.click(".ftabs button[data-panel=sound]")
+    page.click("#checkMix")
+    page.wait_for_selector("#mixCheck .check-nums", timeout=240000)
+    assert "LUFS" in page.inner_text("#mixCheck")
+    assert page.is_visible("#laneL") and page.evaluate("() => S.check.points.length") > 20
+    if page.evaluate("() => S.check.problems.length"):
+        page.click("#mixCheck button:has-text('Even out the problem spots')")
+    page.evaluate("() => saveNow()")
+    saved = live.call("GET", f"/api/projects/{pid}")["project"]
+    assert saved["pieces"][0]["mix"]["music"]["even"] == 1 and saved["settings"]["layers"][0]["auto"] == 2
+    assert page.errors == []
