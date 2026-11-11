@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.21.0
+* **Your own music track works like the video now** (Final): click a part of the music track to choose it (Ctrl / Shift for more).
+  * **S** cuts the music at the playhead (only the music, the video stays as it is). **Delete** mutes the chosen parts.
+  * Each part has its own loudness (up to 200 %), **Normalise** / **Normalise together**, **Join**, and a lock for the track.
+  * Right-click a part for all of it.
+* **Music goes down while people talk**: switch on **Go down while people talk** (choose a music part). The music goes down
+  gradually before each voice and comes back up after. **Music while they talk** sets how low (30 % to start).
+  The voices come from the split Voices track (best), or are guessed from the plain sound. Blue dips on the music track show where.
+* **YouTube loudness done properly**: every export gets one steady change to -14 LUFS plus a peak limiter. Before, FFmpeg
+  often evened the loudness out bit by bit, which could undo quiet and loud moments you made on purpose.
+* **Separate again is clear now**: what it takes out of the chosen parts goes to a new track, **Found again (from Music)**, under
+  the others, where you can hear it, turn it up or down, mute or lock it.
+* **Edit: no more doing a step twice**: the step bar keeps its ticks (step 2 stays ticked after scenes), each version on the
+  left and each card on Home shows small **1 2 3** ticks, and pressing a step that is already done asks first.
+
 ## 1.20.0
 * **Scroll the tracks with the mouse wheel**: over the timeline the wheel moves the tracks up and down when they do not all fit
   (**Shift** + wheel goes left/right, **Ctrl** + wheel zooms).

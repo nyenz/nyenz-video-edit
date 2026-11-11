@@ -85,6 +85,29 @@ def test_the_three_buttons_in_order(live, page, movie_id):
     page.reload()
     wait_ready(page)
     assert page.evaluate("() => new Set(kept().map(p => p.unit)).size") == 9
+    # 1.21: the steps already done stay marked (step 2 too, after scenes), and doing one again asks first
+    assert all("done" in page.get_attribute(b, "class") for b in ("#secVersions", "#secThin", "#secScenes"))
+    page.wait_for_selector("#secVersionList .vcard.on .vsteps")
+    assert page.eval_on_selector_all("#secVersionList .vcard.on .vsteps i", "els => els.map(e => e.className)") == ["done", "done", "done"]
+    steps = page.evaluate("() => S.proj.steps.length")
+    page.click("#secThin")
+    page.wait_for_selector(".dialog:has-text('already done')")
+    page.click(".dialog button:has-text('Cancel')")
+    assert page.evaluate("() => S.proj.steps.length") == steps
+    page.click("#secScenes")
+    page.wait_for_selector(".dialog:has-text('already separated')")
+    page.click(".dialog button:has-text('Cancel')")
+    # the clip the versions were made from: step 1 is done there, and Home shows the ticks too
+    page.goto(f"{live.base}/edit?p={pid}")
+    wait_ready(page)
+    page.wait_for_function("() => document.getElementById('secVersions').classList.contains('done')", timeout=10000)
+    page.click("#secVersions")
+    page.wait_for_selector(".dialog:has-text('already made')")
+    page.click(".dialog button:has-text('Cancel')")
+    assert page.locator("#secVersionList .vcard").count() == 3
+    page.goto(f"{live.base}/")
+    page.click("#phases .phase:nth-child(2)")
+    page.wait_for_selector(".pcard .vsteps")
     assert page.errors == []
 
 

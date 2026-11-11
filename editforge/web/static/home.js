@@ -246,7 +246,11 @@ function clipCard(p) {
   if (p.freed) pic.append(el("span", { class: "chip-tag top", text: "Movie freed" }));
   const meta = p.clips + " clip" + (p.clips === 1 ? "" : "s") + " | " + fmtTime(p.length, 0);
   const open = () => { if (!H.trash) location.href = "/clips?c=" + p.id; };
-  return cardShell(p, pic, [el("small", { class: "num", text: meta }),
+  const f = p.done || {};
+  const ticks = stageOf(p) === "edit" ? el("span", { class: "vsteps", title: "Edit steps done on this version" },
+    ...[[1, f.versions || f.made_versions, "Odd / Even versions"], [2, f.thin, "Remove every 4th second"], [3, f.scenes, "Separate scenes"]]
+      .map(([n, on, what]) => el("i", { class: on ? "done" : "", title: what + (on ? ": done" : ": not yet"), text: String(n) }))) : null;
+  return cardShell(p, pic, [el("small", { class: "num", text: meta }), ticks,
     H.view === "list" ? el("small", { class: "num when", text: "From " + p.source_name + " · opened " + ago(p.opened) }) : null], open, "From " + p.source_name);
 }
 /** Phase 2 card: an edit project. */
@@ -264,7 +268,11 @@ function card(p) {
   if (tb) pic.append(tb);
   const edited = "Edited: " + fmtTime(p.length, 0) + " · " + p.pieces + " pieces" + (p.where ? "\n" + (p.linked ? "Used where it is: " : "Copy: ") + p.where : "");
   const open = () => { if (H.trash) return; if (p.missing) relink(p); else location.href = pageOf(p); };
-  return cardShell(p, pic, [el("small", { class: "num", text: meta }),
+  const f = p.done || {};
+  const ticks = stageOf(p) === "edit" ? el("span", { class: "vsteps", title: "Edit steps done on this version" },
+    ...[[1, f.versions || f.made_versions, "Odd / Even versions"], [2, f.thin, "Remove every 4th second"], [3, f.scenes, "Separate scenes"]]
+      .map(([n, on, what]) => el("i", { class: on ? "done" : "", title: what + (on ? ": done" : ": not yet"), text: String(n) }))) : null;
+  return cardShell(p, pic, [el("small", { class: "num", text: meta }), ticks,
     H.view === "list" ? el("small", { class: "num when", text: "Edited " + fmtTime(p.length, 0) + " · opened " + ago(p.opened) }) : null], open, edited);
 }
 /** Phase 3 card: a finished video. */

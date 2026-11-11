@@ -26,6 +26,8 @@ def music_chain(m: MusicSpec, total_s: float, sr: int, layout: str) -> Optional[
         return None
     parts = [f"aformat=sample_fmts=fltp:sample_rates={sr}:channel_layouts={layout}",
              f"atrim=duration={length:.4f}", "asetpts=PTS-STARTPTS", f"volume={m.volume:.5f}"]
+    if m.extra:
+        parts.append(m.extra)
     if m.fade_in > 0:
         parts.append(f"afade=t=in:st=0:d={min(m.fade_in, length):.4f}")
     if m.fade_out > 0 and length > 0.1:
@@ -121,8 +123,11 @@ def loudnorm_filter(target: Dict[str, float], measured: Optional[Dict[str, float
     base = f"loudnorm=I={target['target']:g}:TP={target['true_peak']:g}:LRA={target['lra']:g}"
     if measured is None:
         return base + ":print_format=json"
-    return (base + f":measured_I={measured['input_i']:.2f}:measured_TP={measured['input_tp']:.2f}:measured_LRA={measured['input_lra']:.2f}"
-            f":measured_thresh={measured['input_thresh']:.2f}:offset={measured['target_offset']:.2f}:linear=true:print_format=summary")
+    # The second pass is one steady change of loudness for the whole video (what YouTube does too), and the limiter after it
+    # keeps the peaks down. FFmpeg's own second pass falls back to 'dynamic' for most real videos, which slowly evens the
+    # loudness out and would undo choices like music going down while people talk.
+    gain = max(-40.0, min(24.0, float(target["target"]) - float(measured["input_i"])))
+    return f"volume={gain:.2f}dB"
 
 
 def parse_loudnorm_json(stderr: str) -> Optional[Dict[str, float]]:

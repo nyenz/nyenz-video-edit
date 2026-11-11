@@ -2,10 +2,20 @@
 // The three sound layers of a video (voices, music, effects): the Split button, the three sliders, and the live sound
 // while you play. Used by the Editor (editor.js calls Layers.init / open / play / pause / follow / apply).
 const Layers = (() => {
-  const NAMES = ["voices", "music", "effects"];
-  const TITLE = { voices: "Voices", music: "Music", effects: "Effects" };
-  const WHAT = { voices: "People talking", music: "Songs and score", effects: "Gunshots, fights, cars, steps" };
-  const ICON = { voices: "face", music: "music", effects: "sparkles" };
+  const BASE = ["voices", "music", "effects"];
+  const NAMES = BASE.slice();                      // + "found" once Separate again pulled something out of chosen parts
+  const TITLE = { voices: "Voices", music: "Music", effects: "Effects", found: "Found again" };
+  const WHAT = { voices: "People talking", music: "Songs and score", effects: "Gunshots, fights, cars, steps", found: "What Separate again pulled out" };
+  const ICON = { voices: "face", music: "music", effects: "sparkles", found: "search" };
+  /** The tracks of the attached split: the three, plus 'found' when it has one. */
+  function setNames(sp) {
+    const want = BASE.concat(sp && (sp.layers || []).includes("found") ? ["found"] : []);
+    if (want.join() === NAMES.join()) return false;
+    NAMES.splice(0, NAMES.length, ...want);
+    const from = (sp && sp.found_from) || [];
+    TITLE.found = "Found again" + (from.length ? " (from " + from.map((n) => TITLE[n]).join(" + ") + ")" : "");
+    return true;
+  }
   const PAD = 3;                                   // seconds of margin around the part you use, so cuts can still grow a little
   const PRESETS = [["Everything", [1, 1, 1]], ["Voices only", [1, 0, 0]], ["No voices", [0, 1, 1]], ["No music", [1, 0, 1]], ["Effects only", [0, 0, 1]]];
   const L = { info: null, poll: null, ctx: null, els: null, gains: null, loaded: "", last: 0, rows: {}, busy: false };
@@ -59,7 +69,7 @@ const Layers = (() => {
     }
     const chips = $("lyPresets"); chips.replaceChildren();
     for (const [label, g] of PRESETS) {
-      const c = el("button", { class: "chip", type: "button", text: label, onclick: () => { change(() => { NAMES.forEach((n, i) => { st()["mix_" + n] = g[i]; }); }, { keepVideo: true }); paint(); apply(); } });
+      const c = el("button", { class: "chip", type: "button", text: label, onclick: () => { change(() => { BASE.forEach((n, i) => { st()["mix_" + n] = g[i]; }); }, { keepVideo: true }); paint(); apply(); } });
       chips.append(c);
     }
   }
@@ -84,9 +94,9 @@ const Layers = (() => {
       const rate = q.rebuild_db >= 20 ? ["good", "The three layers add back to the original very closely."]
         : q.rebuild_db >= 12 ? ["ok", "The layers add back to the original, with small differences."]
           : ["warn", "The layers do not add back cleanly. Listen to each one before you use it."];
-      box.append(el("div", { class: "ly-share" }, ...NAMES.map((n) => el("span", { class: "ly-chip" }, el("i", { class: "ly-" + n }), el("small", { text: TITLE[n] + " " + Math.round(q.share[n]) + "%" })))));
+      box.append(el("div", { class: "ly-share" }, ...BASE.map((n) => el("span", { class: "ly-chip" }, el("i", { class: "ly-" + n }), el("small", { text: TITLE[n] + " " + Math.round(q.share[n]) + "%" })))));
       box.append(el("p", { class: "note " + rate[0], text: rate[1] + " (" + q.rebuild_db.toFixed(0) + " dB)" }));
-      const tiny = NAMES.filter((n) => q.share[n] < 3);
+      const tiny = BASE.filter((n) => q.share[n] < 3);
       if (tiny.length) box.append(el("p", { class: "note", text: tiny.map((n) => TITLE[n]).join(" and ") + (tiny.length > 1 ? " hold" : " holds") + " almost nothing: there probably was none in this part." }));
     } else box.append(el("p", { class: "note", text: "This split was made before the check existed. Press Split again to get the report." }));
     box.append(el("p", { class: "note", text: info.quality_note || "" }));
@@ -103,7 +113,7 @@ const Layers = (() => {
       r.slider.value = String(Math.round(gainOf(n) * 100)); r.val.textContent = pct(gainOf(n)); paintRange(r.slider); paintMute(n);
     }
     paintQuality(ready ? L.info : null);
-    const g = NAMES.map(gainOf);
+    const g = BASE.map(gainOf);
     for (const c of $("lyPresets").children) { const p = PRESETS.find(([l]) => l === c.textContent); c.classList.toggle("on", !!p && p[1].every((v, i) => Math.abs(v - g[i]) < 0.001)); }
     const info = L.info;
     const hint = $("lyHint"); hint.classList.remove("warn");
@@ -137,6 +147,7 @@ const Layers = (() => {
         "&prefer=" + encodeURIComponent(st().mix_split || ""));          // keep this project's own cleaned-up split
     } catch (e) { L.info = null; return; }
     const sp = L.info.split;
+    if (setNames(sp)) { build(); if (L.els) { pause(); try { L.ctx.close(); } catch (e) { /* already closed */ } L.els = null; L.ctx = null; L.gains = null; L.loaded = ""; } }
     document.dispatchEvent(new CustomEvent("layers-info"));
     if (sp && st().mix_split !== sp.id && !(st().mix_split && L.info.job && L.info.job.state === "running")) {
       st().mix_split = sp.id; scheduleSave();               // a finished split of this video is attached to the project by itself

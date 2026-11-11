@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import shutil
 import threading
 import time
 import urllib.parse
@@ -451,7 +452,7 @@ def test_each_piece_can_have_its_own_layer_loudness(web, film):
 def test_locks_groups_and_group_marks_are_kept():
     s = P.clean_settings({"locks": {"music": True, "voices": 0, "junk": True},
                           "sound_groups": [{"id": "g1abc", "name": "Vocals in music", "locked": True}, {"id": "../x", "name": "bad"}]})
-    assert s["locks"] == {"video": False, "sound": False, "voices": False, "music": True, "effects": False}
+    assert s["locks"] == {"video": False, "sound": False, "voices": False, "music": True, "effects": False, "found": False}
     assert s["sound_groups"] == [{"id": "g1abc", "name": "Vocals in music", "locked": True}]
     mix = P.clean_piece_mix({"music": {"volume": 1, "mute": False, "group": "g1abc"}, "voices": {"volume": 1, "group": "bad id"}})
     assert mix == {"music": {"volume": 1.0, "mute": False, "group": "g1abc"}}
@@ -470,15 +471,16 @@ def test_parts_are_measured_for_normalise(web, film):
 
 
 def test_separate_chosen_parts_again(web, film, monkeypatch):
-    """Music parts with voices left in them: the parts are split once more; the clean part stays on Music, the rest goes to its
-    own tracks (with the test model 50 % to Voices, 20 % to Effects). Other parts and the first split are not touched."""
+    """Music parts with voices left in them: the parts are split once more; the clean part stays on Music, and what was
+    pulled out (with the test model 50 % voices + 20 % effects) goes to a new track, 'found'. Voices, Effects, other parts and
+    the first split are not touched."""
     c, state = web
     state.splitter.engine_factory = lambda path: scalar_engine
     state.splitter.model_ready = lambda: True
     proj = c.json("GET", f"/api/projects/{film['proj']['id']}")[1]["project"]
     proj["settings"]["mix_split"] = film["split"]
     c.json("PUT", f"/api/projects/{proj['id']}", proj)
-    status, r = c.json("POST", f"/api/projects/{proj['id']}/resplit", {"layer": "music", "ranges": [[2.0, 4.0]], "move_found": True})
+    status, r = c.json("POST", f"/api/projects/{proj['id']}/resplit", {"layer": "music", "ranges": [[2.0, 4.0]]})
     assert status == 200 and r["state"] == "running"
     end = time.time() + 60
     while time.time() < end:
@@ -489,22 +491,100 @@ def test_separate_chosen_parts_again(web, film, monkeypatch):
     assert r["state"] == "done", r
     new = c.json("GET", f"/api/projects/{proj['id']}")[1]["project"]["settings"]["mix_split"]
     assert new == r["id"] and new != film["split"] and "~" in new
-    files = state.splitter.store.resolve(new)["files"]
-    music, voices = decode(files["music"]), decode(files["voices"])
+    got = state.splitter.store.resolve(new)
+    files = got["files"]
+    assert set(files) == {"voices", "music", "effects", "found"} and got["found_from"] == ["music"]
+    music, voices, found = decode(files["music"]), decode(files["voices"]), decode(files["found"])
+    old_voices = decode(state.splitter.store.resolve(film["split"])["files"]["voices"])
     out_part, in_part = slice(int(44100 * 0.5), int(44100 * 1.5)), slice(int(44100 * 2.6), int(44100 * 3.4))
     A = level(music[out_part], 1000)                                     # the music tone as it was
     assert A > 0.02                                                      # outside: as it was
     assert abs(level(music[in_part], 1000) / A - 0.3) < 0.05             # inside: only the 'music' share of the music track
-    assert abs(level(voices[in_part], 1000) / A - 0.5) < 0.05            # what was found goes to Voices
-    assert abs(level(voices[in_part], 300) / A - 1.0) < 0.1              # and Voices keeps its own sound
-    assert level(voices[out_part], 1000) / A < 0.05
+    assert abs(level(found[in_part], 1000) / A - 0.7) < 0.06             # what was pulled out is on its own track
+    assert level(found[out_part], 1000) / A < 0.05                       # ... and only there
+    assert abs(level(voices[in_part], 300) - level(old_voices[in_part], 300)) < 0.01   # Voices is not touched
+    info = state.splitter.info(str(film["clip"]), 0.0, 6.0, new)["split"]
+    assert "found" in info["layers"] and info["found_from"] == ["music"]
+    assert c.json("GET", f"/api/peaks?split={new}&layer=found")[0] in (200, 202)
     assert state.splitter.store.resolve(film["split"])                    # the first split is still there
     # only this project uses the cleaned copy: a new lookup of the video still gives the first split
     info = state.splitter.info(str(film["clip"]), 0.0, 6.0)
     assert info["split"]["id"] == film["split"]
     assert state.splitter.info(str(film["clip"]), 0.0, 6.0, new)["split"]["id"] == new
     # and it exports
-    job = export(c, film, {"mix_split": new, "mix_music": 1.0, "mix_voices": 0.0})
+    job = export(c, film, {"mix_split": new, "mix_music": 1.0, "mix_voices": 0.0, "mix_found": 0.0})
     assert job["status"] == "done", job
     y = decode(job["output_path"])
     assert level(y[int(44100 * 2.6): int(44100 * 3.4)], 1000) < 0.6 * level(y[int(44100 * 0.5): int(44100 * 1.5)], 1000)
+
+
+# ---------------------------------------------------------------- 1.21: music parts, going down under voices, found track, step ticks
+def test_music_parts_and_ducking_are_cleaned_and_turned_into_filters():
+    st = P.clean_settings({"layers": [{"file": "u/x/a.mp3", "volume": 1, "parts": [{"end": 2, "volume": 3}, {"end": 1}, {"end": 4, "mute": 1}, {"end": None, "volume": 0.5}],
+                                       "duck": {"on": 1, "level": 9}, "locked": 1}, {"file": "u/x/b.mp3", "parts": [{"end": None}], "duck": {"on": 0}}]})
+    a, b = st["layers"]
+    assert a["parts"] == [{"end": 2.0, "volume": 2.0, "mute": False}, {"end": 4.0, "volume": 1.0, "mute": True}, {"end": None, "volume": 0.5, "mute": False}]
+    assert a["duck"] == {"on": True, "level": 1.0} and a["locked"] is True
+    assert "parts" not in b and "duck" not in b and "locked" not in b                       # nothing changed: nothing kept
+    assert P.music_parts_spans(a["parts"], 5.0) == [(0.0, 2.0, 2.0), (2.0, 4.0, 0.0), (4.0, 5.0, 0.5)]
+    assert P.duck_spans([(1.0, 1.5), (1.9, 2.5), (8.0, 9.0)], 10.0) == [(0.65, 3.3), (7.65, 9.8)]
+    f = P.music_envelope(a["parts"], {"on": True, "level": 0.3}, [(1.0, 2.0)], 5.0)
+    assert f.count("volume=") == 4 and "between(t,0.650,2.800)" in f and "1-0.7000*" in f
+
+    class Seg:                                        # a 2 s piece of the source from 10 s, played at double speed, starting at 1 s
+        kind, mute, reverse, speed, src_start_f, src_len_f, out_start = "clip", False, False, 2.0, 250, 50, 25
+    assert P.map_ranges([[10.5, 11.0], [20, 30]], [Seg()], 25.0) == [(1.25, 1.5)]
+
+
+def test_voices_are_found_on_the_voices_track(tmp_path):
+    f = tmp_path / "v.flac"
+    run(["-f", "lavfi", "-i", "sine=frequency=300:duration=6", "-af", "volume='if(between(t,1,2)+between(t,4,5),0.3,0)':eval=frame", "-c:a", "flac", str(f)])
+    got = P.find_voice(str(f), 10.0)
+    assert len(got) == 2 and abs(got[0][0] - 11.0) < 0.1 and abs(got[0][1] - 12.0) < 0.1 and abs(got[1][0] - 14.0) < 0.1
+
+
+def test_music_goes_down_under_voices_and_muted_parts_are_silent_in_the_export(web, film, tmp_path):
+    c, state = web
+    # a split of the film whose Voices track only talks from 2 s to 2.6 s
+    folder = film["folder"].parent / (film["folder"].name + "~20260101000000")
+    folder.mkdir(exist_ok=True)
+    for name in ("music", "effects"):
+        shutil.copyfile(film["folder"] / (name + ".flac"), folder / (name + ".flac"))
+    run(["-f", "lavfi", "-i", "sine=frequency=300:duration=6", "-af", "volume='if(between(t,2,2.6),0.3,0)':eval=frame,pan=stereo|c0=c0|c1=c0",
+         "-c:a", "flac", str(folder / "voices.flac")])
+    (folder / "split.json").write_text(json.dumps({"model": S.MODEL_ID, "start": 0.0, "end": 6.0, "derived": True}))
+    sid = film["split"].split("/")[0] + "/" + folder.name
+    song = tmp_path / "song.wav"
+    run(["-f", "lavfi", "-i", "sine=frequency=500:duration=6", "-af", "volume=0.3", str(song)])
+    mid = c.upload(song)
+    st, body = c.json("GET", f"/api/projects/{film['proj']['id']}/voices")
+    job = export(c, film, {"mix_split": sid,
+                           "layers": [{"file": mid, "volume": 1.0, "parts": [{"end": 0.6}, {"end": 1.2, "mute": True}, {"end": None}],
+                                       "duck": {"on": True, "level": 0.3}}]})
+    assert job["status"] == "done", job
+    st, body = c.json("GET", f"/api/projects/{film['proj']['id']}/voices")
+    assert st == 200 and body["from"] == "voices" and len(body["ranges"]) == 1 and abs(body["ranges"][0][0] - 2.0) < 0.1
+    y = decode(job["output_path"])
+    lv = lambda a, b: level(y[int(44100 * a): int(44100 * b)], 500)
+    A = lv(1.3, 1.6)                                      # after the fade-in and the muted part
+    assert A > 0.01
+    assert lv(0.75, 1.05) < 0.08 * A                     # the muted part
+    assert 0.18 < lv(2.1, 2.5) / A < 0.45                 # while someone talks: about 30 %
+    assert lv(3.6, 4.3) / A > 0.8                         # and back up after
+    # the levels of a music file can be measured too (for Normalise)
+    st, r = c.json("POST", "/api/split/levels", {"file": mid, "ranges": [[0, 1], [7, 8]]})
+    assert st == 200 and len(r["levels"]) == 2 and r["levels"][0]["rms"] > -40 and abs(r["levels"][0]["rms"] - r["levels"][1]["rms"]) < 1.5
+
+
+def test_edit_steps_already_done_are_remembered(web, film):
+    c, state = web
+    pid = film["proj"]["id"]
+    assert P.step_flags({"rule": {"interval": 1, "group": 4, "action": "remove", "picks": [4]}})["thin"]
+    assert P.step_flags({"steps": [{"rule": {"interval": 1, "group": 4, "action": "remove", "picks": [4]}}], "rule": {"scenes": True}}) == {"versions": False, "thin": True, "scenes": True}
+    assert P.clean_rule({"interval": 0, "hand": True, "scenes": True, "thin": True})["thin"] is True
+    st, r = c.json("POST", f"/api/projects/{pid}/sections", {"action": "versions"})
+    assert st == 200, r
+    rows = {p["id"]: p for p in c.json("GET", "/api/projects")[1]["projects"]}
+    assert rows[pid]["done"]["made_versions"] is True and rows[pid]["done"]["versions"] is False
+    odd = rows[r["versions"][0]["id"]]
+    assert odd["done"]["versions"] is True and odd["done"]["made_versions"] is False
