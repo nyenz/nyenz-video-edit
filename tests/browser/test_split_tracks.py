@@ -177,8 +177,7 @@ def test_music_track_parts_normalise_and_going_down_under_voices(live, page, spl
     page.evaluate("(id) => { S.proj.settings.layers = [{ file: id, volume: 0.5, mute: false, solo: false }]; scheduleSave(); loadFiles(); refreshAll({ keepVideo: true }); }", mid)
     page.wait_for_selector("#laneM .mpart")
     page.eval_on_selector("#laneM", "e => e.scrollIntoView({ block: 'nearest' })")
-    box = page.query_selector("#laneM .mpart").bounding_box()
-    page.mouse.click(box["x"] + 40, box["y"] + box["height"] / 2)
+    page.locator("#laneM .mpart").first.click(position={"x": 40, "y": 12})
     assert page.evaluate("() => S.msel && [...S.msel.ks]") == [0]
     assert "Song" in page.inner_text("#right .side-h h2")
     # cut the music (only the music: the video sections stay as they are), then mute the first part with Delete
