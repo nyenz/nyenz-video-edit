@@ -186,6 +186,7 @@ class MusicSpec:
     fade_in: float = 1.0
     fade_out: float = 2.0
     line: int = 0
+    extra: str = ""               # more FFmpeg filters after the loudness (the parts' loudness, going down under voices)
 
 
 @dataclass

@@ -166,3 +166,84 @@ def test_scroll_lock_one_track_group_and_normalise(live, page, split_movie):
     saved = live.call("GET", f"/api/projects/{pid}")["project"]
     assert saved["settings"]["sound_groups"][0]["locked"] is True and saved["pieces"][0]["mix"]["music"]["volume"] > 1.2
     assert page.errors == []
+
+
+def test_music_track_parts_normalise_and_going_down_under_voices(live, page, split_movie, tmp_path):
+    from tools.make_samples import run
+    song = tmp_path / "Song.wav"
+    run(["-f", "lavfi", "-i", "sine=frequency=500:duration=60", "-af", "volume=0.2", str(song)])
+    mid = live.upload(str(song))
+    pid = open_split(live, page, split_movie, "Music parts")
+    page.evaluate("(id) => { S.proj.settings.layers = [{ file: id, volume: 0.5, mute: false, solo: false }]; scheduleSave(); loadFiles(); refreshAll({ keepVideo: true }); }", mid)
+    page.wait_for_selector("#laneM .mpart")
+    page.eval_on_selector("#laneM", "e => e.scrollIntoView({ block: 'nearest' })")
+    page.locator("#laneM .mpart").first.click(position={"x": 40, "y": 12})
+    assert page.evaluate("() => S.msel && [...S.msel.ks]") == [0]
+    assert "Song" in page.inner_text("#right .side-h h2")
+    # cut the music (only the music: the video sections stay as they are), then mute the first part with Delete
+    n = page.evaluate("() => kept().length")
+    page.evaluate("() => seek(7)")
+    page.keyboard.press("s")
+    assert page.evaluate("() => S.proj.settings.layers[0].parts.map(p => p.end)") == [7, None]
+    assert page.evaluate("() => kept().length") == n
+    assert page.locator("#laneM .mpart").count() == 2
+    page.locator("#laneM .mpart").nth(0).click()
+    page.keyboard.press("Delete")
+    assert page.evaluate("() => S.proj.settings.layers[0].parts.map(p => p.mute)") == [True, False]
+    assert page.locator("#laneM .mpart.muted").count() == 1
+    # Normalise the second part: the quiet song is brought up
+    page.locator("#laneM .mpart").nth(1).click()
+    page.click("#right button:has-text('Normalise')")
+    page.wait_for_function("() => S.proj.settings.layers[0].parts[1].volume > 1.2", timeout=30000)
+    # the whole track can go up to 200 %
+    page.fill("#right input[aria-label='Loudness of the whole music track']", "200")
+    page.dispatch_event("#right input[aria-label='Loudness of the whole music track']", "change")
+    assert page.evaluate("() => S.proj.settings.layers[0].volume") == 2
+    # going down under voices: the voices come from the split Voices track and show as dips on the music
+    page.click("#right input[aria-label='Go down while people talk']")
+    page.wait_for_selector("#laneM .duckz", timeout=30000)
+    assert page.evaluate("() => S.voice.from") == "voices"
+    assert page.evaluate("() => S.proj.settings.layers[0].duck") == {"on": True, "level": 0.3}
+    assert abs(page.evaluate("() => duckGain(S.proj.settings.layers[0], 20)") - 0.3) < 0.01
+    # right-click a music part
+    page.locator("#laneM .mpart").nth(1).click(button="right")
+    assert page.locator(".menu.ctx", has_text="Cut the music here").count() == 1
+    page.keyboard.press("Escape")
+    # lock: nothing changes any more
+    page.click("#laneM .lane-head .lock-btn")
+    page.locator("#laneM .mpart").nth(1).click()
+    page.keyboard.press("Delete")
+    assert page.evaluate("() => S.proj.settings.layers[0].parts[1].mute") is False
+    page.evaluate("() => saveNow()")
+    saved = live.call("GET", f"/api/projects/{pid}")["project"]["settings"]["layers"][0]
+    assert saved["parts"][0]["mute"] is True and saved["duck"]["on"] is True and saved["locked"] is True
+    assert page.errors == []
+
+
+def test_what_separate_again_found_is_its_own_track(live, page, split_movie):
+    from tools.make_samples import run
+    src = live.state.resolve_input(split_movie)
+    store = SP.SplitStore(live.state.home)
+    base = store.folder(file_fingerprint(src), 0.0, 182.0)
+    d = base.parent / (base.name + "~20260101000000")
+    d.mkdir(exist_ok=True)
+    import shutil, json
+    for name in ("voices", "music", "effects"):
+        shutil.copyfile(base / (name + ".flac"), d / (name + ".flac"))
+    run(["-f", "lavfi", "-i", "sine=frequency=700:duration=182", "-ar", "16000", "-c:a", "flac", str(d / "found.flac")])
+    (d / "split.json").write_text(json.dumps({"model": SP.MODEL_ID, "start": 0.0, "end": 182.0, "derived": True, "found_from": ["music"]}))
+    pid = open_split(live, page, split_movie, "Found")
+    page.wait_for_selector("#laneStems .lane.stem", timeout=30000)
+    page.evaluate("(id) => { S.proj.settings.mix_split = id; Layers.refresh(); }", file_fingerprint(src) + "/" + d.name)
+    page.wait_for_selector("#laneStems .lane.stem[data-layer=found]", timeout=30000)
+    assert page.eval_on_selector_all("#laneStems .stem-head span", "els => els.map(e => e.textContent)") == ["Voices", "Music", "Effects", "Found again (from Music)"]
+    page.wait_for_function("() => S.stemPeaks.found && S.stemPeaks.found.length > 1000", timeout=30000)
+    page.click("#laneStems .stem-head[data-layer=found]")
+    page.click("#right input[aria-label='Mute the chosen parts']")
+    assert page.evaluate("() => kept().every(p => p.mix.found.mute)")
+    assert page.query_selector("#right button:has-text('Separate again')") is None
+    page.evaluate("() => saveNow()")
+    saved = live.call("GET", f"/api/projects/{pid}")["project"]
+    assert saved["pieces"][0]["mix"]["found"]["mute"] is True
+    assert page.errors == []
+    shutil.rmtree(d, ignore_errors=True)

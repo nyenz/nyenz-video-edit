@@ -18,6 +18,7 @@ A project is plain JSON::
 from __future__ import annotations
 
 import math
+import os
 import re
 import threading
 from pathlib import Path
@@ -70,14 +71,15 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     # sound clean-up
     "noise": "off", "vocals": "keep", "voice_boost": False, "compress": False, "bass": 0.0, "treble": 0.0,
     # the three sound layers (voices / music / effects) of a split video: which split to use, and how loud each layer is
-    "mix_split": "", "mix_voices": 1.0, "mix_music": 1.0, "mix_effects": 1.0,
+    "mix_split": "", "mix_voices": 1.0, "mix_music": 1.0, "mix_effects": 1.0, "mix_found": 1.0,
     # extra music layers: [{"file": id, "volume": 0..2, "mute": bool, "solo": bool}], and which of the video's own layers are muted / soloed
     "layers": [], "mute": [], "solo": [],
     # the frame: canvas shape, background layer, move / scale / turn, mask (see clean_frame)
     "frame": None,
 }
 MIX_LAYERS = ("voices", "music", "effects")
-SOUND_KEYS = ("original",) + MIX_LAYERS          # the video's own sound (as one piece), or its three layers once split
+STEM_KEYS = MIX_LAYERS + ("found",)              # 'found': what Separate again pulled out of chosen parts (its own track)
+SOUND_KEYS = ("original",) + STEM_KEYS          # the video's own sound (as one piece), or its three layers once split
 MAX_LAYERS = 8
 #: the final mix of every video meets the YouTube standard: -14 LUFS, and no peak above -1 dB (true peak)
 FINAL_LOUDNESS = {"target": -14.0, "true_peak": -1.5, "lra": 11.0}
@@ -168,7 +170,7 @@ def clean_piece_mix(raw: Any) -> Optional[Dict[str, Dict[str, Any]]]:
     if not isinstance(raw, dict):
         return None
     out: Dict[str, Dict[str, Any]] = {}
-    for layer in MIX_LAYERS:
+    for layer in STEM_KEYS:
         v = raw.get(layer)
         if not isinstance(v, dict):
             continue
@@ -252,25 +254,212 @@ def clean_settings(raw: Any) -> Dict[str, Any]:
     layers = []
     for x in (raw.get("layers") if isinstance(raw.get("layers"), list) else [])[:MAX_LAYERS]:
         if isinstance(x, dict) and str(x.get("file") or ""):
-            layers.append({"file": str(x["file"])[:300], "volume": round(_num(x.get("volume"), 0.5, 0.0, 2.0), 3),
-                           "mute": bool(x.get("mute")), "solo": bool(x.get("solo"))})
+            y = {"file": str(x["file"])[:300], "volume": round(_num(x.get("volume"), 0.5, 0.0, 2.0), 3),
+                 "mute": bool(x.get("mute")), "solo": bool(x.get("solo"))}
+            parts = clean_music_parts(x.get("parts"))
+            if parts:
+                y["parts"] = parts
+            dk = x.get("duck") if isinstance(x.get("duck"), dict) else {}
+            if dk.get("on"):
+                y["duck"] = {"on": True, "level": round(_num(dk.get("level"), DUCK_LEVEL, 0.0, 1.0), 3)}
+            if x.get("locked"):
+                y["locked"] = True
+            layers.append(y)
     s["layers"] = layers
     for key in ("mute", "solo"):
         s[key] = [k for k in SOUND_KEYS if k in (raw.get(key) if isinstance(raw.get(key), list) else [])]
     sid = str(raw.get("mix_split") or "")
     s["mix_split"] = sid if SPLIT_ID.match(sid) else ""
-    for layer in MIX_LAYERS:
+    for layer in STEM_KEYS:
         s["mix_" + layer] = round(_num(raw.get("mix_" + layer), 1.0, 0.0, 2.0), 3)
     fr = clean_frame(raw.get("frame")) if isinstance(raw.get("frame"), dict) else None
     s["frame"] = fr if frame_active(fr) else None
     lk = raw.get("locks") if isinstance(raw.get("locks"), dict) else {}
-    s["locks"] = {k: bool(lk.get(k)) for k in ("video", "sound", "voices", "music", "effects")}   # locked tracks (like CapCut)
+    s["locks"] = {k: bool(lk.get(k)) for k in ("video", "sound") + STEM_KEYS}   # locked tracks (like CapCut)
     groups = []
     for g in raw.get("sound_groups") if isinstance(raw.get("sound_groups"), list) else []:
         if isinstance(g, dict) and re.fullmatch(r"g[0-9a-z]{1,10}", str(g.get("id") or "")) and len(groups) < 50:
             groups.append({"id": str(g["id"]), "name": str(g.get("name") or "Group")[:40], "locked": bool(g.get("locked"))})
     s["sound_groups"] = groups                # named groups of sound parts (pieces[].mix[layer].group)
     return s
+
+
+DUCK_LEVEL = 0.3            # how loud the music stays while someone talks (30 %)
+DUCK_DOWN, DUCK_UP = 0.35, 0.8   # seconds to go down before the voice, and back up after it (gradually)
+MAX_MUSIC_PARTS = 2000
+
+
+def clean_music_parts(raw: Any) -> Optional[List[Dict[str, Any]]]:
+    """The parts of a music track, cut like the video sections: [{'end': s or None, 'volume': 0..2, 'mute': bool}], in
+    order; each part ends at 'end' (finished-video time) and the last one (end None) goes on to the end of the video."""
+    if not isinstance(raw, list):
+        return None
+    out: List[Dict[str, Any]] = []
+    last = 0.0
+    for x in raw[:MAX_MUSIC_PARTS]:
+        if not isinstance(x, dict):
+            continue
+        end = x.get("end")
+        e = None if end is None else round(_num(end, 0.0, 0.0, 1e6), 3)
+        if e is not None and e <= last + 0.02:
+            continue
+        part = {"end": e, "volume": round(_num(x.get("volume"), 1.0, 0.0, 2.0), 3), "mute": bool(x.get("mute"))}
+        if re.fullmatch(r"g[0-9a-z]{1,10}", str(x.get("group") or "")):
+            part["group"] = str(x["group"])
+        out.append(part)
+        if e is None:
+            break
+        last = e
+    if out and out[-1]["end"] is not None:
+        out.append({"end": None, "volume": 1.0, "mute": False})
+    if all(abs(p["volume"] - 1.0) < 0.001 and not p["mute"] and not p.get("group") for p in out) and len(out) <= 1:
+        return None
+    return out or None
+
+
+def music_parts_spans(parts: Optional[List[Dict[str, Any]]], total: float) -> List[tuple]:
+    """(start, end, gain) of the music parts that are not at full loudness, in finished-video time."""
+    out, a = [], 0.0
+    for p in parts or []:
+        b = total if p["end"] is None else min(total, float(p["end"]))
+        g = 0.0 if p["mute"] else float(p["volume"])
+        if b > a and abs(g - 1.0) > 0.001:
+            out.append((a, b, g))
+        a = b
+        if a >= total:
+            break
+    return out
+
+
+def duck_spans(voice: List[tuple], total: float) -> List[tuple]:
+    """Voice times (finished video) -> the stretches where the music goes down: a little before the voice, back up a
+    little after it. Close ones are joined, so the music does not pump up and down between words."""
+    out: List[List[float]] = []
+    for a, b in sorted(voice):
+        a, b = max(0.0, a - DUCK_DOWN), min(total, b + DUCK_UP)
+        if b <= a:
+            continue
+        if out and a <= out[-1][1] + 0.3:
+            out[-1][1] = max(out[-1][1], b)
+        else:
+            out.append([a, b])
+    return [(a, b) for a, b in out]
+
+
+def music_envelope(parts: Optional[List[Dict[str, Any]]], duck: Optional[Dict[str, Any]], voice: List[tuple], total: float) -> str:
+    """FFmpeg filters (after the track's own loudness) for the music parts' loudness and for going down under voices."""
+    chain = []
+    for a, b, g in music_parts_spans(parts, total):
+        # short slopes at the cuts (none at the very start or end), so a cut never clicks
+        lo = f"(t-{a:.3f})/0.04" if a > 0.001 else "1"
+        hi = f"({b:.3f}-t)/0.04" if b < total - 0.001 else "1"
+        chain.append(f"volume='1+({g:.4f}-1)*clip(min({lo},{hi}),0,1)':eval=frame:enable='between(t,{a:.3f},{b:.3f})'")
+    if duck and duck.get("on") and voice:
+        low = float(duck.get("level", DUCK_LEVEL))
+        for a, b in duck_spans(voice, total):
+            # 1 at the edges, `low` inside; straight slopes of DUCK_DOWN / DUCK_UP seconds
+            env = f"clip(min((t-{a:.3f})/{DUCK_DOWN:g},({b:.3f}-t)/{DUCK_UP:g}),0,1)"
+            chain.append(f"volume='1-{1 - low:.4f}*{env}':eval=frame:enable='between(t,{a:.3f},{b:.3f})'")
+    return ",".join(chain)
+
+
+_VOICE_CACHE: Dict[tuple, List[List[float]]] = {}
+
+
+def find_voice(path: str, offset: float = 0.0, stem: bool = True) -> List[List[float]]:
+    """When someone talks, as [start, end] seconds (+ offset). On a split Voices track anything clearly above silence
+    counts; on the plain sound only the voice band, clearly above the usual level (a guess: split first for the best result)."""
+    import subprocess
+    try:
+        st_ = os.stat(path)
+    except OSError:
+        return []
+    key = (path, st_.st_size, int(st_.st_mtime), stem, round(offset, 3))
+    if key in _VOICE_CACHE:
+        return _VOICE_CACHE[key]
+    af = "aresample=8000" if stem else "highpass=f=250,lowpass=f=3400,aresample=8000"
+    from .core.ffmpeg import get_tools
+    raw = subprocess.run([get_tools().ffmpeg, "-nostdin", "-v", "error", "-i", path, "-map", "0:a:0", "-vn", "-ac", "1", "-af", af,
+                          "-f", "s16le", "-"], capture_output=True, check=False).stdout
+    step = 400                                            # 50 ms at 8 kHz
+    n = len(raw) // 2 // step
+    out: List[List[float]] = []
+    if n:
+        try:
+            import numpy as np
+            x = np.frombuffer(raw[: n * step * 2], dtype="<i2").astype(np.float64).reshape(n, step) / 32768.0
+            db = 10 * np.log10(np.maximum(np.mean(x * x, axis=1), 1e-12))
+            levels = sorted(float(v) for v in db)
+        except ImportError:                               # the plain way (slower)
+            import array
+            a = array.array("h"); a.frombytes(raw[: n * step * 2])
+            db = []
+            for i in range(n):
+                s2 = sum(v * v for v in a[i * step:(i + 1) * step]) / step / (32768.0 * 32768.0)
+                db.append(10 * math.log10(max(s2, 1e-12)))
+            levels = sorted(db)
+        loud = levels[int(0.95 * (len(levels) - 1))]
+        thr = max(-45.0, loud - 26.0) if stem else max(-42.0, levels[len(levels) // 2] + 8.0)
+        on = [float(v) > thr for v in db]
+        i = 0
+        while i < n:
+            if on[i]:
+                j = i
+                while j < n and on[j]:
+                    j += 1
+                a0, b0 = i * 0.05 + offset, j * 0.05 + offset
+                if out and a0 - out[-1][1] < 0.35:
+                    out[-1][1] = b0
+                else:
+                    out.append([a0, b0])
+                i = j
+            else:
+                i += 1
+        out = [[round(a, 3), round(b, 3)] for a, b in out if b - a >= 0.2]
+    if len(_VOICE_CACHE) > 64:
+        _VOICE_CACHE.clear()
+    _VOICE_CACHE[key] = out
+    return out
+
+
+def voice_ranges(project: Dict[str, Any], src_path: str, media: Any = None, stems_home: Optional[str] = None,
+                 planner: Any = None) -> List[List[float]]:
+    """When someone talks in the video (source time): from the split Voices track (and what Separate again found),
+    or a guess from the plain sound when the sound is not split."""
+    sid = project["settings"].get("mix_split") or ""
+    if sid:
+        from .splitter import SplitStore
+        info = SplitStore(stems_home).resolve(sid)
+        if info and info["id"].split("/")[0] == source_identity(src_path)["fp"]:
+            rs = find_voice(info["files"]["voices"], info["start"])
+            if "found" in info["files"]:
+                rs = sorted(rs + find_voice(info["files"]["found"], info["start"]))
+            return rs
+    if media is not None and not media.has_audio:
+        return []
+    if planner is not None:
+        planner.notes.append("Music goes down under voices: the sound is not split, so voices were guessed from the plain sound.")
+    return find_voice(src_path, 0.0, stem=False)
+
+
+def map_ranges(ranges: Sequence[Sequence[float]], segs: Sequence[Any], fps: float) -> List[tuple]:
+    """Source-time ranges -> finished-video time, through every section that plays them (moved, repeated, faster ...)."""
+    out = []
+    for seg in segs:
+        if getattr(seg, "kind", "clip") != "clip" or getattr(seg, "mute", False):
+            continue
+        s0 = seg.src_start_f / fps
+        s1 = (seg.src_start_f + seg.src_len_f) / fps
+        o0, sp = seg.out_start / fps, float(seg.speed or 1.0)
+        for a, b in ranges:
+            x0, x1 = max(a, s0), min(b, s1)
+            if x1 - x0 < 0.02:
+                continue
+            if getattr(seg, "reverse", False):
+                out.append((o0 + (s1 - x1) / sp, o0 + (s1 - x0) / sp))
+            else:
+                out.append((o0 + (x0 - s0) / sp, o0 + (x1 - s0) / sp))
+    return sorted(out)
 
 
 def clean_frame(raw: Any) -> Dict[str, Any]:
@@ -373,7 +562,18 @@ def clean_rule(raw: Any) -> Optional[Dict[str, Any]]:
     out = {"interval": interval, "group": group, "picks": picks if action else [], "action": action, "hand": bool(raw.get("hand"))}
     if raw.get("scenes"):
         out["scenes"] = True                     # the sections are scenes (Separate scenes): the page chooses whole scenes
+    if raw.get("thin") or (interval == THIN_SECTION and group == THIN_EVERY and action == "remove"):
+        out["thin"] = True                       # 'Remove every 4th second' was done (kept when scenes are separated after it)
     return out
+
+
+def step_flags(d: Dict[str, Any]) -> Dict[str, bool]:
+    """Which Edit steps were already done on a version (so they are not done twice by mistake)."""
+    rules = [st.get("rule") for st in d.get("steps") or [] if isinstance(st, dict)] + [d.get("rule")]
+    rules = [r for r in rules if isinstance(r, dict)]
+    thin = any(r.get("thin") or (r.get("interval") == THIN_SECTION and r.get("group") == THIN_EVERY and r.get("action") == "remove") for r in rules)
+    cur = d.get("rule") if isinstance(d.get("rule"), dict) else {}
+    return {"versions": bool(d.get("version")), "thin": thin, "scenes": bool(cur.get("scenes"))}
 
 
 def out_len(p: Dict[str, Any]) -> float:
@@ -612,8 +812,8 @@ def _solo_any(st: Dict[str, Any], layers: Optional[Sequence[Dict[str, Any]]] = N
 def _layer_mix(st: Dict[str, Any], live: List[Dict[str, Any]], src_path: str, planner: Any,
                stems_home: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """The sound-layer mix (see splitter.py) when the person changed a layer's loudness, else None (= the original sound)."""
-    gains = {layer: float(st["mix_" + layer]) for layer in MIX_LAYERS}
-    for layer in MIX_LAYERS:
+    gains = {layer: float(st["mix_" + layer]) for layer in STEM_KEYS}
+    for layer in STEM_KEYS:
         if layer in st["mute"] or (_solo_any(st) and layer not in st["solo"]):
             gains[layer] = 0.0
     own = any(piece_layer_gain(p) for p in live)          # some pieces have their own layer loudness
@@ -629,6 +829,8 @@ def _layer_mix(st: Dict[str, Any], live: List[Dict[str, Any]], src_path: str, pl
     if lo < info["start"] - 0.05 or hi > info["end"] + 0.05:
         raise ScriptError("Part of your video lies outside the part whose sound was split.",
                           "Open Sound and press 'Split again' so the whole part you use is covered.")
+    if "found" not in info["files"]:
+        gains.pop("found", None)
     return {"id": info["id"], "start": info["start"], "end": info["end"], "files": info["files"], "gain": gains}
 
 
@@ -674,7 +876,7 @@ def plan_project(project: Dict[str, Any], src_path: str, *, music_path: Optional
     solo = _solo_any(st, layers)
     # the video's own sound is silent when switched off, muted, or when something else is soloed
     silent = (not st["original_sound"] or "original" in st["mute"] or (solo and "original" not in st["solo"] and not st["mix_split"])
-              or (solo and bool(st["mix_split"]) and not (set(st["solo"]) & set(MIX_LAYERS))))
+              or (solo and bool(st["mix_split"]) and not (set(st["solo"]) & set(STEM_KEYS))))
     face_path: List[follow_mod.Point] = []
     wants_face = [p for p in live if p["follow"]["mode"] == "face"]
     if wants_face and planner.has_video and reframe is None:
@@ -711,13 +913,19 @@ def plan_project(project: Dict[str, Any], src_path: str, *, music_path: Optional
         raise ScriptError("The finished video would be empty.", "Put a piece back, or make a piece longer.")
     audio = AudioSpec()
     tracks = ([{"path": music_path, "volume": float(st["music_volume"]), "mute": False, "solo": False}] if music_path else []) + layers
+    voice_src: Optional[List[tuple]] = None
     for t in tracks:
         if t.get("mute") or (solo and not t.get("solo")):
             continue
         if not probe_media(t["path"]).has_audio:
             raise ScriptError("A music file has no sound.", "Choose an audio file (mp3, wav, m4a ...).")
-        # music never ducks under speech: its loudness is whatever you set
-        audio.music.append(MusicSpec(t["path"], float(t["volume"]), False, 0.0, None, True, 0.5, 1.5))
+        # the music's loudness is whatever you set: the track, its parts, and (when switched on) lower while people talk
+        m = MusicSpec(t["path"], float(t["volume"]), False, 0.0, None, True, 0.5, 1.5)
+        duck = t.get("duck") if isinstance(t.get("duck"), dict) and t["duck"].get("on") else None
+        if duck and voice_src is None:
+            voice_src = map_ranges(voice_ranges(project, src_path, media, stems_home, planner), planner.segs, float(planner.F))
+        m.extra = music_envelope(t.get("parts"), duck, voice_src or [], planner.total / float(planner.F))
+        audio.music.append(m)
     if audio.music or (media.has_audio and not silent):
         audio.loudnorm = dict(FINAL_LOUDNESS)             # always last, on the whole mix (video sound + every music layer)
     if media.has_audio and not silent:

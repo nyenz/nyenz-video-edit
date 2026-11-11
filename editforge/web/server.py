@@ -355,14 +355,21 @@ class AppState:
         return info
 
     # ---- sound design on the split tracks (Final): measure parts for Normalise, and separate parts again ----------
-    def sound_levels(self, split_id: str, layer: str, ranges: List[List[float]]) -> List[Dict[str, float]]:
+    def sound_levels(self, split_id: str, layer: str, ranges: List[List[float]], file_id: str = "") -> List[Dict[str, float]]:
         """How loud each part of one split layer is: {'rms': dB, 'peak': 0..1} (rms -120 = silence). Ranges in source time."""
         import subprocess
         import numpy as np
-        from ..splitter import LAYERS
-        info = self.splitter.store.resolve(split_id)
-        if not info or layer not in LAYERS:
-            raise EditForgeError("That sound layer was not found.", "Open Sound and split the sound again.")
+        if file_id:
+            path = self.resolve_input(file_id)
+            dur = float(probe_media(path).duration or 0)
+            info = {"start": 0.0, "files": {"file": path}}
+            layer = "file"
+            if dur > 0.1:
+                ranges = [[a % dur, min(dur, a % dur + (b - a))] for a, b in ranges]
+        else:
+            info = self.splitter.store.resolve(split_id)
+            if not info or layer not in info["files"]:
+                raise EditForgeError("That sound layer was not found.", "Open Sound and split the sound again.")
         out = []
         for a, b in ranges[:2000]:
             sa, ln = max(0.0, float(a) - info["start"]), max(0.02, float(b) - float(a))
@@ -385,7 +392,8 @@ class AppState:
         sid = str(proj["settings"].get("mix_split") or "")
         base = self.splitter.store.resolve(sid)
         if not base or layer not in LAYERS:
-            raise EditForgeError("Split the sound first.", "Open Sound and press Split.")
+            raise EditForgeError("Split the sound first." if not base else "Choose parts on the Voices, Music or Effects track.",
+                                 "Open Sound and press Split." if not base else "Separate again works on those three tracks.")
         rs = sorted([max(base["start"], float(a)), min(base["end"], float(b))] for a, b in ranges if float(b) - float(a) > 0.05)
         if not rs:
             raise EditForgeError("Choose the parts to separate again first.", "Click parts on a sound track.")
@@ -403,6 +411,14 @@ class AppState:
                          name="editforge-resplit", daemon=True).start()
         return dict(job)
 
+    def voices(self, pid: str) -> Dict[str, Any]:
+        """When someone talks in this project's video (source time), for 'Music goes down under voices'."""
+        proj = project_mod.clean_project(self.load_project(pid), 1e9)
+        src = self.resolve_input(str(proj["source"]))
+        info = probe_media(src)
+        split = bool(proj["settings"].get("mix_split")) and bool(self.splitter.store.resolve(proj["settings"]["mix_split"]))
+        return {"ranges": project_mod.voice_ranges(proj, src, info, str(self.home)), "from": "voices" if split else "sound"}
+
     def resplit_status(self, pid: str) -> Dict[str, Any]:
         job = getattr(self, "resplits", {}).get(pid)
         if not job:
@@ -416,7 +432,7 @@ class AppState:
     def _resplit_run(self, pid: str, sid: str, base: Dict[str, Any], layer: str, rs: List[List[float]], a: float, move_found: bool,
                      job: Dict[str, Any], st: Dict[str, Any]) -> None:
         import subprocess
-        from ..splitter import LAYERS, MODEL_ID
+        from ..splitter import FOUND, LAYERS, MODEL_ID
         try:
             while True:                                         # wait for the splitter (it does one thing at a time)
                 cur = self.splitter.status()
@@ -435,31 +451,39 @@ class AppState:
             d = Path(base["dir"]).parent / (Path(base["dir"]).name.split("~")[0] + "~" + stamp)
             d.mkdir(parents=True, exist_ok=True)
             norm = ":normalize=0" if get_tools().amix_normalize else ""
-            for k in LAYERS:
-                out = d / (k + ".flac")
-                if k == layer:   # the chosen parts: only the clean part of the new split
-                    add, keep_orig = again["files"][layer], False
-                elif move_found:   # what was found in the chosen parts goes to its own track
-                    add, keep_orig = again["files"][k], True
-                else:
-                    add, keep_orig = None, True
-                if add is None:
-                    shutil.copyfile(base["files"][k], out)
-                    continue
-                delay = int(round(off * 1000))
-                orig_f = "[0:a]anull[o]" if keep_orig else f"[0:a]volume=volume=0:enable='{inside}'[o]"
-                fg = (f"{orig_f};[1:a]adelay={delay}:all=1,volume=volume=0:enable='not({inside})'[n];"
-                      f"[o][n]amix=inputs=2:duration=first:dropout_transition=0{norm}[m]")
-                if not norm:
-                    fg += ";[m]volume=2[m2]"
-                cmd = [get_tools().ffmpeg, "-nostdin", "-v", "error", "-y", "-i", base["files"][k], "-i", add, "-filter_complex", fg,
-                       "-map", "[m2]" if not norm else "[m]", "-c:a", "flac", str(out)]
+            delay = int(round(off * 1000))
+
+            def run(fg: str, inputs: List[str], out: Path) -> None:
+                cmd = [get_tools().ffmpeg, "-nostdin", "-v", "error", "-y"]
+                for i in inputs:
+                    cmd += ["-i", i]
+                cmd += ["-filter_complex", fg, "-map", "[z]", "-c:a", "flac", str(out)]
                 r = subprocess.run(cmd, capture_output=True, text=True, check=False)
                 if r.returncode != 0:
                     raise EditForgeError("The cleaned sound could not be made.", (r.stderr or "")[-200:])
+
+            fix = "" if norm else ",volume=2"
+            for k in LAYERS:
+                out = d / (k + ".flac")
+                if k != layer:                                  # the other tracks stay exactly as they were
+                    shutil.copyfile(base["files"][k], out)
+                    continue
+                # the chosen parts: only the clean part of the new split; everywhere else the track as it was
+                run(f"[0:a]volume=volume=0:enable='{inside}'[o];[1:a]adelay={delay}:all=1,volume=volume=0:enable='not({inside})'[n];"
+                    f"[o][n]amix=inputs=2:duration=first:dropout_transition=0{norm}{fix}[z]", [base["files"][k], again["files"][layer]], out)
+            # the 'found' track: what was pulled out of the chosen parts (the new split's other layers), added to what an
+            # earlier Separate again found. Silent everywhere else.
+            others = [k for k in LAYERS if k != layer]
+            had = base["files"].get(FOUND)
+            ins = [had or base["files"][layer], again["files"][others[0]], again["files"][others[1]]]
+            fg = (f"[0:a]{'anull' if had else 'volume=0'}[o];"
+                  f"[1:a][2:a]amix=inputs=2:duration=longest:dropout_transition=0{norm}{fix},adelay={delay}:all=1,"
+                  f"volume=volume=0:enable='not({inside})'[n];[o][n]amix=inputs=2:duration=first:dropout_transition=0{norm}{fix}[z]")
+            run(fg, ins, d / (FOUND + ".flac"))
+            found_from = sorted(set(base.get("found_from") or []) | {layer})
             atomic_write_json(d / "split.json", {"model": MODEL_ID, "start": base["start"], "end": base["end"], "seconds": 0, "mode": "fast",
                                                  "when": int(time.time()), "version": __version__, "derived": True, "from": sid,
-                                                 "quality": None})
+                                                 "quality": None, "found_from": found_from})
             new_id = sid.split("/")[0] + "/" + d.name
             with self._task_lock:
                 proj = self.load_project(pid)
@@ -664,7 +688,8 @@ class AppState:
                         d["task_done"] = {"kind": "scenes", "ok": False, "when": time.time(), "error": "That would make too many sections."}
                     else:
                         d["pieces"] = new
-                        d["rule"] = {"interval": 0, "group": 1, "picks": [], "action": "", "hand": True, "scenes": True}
+                        d["rule"] = {"interval": 0, "group": 1, "picks": [], "action": "", "hand": True, "scenes": True,
+                                     "thin": project_mod.step_flags(d)["thin"]}
                         d["task_done"] = {"kind": "scenes", "ok": True, "when": time.time(), "scenes": count, "before": before, "seen": False}
                         d["updated"] = time.time()
                 elif st["state"] == "failed":
@@ -841,9 +866,12 @@ class AppState:
                             "parent": str(d.get("parent") or ""), "version": str(d.get("version") or ""),
                             "linked": str(d["source"]).startswith("l/"), "where": self.link_path(str(d["source"])) or path,
                             "task": self.task_of(d) if (d.get("task") or d.get("task_done")) else {"state": "none"},
-                            "thumb_at": _thumb_time(pieces, dur)})
+                            "thumb_at": _thumb_time(pieces, dur), "done": project_mod.step_flags(d)})
             except (KeyError, TypeError, ValueError):
                 continue
+        made = {d["parent"] for d in out if d["version"] and not d["trashed"]}
+        for d in out:                                   # Odd / Even were already made from this clip
+            d["done"]["made_versions"] = d["id"] in made
         return sorted(out, key=lambda d: d["opened"], reverse=True)
 
     def _fp_of(self, source: str) -> str:
@@ -1580,10 +1608,9 @@ class Handler(BaseHTTPRequestHandler):
                 if query is None:
                     return
                 layer = (query.get("layer") or [""])[0]
-                if layer:                               # one split sound layer (voices / music / effects)
-                    from ..splitter import LAYERS
+                if layer:                               # one split sound layer (voices / music / effects / found)
                     found = self.state.splitter.store.resolve((query.get("split") or [""])[0])
-                    if not found or layer not in LAYERS:
+                    if not found or layer not in found["files"]:
                         self._error(404, "That sound layer was not found.")
                         return
                     src = found["files"][layer]
@@ -1608,6 +1635,10 @@ class Handler(BaseHTTPRequestHandler):
                 if self._guard() is None:
                     return
                 self._json(self.state.resplit_status(path.split("/")[3]))
+            elif re.fullmatch(rf"/api/projects/{PROJECT_ID}/voices", path):
+                if self._guard() is None:
+                    return
+                self._json(self.state.voices(path.split("/")[3]))
             elif re.fullmatch(rf"/api/projects/{PROJECT_ID}/task", path):
                 if self._guard() is None:
                     return
@@ -1704,7 +1735,7 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 rng = [r for r in (data.get("ranges") or []) if isinstance(r, list) and len(r) == 2]
                 self._json({"levels": self.state.sound_levels(str(data.get("split") or ""), str(data.get("layer") or ""),
-                                                              [[_float(r[0], 0.0), _float(r[1], 0.0)] for r in rng])})
+                                                              [[_float(r[0], 0.0), _float(r[1], 0.0)] for r in rng], str(data.get("file") or ""))})
             elif re.fullmatch(rf"/api/projects/{PROJECT_ID}/resplit", path):
                 data = self._read_json()
                 if data is None:
@@ -2138,7 +2169,8 @@ class Handler(BaseHTTPRequestHandler):
         layers = []
         for x in proj["settings"]["layers"]:
             try:
-                layers.append({"path": self.state.resolve_input(x["file"]), "volume": x["volume"], "mute": x["mute"], "solo": x["solo"]})
+                layers.append({"path": self.state.resolve_input(x["file"]), "volume": x["volume"], "mute": x["mute"], "solo": x["solo"],
+                               "parts": x.get("parts"), "duck": x.get("duck")})
             except EditForgeError:
                 raise EditForgeError("A music file of this project is gone.", "Open Audio and remove that music, or add it again.")
         captions_path = None
@@ -2270,9 +2302,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         layer = (query.get("layer") or [""])[0]
         if layer:                                   # one sound layer (voices / music / effects) of a split video
-            from ..splitter import LAYERS
             found = self.state.splitter.store.resolve((query.get("split") or [""])[0])
-            if not found or layer not in LAYERS:
+            if not found or layer not in found["files"]:
                 self._error(404, "That sound layer was not found.", "Open Sound and press Split.")
                 return
             src, path, kind = found["files"][layer], Path(found["files"][layer]), ""

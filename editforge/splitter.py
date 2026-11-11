@@ -39,6 +39,16 @@ from .version import __version__
 #: the three layers, in the order the model returns them, with the words shown to the person
 LAYERS = ("voices", "music", "effects")
 LAYER_TITLES = {"voices": "Voices", "music": "Music", "effects": "Effects"}
+#: a 4th layer that only a project's cleaned-up copy has (Separate again): what was pulled out of the chosen parts
+FOUND = "found"
+
+
+def layer_files(d: Path) -> Dict[str, str]:
+    """The layer files of a split folder: the three layers, plus 'found' when Separate again made one."""
+    out = {k: str(d / (k + ".flac")) for k in LAYERS}
+    if (d / (FOUND + ".flac")).is_file():
+        out[FOUND] = str(d / (FOUND + ".flac"))
+    return out
 
 SAMPLE_RATE = 44100
 CHUNK = 264600                    # 6 seconds
@@ -416,7 +426,7 @@ class SplitStore:
         if not meta or not all((d / (k + ".flac")).is_file() for k in LAYERS):
             return None
         return {"id": split_id, "start": float(meta["start"]), "end": float(meta["end"]), "dir": str(d),
-                "files": {k: str(d / (k + ".flac")) for k in LAYERS}}
+                "files": layer_files(d), "found_from": [x for x in meta.get("found_from") or [] if x in LAYERS]}
 
     def delete(self, split_id: str) -> int:
         info = self.resolve(split_id)
@@ -487,7 +497,8 @@ class Splitter:
                 hit = mine
         hit = hit or self.store.find(fp, start, end)
         out: Dict[str, Any] = {"available": available(), "model": self.model_ready(), "model_mb": round(MODEL_SIZE / 1e6) if MODEL_SIZE else 76,
-                               "split": hit and {"id": hit["id"], "start": hit["start"], "end": hit["end"], "quality": hit.get("quality")},
+                               "split": hit and {"id": hit["id"], "start": hit["start"], "end": hit["end"], "quality": hit.get("quality"),
+                                         "layers": list(hit["files"]), "found_from": hit.get("found_from") or []},
                                "quality_note": QUALITY_NOTE, "job": self.status()}
         secs = max(0.0, end - start)
         out["estimate_s"] = int(round(secs / self.speed("fast")))
