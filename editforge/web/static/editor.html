@@ -80,7 +80,9 @@
           <div class="job loud-box">
             <div class="job-h"><span class="job-ic"><i data-ic="sliders" class="s"></i></span><b>Loudness</b><span class="pill good">Always on</span></div>
             <p class="hint">Every export ends at YouTube's level: <b>-14 LUFS</b>, peaks under <b>-1 dB</b>, on everything together.</p>
-            <button id="checkMix" class="btn wide" type="button"><i data-ic="eye" class="s"></i><span>Check the mix (quick preview)</span></button>
+            <p class="hint">So it sounds as loud as other YouTube videos at your usual laptop volume, whatever you set here. <b>Sound check</b> shows where your mix is too loud or too quiet before that.</p>
+            <button id="checkMix" class="btn wide primary" type="button"><i data-ic="pulse" class="s"></i><span>Sound check</span></button>
+            <div id="mixCheck" class="mix-check" hidden></div>
           </div>
           <div class="job">
             <div class="job-h"><span class="job-ic"><i data-ic="sparkles" class="s"></i></span><b>Remove noise</b></div>
@@ -257,6 +259,7 @@
         <div id="laneStems" hidden></div>
         <div class="lane small" id="laneT" hidden></div>
         <div class="lane small" id="laneM" hidden></div>
+        <div class="lane small loud-lane" id="laneL" hidden><canvas class="wave"></canvas></div>
         <div class="playhead" id="playhead"></div>
       </div>
     </div>

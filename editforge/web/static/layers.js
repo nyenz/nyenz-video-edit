@@ -49,7 +49,7 @@ const Layers = (() => {
   function build() {
     const box = $("lyRows"); box.replaceChildren();
     for (const n of NAMES) {
-      const slider = el("input", { type: "range", class: "rng", min: "0", max: "200", step: "5", "aria-label": TITLE[n] + " loudness" });
+      const slider = el("input", { type: "range", class: "rng", min: "0", max: "200", step: "1", "aria-label": TITLE[n] + " loudness" });
       const val = el("b", { class: "num ly-val", text: "100%" });
       const mute = el("button", { class: "ly-mute", type: "button", title: "Turn " + TITLE[n].toLowerCase() + " off or on", "aria-label": "Mute " + TITLE[n].toLowerCase() }, icon("vol", "s"));
       const row = el("div", { class: "ly-row", "data-layer": n },
@@ -192,7 +192,8 @@ const Layers = (() => {
     if (!L.gains) return;
     const p = piece || (typeof V !== "undefined" && V.seg && V.seg.p);
     const f = S.mutedAll || (p && p.mute) || !st().original_sound ? 0 : (p ? Math.max(0, p.volume) : 1);
-    L.gains[n].gain.value = Math.max(0, v) * f * ownGain(p, n);
+    const shape = p && typeof partShapeGain === "function" && typeof active === "function" ? partShapeGain(p, n, active().currentTime) : 1;   // even out, fades
+    L.gains[n].gain.value = Math.max(0, v) * f * ownGain(p, n) * shape;
   }
   function gainsNow(p) { for (const n of NAMES) setGain(n, gainOf(n), p); }
   function on() { return usable(); }

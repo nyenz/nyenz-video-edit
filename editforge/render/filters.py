@@ -163,14 +163,37 @@ class ItemBuilder:
                 args += ["-threads", "1", "-ss", f"{sa:.6f}", "-t", f"{length + extra:.6f}", "-i", self.mix["files"][name]]
         return args
 
-    def audio_input(self, g: "Graph", k: int, seg: Any = None) -> Optional[str]:
+    def _shape(self, g: "Graph", cur: str, seg: Any, name: str, it: Any) -> str:
+        """Even out and fades of one source of this item's sound (see Segment.shape). Times inside are source time."""
+        sh = (getattr(seg, "shape", None) or {}).get(name) if seg is not None else None
+        if not sh or it is None:
+            return cur
+        from ..analysis import evenout
+        a, length = self.source_window(it)
+        lo, hi = max(a, sh["a"]), min(a + length, sh["b"])
+        parts = evenout.filters(sh.get("env") or [], lo, hi, offset=a) if hi > lo else []
+        A, B = sh["a"], sh["b"]
+        fin, fout = float(sh.get("fin") or 0), float(sh.get("fout") or 0)
+        if sh.get("rev"):                      # played backwards: it starts at the end of its source part
+            if fin:
+                parts.append(f"volume='clip(({B:.3f}-t-{a:.3f})/{fin:.3f},0,1)':eval=frame:enable='between(t,{B - fin - a:.3f},{B - a:.3f})'")
+            if fout:
+                parts.append(f"volume='clip((t+{a:.3f}-{A:.3f})/{fout:.3f},0,1)':eval=frame:enable='between(t,{A - a:.3f},{A + fout - a:.3f})'")
+        else:
+            if fin:
+                parts.append(f"volume='clip((t+{a:.3f}-{A:.3f})/{fin:.3f},0,1)':eval=frame:enable='between(t,{A - a:.3f},{A + fin - a:.3f})'")
+            if fout:
+                parts.append(f"volume='clip(({B:.3f}-t-{a:.3f})/{fout:.3f},0,1)':eval=frame:enable='between(t,{B - fout - a:.3f},{B - a:.3f})'")
+        return g.add(cur, ",".join(parts), "ev") if parts else cur
+
+    def audio_input(self, g: "Graph", k: int, seg: Any = None, it: Any = None) -> Optional[str]:
         """The label of the video's sound for item ``k`` (None = silence): the original track, or the mix of the layers
         (each layer at the project's loudness times this piece's own loudness of it)."""
         if not self.media.has_audio:
             return None
         base = k * self.stride
         if not self.mix:
-            return f"{base}:a:0"
+            return self._shape(g, f"{base}:a:0", seg, "original", it)
         if not self.layers:
             return None
         labels = []
@@ -181,7 +204,8 @@ class ItemBuilder:
             if own and name in own:
                 gain *= float(own[name])
             loud = loud or gain > 1.0
-            labels.append(g.add(f"{base + 1 + j}:a:0", f"aformat=sample_fmts=fltp:sample_rates={self.sr}:channel_layouts=stereo,volume={gain:.5f}", "sx"))
+            lab = g.add(f"{base + 1 + j}:a:0", f"aformat=sample_fmts=fltp:sample_rates={self.sr}:channel_layouts=stereo,volume={gain:.5f}", "sx")
+            labels.append(self._shape(g, lab, seg, name, it))
         if len(labels) == 1:
             cur = labels[0]
         else:

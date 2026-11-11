@@ -151,6 +151,7 @@ def clean_piece(raw: Any, duration: float) -> Optional[Dict[str, Any]]:
     mix = clean_piece_mix(raw.get("mix"))
     if mix:
         extra["mix"] = mix                    # this piece's own loudness / mute of each split sound layer (Final, Sound)
+    extra.update(clean_shape(raw))            # even out, fade in / out of this section's own sound
     return {**extra,
         "start": round(start, 4), "end": round(end, 4), "off": bool(raw.get("off")),
         "speed": round(_num(raw.get("speed"), 1.0, 0.1, 16.0), 4), "reverse": bool(raw.get("reverse")),
@@ -162,6 +163,27 @@ def clean_piece(raw: Any, duration: float) -> Optional[Dict[str, Any]]:
         "follow": {"mode": follow_mode, "zoom": round(_num(follow_raw.get("zoom"), 1.6, 1.1, 4.0), 3),
                    "path": points if follow_mode == "object" else []},
     }
+
+
+MAX_FADE = 10.0
+
+
+def clean_shape(raw: Any) -> Dict[str, Any]:
+    """Even out (0 off, 1 gentle, 2 strong) and gentle fade in / out (seconds) of a part's sound; only what is set."""
+    out: Dict[str, Any] = {}
+    if not isinstance(raw, dict):
+        return out
+    try:
+        ev = int(raw.get("even") or 0)
+    except (TypeError, ValueError):
+        ev = 0
+    if ev in (1, 2):
+        out["even"] = ev
+    for k in ("fin", "fout"):
+        v = round(_num(raw.get(k), 0.0, 0.0, MAX_FADE), 2)
+        if v >= 0.05:
+            out[k] = v
+    return out
 
 
 def clean_piece_mix(raw: Any) -> Optional[Dict[str, Dict[str, Any]]]:
@@ -176,8 +198,9 @@ def clean_piece_mix(raw: Any) -> Optional[Dict[str, Dict[str, Any]]]:
             continue
         vol, mute = round(_num(v.get("volume"), 1.0, 0.0, 2.0), 3), bool(v.get("mute"))
         group = str(v.get("group") or "")
-        if mute or abs(vol - 1.0) > 0.001 or re.fullmatch(r"g[0-9a-z]{1,10}", group):
-            out[layer] = {"volume": vol, "mute": mute}
+        shape = clean_shape(v)
+        if mute or abs(vol - 1.0) > 0.001 or re.fullmatch(r"g[0-9a-z]{1,10}", group) or shape:
+            out[layer] = {"volume": vol, "mute": mute, **shape}
             if re.fullmatch(r"g[0-9a-z]{1,10}", group):
                 out[layer]["group"] = group
     return out or None
@@ -264,6 +287,15 @@ def clean_settings(raw: Any) -> Dict[str, Any]:
                 y["duck"] = {"on": True, "level": round(_num(dk.get("level"), DUCK_LEVEL, 0.0, 1.0), 3)}
             if x.get("locked"):
                 y["locked"] = True
+            try:
+                auto = int(x.get("auto") or 0)
+            except (TypeError, ValueError):
+                auto = 0
+            if auto in (1, 2):
+                y["auto"] = auto              # Auto level: the song evened out by itself (gentle / strong)
+            for k, d in (("fade_in", 0.5), ("fade_out", 1.5)):
+                if x.get(k) is not None:
+                    y[k] = round(_num(x.get(k), d, 0.0, MAX_FADE), 2)
             layers.append(y)
     s["layers"] = layers
     for key in ("mute", "solo"):
@@ -304,6 +336,9 @@ def clean_music_parts(raw: Any) -> Optional[List[Dict[str, Any]]]:
         if e is not None and e <= last + 0.02:
             continue
         part = {"end": e, "volume": round(_num(x.get("volume"), 1.0, 0.0, 2.0), 3), "mute": bool(x.get("mute"))}
+        part.update(clean_shape(x))
+        if x.get("even") == 0 and x.get("even") is not False:
+            part["even"] = 0                   # Even out switched off here, also when the track has Auto level
         if re.fullmatch(r"g[0-9a-z]{1,10}", str(x.get("group") or "")):
             part["group"] = str(x["group"])
         out.append(part)
@@ -312,7 +347,7 @@ def clean_music_parts(raw: Any) -> Optional[List[Dict[str, Any]]]:
         last = e
     if out and out[-1]["end"] is not None:
         out.append({"end": None, "volume": 1.0, "mute": False})
-    if all(abs(p["volume"] - 1.0) < 0.001 and not p["mute"] and not p.get("group") for p in out) and len(out) <= 1:
+    if all(abs(p["volume"] - 1.0) < 0.001 and not p["mute"] and len(p) == 3 for p in out) and len(out) <= 1:
         return None
     return out or None
 
@@ -440,6 +475,71 @@ def voice_ranges(project: Dict[str, Any], src_path: str, media: Any = None, stem
     if planner is not None:
         planner.notes.append("Music goes down under voices: the sound is not split, so voices were guessed from the plain sound.")
     return find_voice(src_path, 0.0, stem=False)
+
+
+def _shape_of(sh: Dict[str, Any], env_path: Optional[str], offset: float, p: Dict[str, Any], cache: Optional[str]) -> Optional[Dict[str, Any]]:
+    from .analysis import evenout
+    if not (sh.get("even") or sh.get("fin") or sh.get("fout")):
+        return None
+    env: List[List[float]] = []
+    if sh.get("even") and env_path:
+        full = evenout.envelope(env_path, int(sh["even"]), cache)
+        env = [list(x) for x in evenout.window(evenout.shifted(full, offset), p["start"] - 0.5, p["end"] + 0.5)]
+    return {"env": env, "a": float(p["start"]), "b": float(p["end"]), "fin": float(sh.get("fin") or 0), "fout": float(sh.get("fout") or 0),
+            "rev": bool(p.get("reverse"))}
+
+
+def attach_shapes(live: List[Dict[str, Any]], groups: List[List[Any]], src_path: str, mix: Optional[Dict[str, Any]], cache: Optional[str]) -> None:
+    """Even out and fades of each section's own sound (the plain sound, or each split layer) go onto its segments."""
+    for p, segs in zip(live, groups):
+        shape: Dict[str, Dict[str, Any]] = {}
+        if mix:
+            for name, v in (p.get("mix") or {}).items():
+                if name in mix["files"]:
+                    sh = _shape_of(v, mix["files"][name], float(mix["start"]), p, cache)
+                    if sh:
+                        shape[name] = sh
+        else:
+            sh = _shape_of(p, src_path, 0.0, p, cache)
+            if sh:
+                shape["original"] = sh
+        if shape:
+            for seg in segs:
+                seg.shape = shape
+
+
+def music_shape(t: Dict[str, Any], total: float, cache: Optional[str]) -> str:
+    """Filters (finished-video time) for a music track's Auto level / Even out and the gentle fades of its parts."""
+    from .analysis import evenout
+    chain: List[str] = []
+    parts = t.get("parts") or [{"end": None, "volume": 1.0, "mute": False}]
+    auto = int(t.get("auto") or 0)
+    dur = None
+    a = 0.0
+    for q in parts:
+        b = total if q.get("end") is None else min(total, float(q["end"]))
+        if b <= a:
+            continue
+        s = q.get("even", auto)
+        if s:
+            if dur is None:
+                dur = float(probe_media(t["path"]).duration or 0)
+            if dur > 0.5:
+                env = evenout.envelope(t["path"], int(s), cache)
+                k = int(a // dur)
+                while k * dur < b and env:
+                    lo, hi = max(a, k * dur), min(b, (k + 1) * dur)   # the song plays again from the start when it ends
+                    chain += evenout.filters(evenout.shifted(env, k * dur), lo, hi)
+                    k += 1
+        fin, fout = float(q.get("fin") or 0), float(q.get("fout") or 0)
+        if fin:
+            chain.append(f"volume='clip((t-{a:.3f})/{fin:.3f},0,1)':eval=frame:enable='between(t,{a:.3f},{a + fin:.3f})'")
+        if fout:
+            chain.append(f"volume='clip(({b:.3f}-t)/{fout:.3f},0,1)':eval=frame:enable='between(t,{b - fout:.3f},{b:.3f})'")
+        a = b
+        if a >= total:
+            break
+    return ",".join(chain)
 
 
 def map_ranges(ranges: Sequence[Sequence[float]], segs: Sequence[Any], fps: float) -> List[tuple]:
@@ -816,7 +916,7 @@ def _layer_mix(st: Dict[str, Any], live: List[Dict[str, Any]], src_path: str, pl
     for layer in STEM_KEYS:
         if layer in st["mute"] or (_solo_any(st) and layer not in st["solo"]):
             gains[layer] = 0.0
-    own = any(piece_layer_gain(p) for p in live)          # some pieces have their own layer loudness
+    own = any(piece_layer_gain(p) or any(clean_shape(v) for v in (p.get("mix") or {}).values()) for p in live)   # own loudness / even out / fades
     if not st["mix_split"] or (all(abs(g - 1.0) < 0.001 for g in gains.values()) and not own):
         return None
     from .splitter import SplitStore
@@ -897,7 +997,8 @@ def plan_project(project: Dict[str, Any], src_path: str, *, music_path: Optional
             return [tuple(pt) for pt in p["follow"]["path"]]
         return None
 
-    groups = [g for g in (planner.piece_segments(p, reframe, silent, path_for(p)) for p in live) if g]
+    pairs = [(p, planner.piece_segments(p, reframe, silent, path_for(p))) for p in live]
+    groups = [g for _, g in pairs if g]
     if not groups:
         raise ScriptError("The pieces that are left are empty.", "Put a piece back, or make a piece longer.")
     if st["transition"] != "none" and planner.has_video:
@@ -914,17 +1015,21 @@ def plan_project(project: Dict[str, Any], src_path: str, *, music_path: Optional
     audio = AudioSpec()
     tracks = ([{"path": music_path, "volume": float(st["music_volume"]), "mute": False, "solo": False}] if music_path else []) + layers
     voice_src: Optional[List[tuple]] = None
+    cache = str(Path(stems_home) / "thumbs") if stems_home else None
     for t in tracks:
         if t.get("mute") or (solo and not t.get("solo")):
             continue
         if not probe_media(t["path"]).has_audio:
             raise ScriptError("A music file has no sound.", "Choose an audio file (mp3, wav, m4a ...).")
         # the music's loudness is whatever you set: the track, its parts, and (when switched on) lower while people talk
-        m = MusicSpec(t["path"], float(t["volume"]), False, 0.0, None, True, 0.5, 1.5)
+        fi = t.get("fade_in")
+        fo = t.get("fade_out")
+        m = MusicSpec(t["path"], float(t["volume"]), False, 0.0, None, True, 0.5 if fi is None else float(fi), 1.5 if fo is None else float(fo))
         duck = t.get("duck") if isinstance(t.get("duck"), dict) and t["duck"].get("on") else None
         if duck and voice_src is None:
             voice_src = map_ranges(voice_ranges(project, src_path, media, stems_home, planner), planner.segs, float(planner.F))
-        m.extra = music_envelope(t.get("parts"), duck, voice_src or [], planner.total / float(planner.F))
+        total_s = planner.total / float(planner.F)
+        m.extra = ",".join(x for x in (music_shape(t, total_s, cache), music_envelope(t.get("parts"), duck, voice_src or [], total_s)) if x)
         audio.music.append(m)
     if audio.music or (media.has_audio and not silent):
         audio.loudnorm = dict(FINAL_LOUDNESS)             # always last, on the whole mix (video sound + every music layer)
@@ -939,6 +1044,8 @@ def plan_project(project: Dict[str, Any], src_path: str, *, music_path: Optional
         voice = {"vocals": vocals, "boost": st["voice_boost"], "compress": st["compress"], "bass": st["bass"], "treble": st["treble"]}
         if vocals != "keep" or st["voice_boost"] or st["compress"] or abs(st["bass"]) >= 0.5 or abs(st["treble"]) >= 0.5:
             audio.voice = voice
+    if media.has_audio and not silent:
+        attach_shapes([p for p, g in pairs if g], groups, src_path, audio.mix, cache)
     audio.fade_in, audio.fade_out = float(st["fade_in"]), float(st["fade_out"])
     audio.fade_video = planner.has_video
     texts: List[TextOverlay] = []

@@ -411,6 +411,49 @@ class AppState:
                          name="editforge-resplit", daemon=True).start()
         return dict(job)
 
+    def even_points(self, file_id: str, split_id: str, layer: str, strength: int) -> List[List[float]]:
+        """The Even out curve of a file (music, or the video itself) or of a split layer (in the video's time)."""
+        from ..analysis import evenout
+        cache = str(self.thumbs)
+        if split_id:
+            info = self.splitter.store.resolve(split_id)
+            if not info or layer not in info["files"]:
+                raise EditForgeError("That sound layer was not found.", "Open Sound and split the sound again.")
+            return evenout.shifted(evenout.envelope(info["files"][layer], strength, cache), info["start"])
+        return evenout.envelope(self.resolve_input(file_id), strength, cache)
+
+    def loud_curve(self, job_id: str) -> Dict[str, Any]:
+        """Sound check: how loud a finished (preview) video is, moment by moment (short-term LUFS every half second),
+        and the stretches that are clearly too loud or too quiet next to the YouTube level."""
+        import subprocess
+        job = self.store.get(job_id)
+        if not job or job.get("status") != "done" or not job.get("output_path"):
+            raise EditForgeError("That check is not ready.", "Wait until it is done.")
+        r = subprocess.run([get_tools().ffmpeg, "-nostdin", "-hide_banner", "-i", job["output_path"], "-map", "0:a:0", "-vn",
+                            "-af", "ebur128=metadata=1,ametadata=mode=print:key=lavfi.r128.S:file=-", "-f", "null", "-"],
+                           capture_output=True, text=True, check=False)
+        pts, t = [], None
+        for line in r.stdout.splitlines():
+            m = re.search(r"pts_time:([\d.]+)", line)
+            if m:
+                t = float(m.group(1))
+                continue
+            m = re.match(r"lavfi\.r128\.S=(-?[\d.]+|-inf)", line)
+            if m and t is not None:
+                v = -70.0 if m.group(1) == "-inf" else max(-70.0, float(m.group(1)))
+                if not pts or t - pts[-1][0] >= 0.5:
+                    pts.append([round(t, 2), round(v, 1)])
+        # problem stretches: clearly louder than YouTube's level, or clearly quieter where there is sound
+        bad: List[Dict[str, Any]] = []
+        for tt, v in pts:
+            kind = "loud" if v > -8.0 else "quiet" if -45.0 < v < -26.0 else ""
+            if kind and bad and bad[-1]["kind"] == kind and tt - bad[-1]["end"] <= 1.01:
+                bad[-1]["end"] = tt
+            elif kind:
+                bad.append({"kind": kind, "start": max(0.0, tt - 3.0), "end": tt})       # short-term = the 3 s before
+        bad = [b for b in bad if b["end"] - b["start"] >= 3.4]
+        return {"points": pts, "problems": bad, "loudness": job.get("result", {}).get("loudness")}
+
     def voices(self, pid: str) -> Dict[str, Any]:
         """When someone talks in this project's video (source time), for 'Music goes down under voices'."""
         proj = project_mod.clean_project(self.load_project(pid), 1e9)
@@ -1694,6 +1737,16 @@ class Handler(BaseHTTPRequestHandler):
                 if self._guard() is None:
                     return
                 self._json({"recipes": self.state.load_recipes()})
+            elif re.fullmatch(r"/api/jobs/[0-9a-f]{12}/curve", path):
+                if self._guard() is None:
+                    return
+                self._json(self.state.loud_curve(path.split("/")[3]))
+            elif path == "/api/envelope":
+                query = self._guard()
+                if query is None:
+                    return
+                q1 = lambda k: (query.get(k) or [""])[0]
+                self._json({"points": self.state.even_points(q1("file"), q1("split"), q1("layer"), int(_float(q1("s"), 1.0)))})
             elif re.fullmatch(r"/api/jobs/[0-9a-f]{12}", path):
                 if self._guard() is None:
                     return
@@ -2170,7 +2223,8 @@ class Handler(BaseHTTPRequestHandler):
         for x in proj["settings"]["layers"]:
             try:
                 layers.append({"path": self.state.resolve_input(x["file"]), "volume": x["volume"], "mute": x["mute"], "solo": x["solo"],
-                               "parts": x.get("parts"), "duck": x.get("duck")})
+                               "parts": x.get("parts"), "duck": x.get("duck"), "auto": x.get("auto"),
+                               "fade_in": x.get("fade_in"), "fade_out": x.get("fade_out")})
             except EditForgeError:
                 raise EditForgeError("A music file of this project is gone.", "Open Audio and remove that music, or add it again.")
         captions_path = None

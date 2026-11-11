@@ -588,3 +588,86 @@ def test_edit_steps_already_done_are_remembered(web, film):
     assert rows[pid]["done"]["made_versions"] is True and rows[pid]["done"]["versions"] is False
     odd = rows[r["versions"][0]["id"]]
     assert odd["done"]["versions"] is True and odd["done"]["made_versions"] is False
+
+
+# ---------------------------------------------------------------- 1.22: even out, fades, sound check
+def test_even_out_takes_loud_moments_down_and_quiet_ones_up_and_leaves_the_rest():
+    import numpy as np
+    from editforge.analysis import evenout as E
+    sr = 8000
+    t = np.arange(0, 40, 1 / sr)
+    amp = np.where((t > 10) & (t < 15), 0.8, np.where((t > 22) & (t < 28), 0.05, np.where(t > 34, 0.0, 0.2)))
+    x = amp * np.sin(2 * np.pi * 440 * t)
+    for s, lo in ((1, -9.0), (2, -14.0)):
+        g = E.gains(x, sr, s)
+        at = lambda sec: g[int(sec / E.HOP)]
+        assert lo <= at(12.5) < -3.0                    # loud: down
+        assert at(25) > 1.0                             # quiet: up
+        assert at(5) == 0.0 and at(31) == 0.0          # fine: untouched
+        assert at(37) == 0.0                            # silence is never pulled up
+    g1, g2 = E.gains(x, sr, 1), E.gains(x, sr, 2)
+    assert g2[int(12.5 / E.HOP)] < g1[int(12.5 / E.HOP)]          # strong does more
+    pts = E.simplify(g1)
+    assert 3 < len(pts) < 80 and all(abs(E.at(pts, k * E.HOP) - g1[k]) < 0.45 for k in range(0, len(g1), 7))
+    f = E.filters(pts, 9.0, 16.0, offset=9.0)
+    assert f and all(x.startswith("volume='pow(10,(") for x in f)
+
+
+def test_even_out_and_fades_are_kept_only_when_set():
+    p = P.clean_piece({"start": 0, "end": 5, "even": 2, "fin": 1.25, "fout": 99, "mix": {"music": {"even": 1}, "voices": {"fin": 0.01}}}, 10)
+    assert p["even"] == 2 and p["fin"] == 1.25 and p["fout"] == 10.0
+    assert p["mix"] == {"music": {"volume": 1.0, "mute": False, "even": 1}}
+    q = P.clean_piece({"start": 0, "end": 5, "even": 7}, 10)
+    assert "even" not in q and "fin" not in q
+    st = P.clean_settings({"layers": [{"file": "u/x/a.mp3", "auto": 1, "fade_in": 3, "fade_out": 0, "parts": [{"end": 2, "even": 0}, {"end": None, "even": 2, "fin": 0.5}]}]})
+    x = st["layers"][0]
+    assert x["auto"] == 1 and x["fade_in"] == 3.0 and x["fade_out"] == 0.0
+    assert x["parts"][0]["even"] == 0 and x["parts"][1]["even"] == 2 and x["parts"][1]["fin"] == 0.5
+
+
+@pytest.fixture(scope="module")
+def bumpy(web, tmp_path_factory):
+    """A 12 s clip whose sound is a steady tone, much louder from 5 s to 8 s."""
+    c, state = web
+    d = tmp_path_factory.mktemp("bumpy")
+    clip = d / "bumpy.mp4"
+    run(["-f", "lavfi", "-i", "testsrc2=size=320x180:rate=25:duration=12", "-f", "lavfi", "-i", "sine=frequency=440:duration=12",
+         "-filter_complex", "[1:a]volume='if(between(t,5,8),1.0,0.2)':eval=frame,pan=stereo|c0=c0|c1=c0[a]", "-map", "0:v", "-map", "[a]",
+         "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "256k", "-shortest", str(clip)])
+    state.chooser = lambda kind, start: str(clip)
+    fid = c.json("POST", "/api/choose", {"kind": "video"})[1]["id"]
+    proj = c.json("POST", "/api/projects", {"source": fid, "interval": 0})[1]["project"]
+    return {"clip": clip, "fid": fid, "proj": proj}
+
+
+def test_even_out_and_fades_change_the_export_of_a_section(web, bumpy):
+    c, state = web
+    piece = dict(bumpy["proj"]["pieces"][0])
+    base = export(c, bumpy, {}, [piece])
+    even = export(c, bumpy, {}, [dict(piece, even=2, fin=2.0)])
+    assert base["status"] == "done" and even["status"] == "done", (base, even)
+    y0, y1 = decode(base["output_path"]), decode(even["output_path"])
+    lv = lambda y, a, b: level(y[int(44100 * a): int(44100 * b)], 440)
+    jump0 = lv(y0, 6, 7) / lv(y0, 2.5, 3.5)                # the loud part, next to the normal part
+    jump1 = lv(y1, 6, 7) / lv(y1, 2.5, 3.5)
+    assert jump0 > 3.5 and jump1 < 0.6 * jump0            # evened out: much closer together
+    assert lv(y1, 0.1, 0.5) < 0.45 * lv(y1, 2.5, 3.5)     # fades in over the first 2 s
+    # the live viewer gets the same curve
+    st, r = c.json("GET", "/api/envelope?file=" + urllib.parse.quote(bumpy["fid"]) + "&s=2")
+    assert st == 200 and min(g for _, g in r["points"]) < -5
+
+
+def test_auto_level_evens_out_an_imported_song_and_the_sound_check_finds_loud_spots(web, bumpy, tmp_path):
+    c, state = web
+    song = tmp_path / "bumpy_song.wav"
+    run(["-f", "lavfi", "-i", "sine=frequency=500:duration=12", "-af", "volume='if(between(t,5,8),0.9,0.1)':eval=frame", str(song)])
+    mid = c.upload(song)
+    piece = dict(bumpy["proj"]["pieces"][0])
+    off = export(c, bumpy, {"original_sound": False, "layers": [{"file": mid, "volume": 1.0}]}, [piece])
+    on = export(c, bumpy, {"original_sound": False, "layers": [{"file": mid, "volume": 1.0, "auto": 2}]}, [piece])
+    lv = lambda y, a, b: level(y[int(44100 * a): int(44100 * b)], 500)
+    y0, y1 = decode(off["output_path"]), decode(on["output_path"])
+    assert lv(y1, 6, 7) / lv(y1, 2.5, 3.5) < 0.6 * (lv(y0, 6, 7) / lv(y0, 2.5, 3.5))
+    st, cur = c.json("GET", f"/api/jobs/{off['id']}/curve")
+    assert st == 200 and len(cur["points"]) > 15 and all(-70 <= v <= 0 for _, v in cur["points"])
+    assert any(p["kind"] == "loud" for p in cur["problems"]) or any(p["kind"] == "quiet" for p in cur["problems"])
