@@ -354,6 +354,121 @@ class AppState:
             self.previews.ensure_strip(src)
         return info
 
+    # ---- sound design on the split tracks (Final): measure parts for Normalise, and separate parts again ----------
+    def sound_levels(self, split_id: str, layer: str, ranges: List[List[float]]) -> List[Dict[str, float]]:
+        """How loud each part of one split layer is: {'rms': dB, 'peak': 0..1} (rms -120 = silence). Ranges in source time."""
+        import subprocess
+        import numpy as np
+        from ..splitter import LAYERS
+        info = self.splitter.store.resolve(split_id)
+        if not info or layer not in LAYERS:
+            raise EditForgeError("That sound layer was not found.", "Open Sound and split the sound again.")
+        out = []
+        for a, b in ranges[:2000]:
+            sa, ln = max(0.0, float(a) - info["start"]), max(0.02, float(b) - float(a))
+            raw = subprocess.run([get_tools().ffmpeg, "-nostdin", "-v", "error", "-ss", f"{sa:.3f}", "-t", f"{ln:.3f}", "-i", info["files"][layer],
+                                  "-ac", "1", "-ar", "8000", "-f", "s16le", "-"], capture_output=True, check=False).stdout
+            x = np.frombuffer(raw[: len(raw) // 2 * 2], dtype="<i2").astype(np.float64) / 32768.0
+            if not len(x):
+                out.append({"rms": -120.0, "peak": 0.0})
+                continue
+            rms = float(np.sqrt(np.mean(x * x)))
+            out.append({"rms": round(20 * np.log10(max(rms, 1e-6)), 2), "peak": round(float(np.max(np.abs(x))), 4)})
+        return out
+
+    def start_resplit(self, pid: str, layer: str, ranges: List[List[float]], move_found: bool) -> Dict[str, Any]:
+        """Separate chosen parts of one split layer again (e.g. voices left in the music): the layer is split once more
+        there, the clean part replaces it, and what was found goes to its own track (or away). The project gets its own
+        cleaned-up copy of the split; the first split stays as it was."""
+        from ..splitter import LAYERS
+        proj = self.load_project(pid)
+        sid = str(proj["settings"].get("mix_split") or "")
+        base = self.splitter.store.resolve(sid)
+        if not base or layer not in LAYERS:
+            raise EditForgeError("Split the sound first.", "Open Sound and press Split.")
+        rs = sorted([max(base["start"], float(a)), min(base["end"], float(b))] for a, b in ranges if float(b) - float(a) > 0.05)
+        if not rs:
+            raise EditForgeError("Choose the parts to separate again first.", "Click parts on a sound track.")
+        a = max(base["start"], rs[0][0] - 0.5)
+        b = min(base["end"], max(r[1] for r in rs) + 0.5)
+        if self.splitter.status().get("state") in ("downloading", "running"):
+            raise EditForgeError("The sound splitter is busy with another split.", "Wait until it is done (see Activity), then try again.")
+        st = self.splitter.start(base["files"][layer], a - base["start"], b - base["start"], "fast")
+        job = {"state": "running", "progress": 0.0, "error": "", "layer": layer, "name": str(proj.get("name") or ""), "since": time.time()}
+        with self._task_lock:
+            if not hasattr(self, "resplits"):
+                self.resplits = {}
+            self.resplits[pid] = job
+        threading.Thread(target=self._resplit_run, args=(pid, sid, base, layer, rs, a, move_found, job, st),
+                         name="editforge-resplit", daemon=True).start()
+        return dict(job)
+
+    def resplit_status(self, pid: str) -> Dict[str, Any]:
+        job = getattr(self, "resplits", {}).get(pid)
+        if not job:
+            return {"state": "none"}
+        out = dict(job)
+        if out["state"] == "running":
+            sp = self.splitter.status()
+            out["progress"] = round(0.9 * float(sp.get("progress") or 0), 3)
+        return out
+
+    def _resplit_run(self, pid: str, sid: str, base: Dict[str, Any], layer: str, rs: List[List[float]], a: float, move_found: bool,
+                     job: Dict[str, Any], st: Dict[str, Any]) -> None:
+        import subprocess
+        from ..splitter import LAYERS, MODEL_ID
+        try:
+            while True:                                         # wait for the splitter (it does one thing at a time)
+                cur = self.splitter.status()
+                if cur.get("state") == "ready":
+                    break
+                if cur.get("state") in ("failed", "idle"):
+                    raise EditForgeError(cur.get("error") or "Separating again was stopped.", "Try again.")
+                time.sleep(0.4)
+            again = self.splitter.store.resolve(str(cur.get("id") or st.get("id") or ""))
+            if not again:
+                raise EditForgeError("The new separation was not found.", "Try again.")
+            off = again["start"]                                # stem time where the new split begins
+            S0 = base["start"]
+            inside = "+".join(f"between(t,{r[0] - S0:.4f},{r[1] - S0:.4f})" for r in rs)
+            stamp = time.strftime("%Y%m%d%H%M%S")
+            d = Path(base["dir"]).parent / (Path(base["dir"]).name.split("~")[0] + "~" + stamp)
+            d.mkdir(parents=True, exist_ok=True)
+            norm = ":normalize=0" if get_tools().amix_normalize else ""
+            for k in LAYERS:
+                out = d / (k + ".flac")
+                if k == layer:   # the chosen parts: only the clean part of the new split
+                    add, keep_orig = again["files"][layer], False
+                elif move_found:   # what was found in the chosen parts goes to its own track
+                    add, keep_orig = again["files"][k], True
+                else:
+                    add, keep_orig = None, True
+                if add is None:
+                    shutil.copyfile(base["files"][k], out)
+                    continue
+                delay = int(round(off * 1000))
+                orig_f = "[0:a]anull[o]" if keep_orig else f"[0:a]volume=volume=0:enable='{inside}'[o]"
+                fg = (f"{orig_f};[1:a]adelay={delay}:all=1,volume=volume=0:enable='not({inside})'[n];"
+                      f"[o][n]amix=inputs=2:duration=first:dropout_transition=0{norm}[m]")
+                if not norm:
+                    fg += ";[m]volume=2[m2]"
+                cmd = [get_tools().ffmpeg, "-nostdin", "-v", "error", "-y", "-i", base["files"][k], "-i", add, "-filter_complex", fg,
+                       "-map", "[m2]" if not norm else "[m]", "-c:a", "flac", str(out)]
+                r = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                if r.returncode != 0:
+                    raise EditForgeError("The cleaned sound could not be made.", (r.stderr or "")[-200:])
+            atomic_write_json(d / "split.json", {"model": MODEL_ID, "start": base["start"], "end": base["end"], "seconds": 0, "mode": "fast",
+                                                 "when": int(time.time()), "version": __version__, "derived": True, "from": sid,
+                                                 "quality": None})
+            new_id = sid.split("/")[0] + "/" + d.name
+            with self._task_lock:
+                proj = self.load_project(pid)
+                proj["settings"]["mix_split"] = new_id
+                atomic_write_json(self.project_path(pid), proj)
+            job.update(state="done", progress=1.0, id=new_id, when=time.time())
+        except Exception as exc:  # noqa: BLE001 - shown to the person
+            job.update(state="failed", error=getattr(exc, "message", None) or str(exc)[:200], when=time.time())
+
     PEAK_RATE = 50                                    # loudness values a second for the sound track on the timeline
 
     def peaks(self, src: str) -> Optional[Path]:
@@ -669,8 +784,15 @@ class AppState:
         for k, v in prev:
             items.append({"kind": "copy", "title": str(v.get("name") or "A video"), "what": "Making a light copy for smooth playing", "state": "running",
                           "progress": float(v.get("progress") or 0), "since": float(v.get("since") or 0), "link": ""})
+        for rp, rj in list(getattr(self, "resplits", {}).items()):
+            if rj["state"] == "running" or now - float(rj.get("when") or 0) < 900:
+                st_r = self.resplit_status(rp)
+                items.append({"kind": "split", "title": rj["name"] or "Sound", "state": st_r["state"] if st_r["state"] != "none" else "done",
+                              "what": {"running": "Separating the chosen " + rj["layer"] + " parts again", "done": "The chosen parts are separated again",
+                                       "failed": "Separating again failed"}.get(st_r["state"], ""), "progress": float(st_r.get("progress") or 0),
+                              "since": float(rj.get("since") or 0), "link": "/final?p=" + rp, "project": rp})
         sp = self.splitter.status()
-        if sp.get("state") in ("running", "downloading"):
+        if sp.get("state") in ("running", "downloading") and not any(r["state"] == "running" for r in getattr(self, "resplits", {}).values()):
             items.append({"kind": "split", "title": "Sound", "what": "Splitting voices, music and effects", "state": "running",
                           "progress": float(sp.get("progress") or 0), "since": 0, "link": ""})
         order = {"running": 0, "queued": 1, "failed": 2, "done": 3}
@@ -1448,7 +1570,7 @@ class Handler(BaseHTTPRequestHandler):
                 dur = probe_media(src).duration
                 a = _float((query.get("start") or ["0"])[0], 0.0)
                 b = _float((query.get("end") or [str(dur)])[0], dur)
-                self._json(self.state.splitter.info(src, a, min(b, dur) if b > 0 else dur))
+                self._json(self.state.splitter.info(src, a, min(b, dur) if b > 0 else dur, (query.get("prefer") or [""])[0]))
             elif path == "/media":
                 self._media()
             elif path == "/thumb":
@@ -1482,6 +1604,10 @@ class Handler(BaseHTTPRequestHandler):
                 if self._guard() is None:
                     return
                 self._json({"projects": self.state.list_projects()})
+            elif re.fullmatch(rf"/api/projects/{PROJECT_ID}/resplit", path):
+                if self._guard() is None:
+                    return
+                self._json(self.state.resplit_status(path.split("/")[3]))
             elif re.fullmatch(rf"/api/projects/{PROJECT_ID}/task", path):
                 if self._guard() is None:
                     return
@@ -1572,6 +1698,20 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({"no_dialog": True})
                     return
                 self._json(self._file_reply(ident) if ident else {"cancelled": True})
+            elif path == "/api/split/levels":
+                data = self._read_json()
+                if data is None:
+                    return
+                rng = [r for r in (data.get("ranges") or []) if isinstance(r, list) and len(r) == 2]
+                self._json({"levels": self.state.sound_levels(str(data.get("split") or ""), str(data.get("layer") or ""),
+                                                              [[_float(r[0], 0.0), _float(r[1], 0.0)] for r in rng])})
+            elif re.fullmatch(rf"/api/projects/{PROJECT_ID}/resplit", path):
+                data = self._read_json()
+                if data is None:
+                    return
+                rng = [r for r in (data.get("ranges") or []) if isinstance(r, list) and len(r) == 2]
+                self._json(self.state.start_resplit(path.split("/")[3], str(data.get("layer") or ""),
+                                                    [[_float(r[0], 0.0), _float(r[1], 0.0)] for r in rng], bool(data.get("move_found", True))))
             elif re.fullmatch(rf"/api/projects/{PROJECT_ID}/(scenes|scenes-stop|task-seen)", path):
                 if self._read_json() is None:
                     return

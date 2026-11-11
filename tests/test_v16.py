@@ -445,3 +445,66 @@ def test_each_piece_can_have_its_own_layer_loudness(web, film):
     z = decode(job["output_path"])
     a, b = z[int(44100 * 0.3): int(44100 * 1.7)], z[int(44100 * 2.3): int(44100 * 3.7)]
     assert 0.35 < level(b, 300) / level(a, 300) < 0.65
+
+
+# ---------------------------------------------------------------------------------------- 1.20: sound design on the tracks
+def test_locks_groups_and_group_marks_are_kept():
+    s = P.clean_settings({"locks": {"music": True, "voices": 0, "junk": True},
+                          "sound_groups": [{"id": "g1abc", "name": "Vocals in music", "locked": True}, {"id": "../x", "name": "bad"}]})
+    assert s["locks"] == {"video": False, "sound": False, "voices": False, "music": True, "effects": False}
+    assert s["sound_groups"] == [{"id": "g1abc", "name": "Vocals in music", "locked": True}]
+    mix = P.clean_piece_mix({"music": {"volume": 1, "mute": False, "group": "g1abc"}, "voices": {"volume": 1, "group": "bad id"}})
+    assert mix == {"music": {"volume": 1.0, "mute": False, "group": "g1abc"}}
+    assert P.piece_layer_gain({"mix": mix}) is None                    # in a group, but at full loudness: nothing changes in the mix
+    assert P.clean_settings({"mix_split": "a" * 32 + "/000000000-000006000~20261111120000"})["mix_split"].endswith("~20261111120000")
+
+
+def test_parts_are_measured_for_normalise(web, film):
+    c, state = web
+    status, r = c.json("POST", "/api/split/levels", {"split": film["split"], "layer": "music", "ranges": [[0.5, 2.0], [3.0, 5.5]]})
+    assert status == 200 and len(r["levels"]) == 2
+    # a sine at 0.3 x 1/8 (FFmpeg's sine is at 1/8) has an RMS of 0.0375 / sqrt(2): about -31.5 dB
+    assert all(abs(x["rms"] + 31.5) < 1.0 and abs(x["peak"] - 0.0375) < 0.004 for x in r["levels"])
+    status, err = c.json("POST", "/api/split/levels", {"split": "nope", "layer": "music", "ranges": [[0, 1]]})
+    assert status == 400
+
+
+def test_separate_chosen_parts_again(web, film, monkeypatch):
+    """Music parts with voices left in them: the parts are split once more; the clean part stays on Music, the rest goes to its
+    own tracks (with the test model 50 % to Voices, 20 % to Effects). Other parts and the first split are not touched."""
+    c, state = web
+    state.splitter.engine_factory = lambda path: scalar_engine
+    state.splitter.model_ready = lambda: True
+    proj = c.json("GET", f"/api/projects/{film['proj']['id']}")[1]["project"]
+    proj["settings"]["mix_split"] = film["split"]
+    c.json("PUT", f"/api/projects/{proj['id']}", proj)
+    status, r = c.json("POST", f"/api/projects/{proj['id']}/resplit", {"layer": "music", "ranges": [[2.0, 4.0]], "move_found": True})
+    assert status == 200 and r["state"] == "running"
+    end = time.time() + 60
+    while time.time() < end:
+        r = c.json("GET", f"/api/projects/{proj['id']}/resplit")[1]
+        if r["state"] != "running":
+            break
+        time.sleep(0.2)
+    assert r["state"] == "done", r
+    new = c.json("GET", f"/api/projects/{proj['id']}")[1]["project"]["settings"]["mix_split"]
+    assert new == r["id"] and new != film["split"] and "~" in new
+    files = state.splitter.store.resolve(new)["files"]
+    music, voices = decode(files["music"]), decode(files["voices"])
+    out_part, in_part = slice(int(44100 * 0.5), int(44100 * 1.5)), slice(int(44100 * 2.6), int(44100 * 3.4))
+    A = level(music[out_part], 1000)                                     # the music tone as it was
+    assert A > 0.02                                                      # outside: as it was
+    assert abs(level(music[in_part], 1000) / A - 0.3) < 0.05             # inside: only the 'music' share of the music track
+    assert abs(level(voices[in_part], 1000) / A - 0.5) < 0.05            # what was found goes to Voices
+    assert abs(level(voices[in_part], 300) / A - 1.0) < 0.1              # and Voices keeps its own sound
+    assert level(voices[out_part], 1000) / A < 0.05
+    assert state.splitter.store.resolve(film["split"])                    # the first split is still there
+    # only this project uses the cleaned copy: a new lookup of the video still gives the first split
+    info = state.splitter.info(str(film["clip"]), 0.0, 6.0)
+    assert info["split"]["id"] == film["split"]
+    assert state.splitter.info(str(film["clip"]), 0.0, 6.0, new)["split"]["id"] == new
+    # and it exports
+    job = export(c, film, {"mix_split": new, "mix_music": 1.0, "mix_voices": 0.0})
+    assert job["status"] == "done", job
+    y = decode(job["output_path"])
+    assert level(y[int(44100 * 2.6): int(44100 * 3.4)], 1000) < 0.6 * level(y[int(44100 * 0.5): int(44100 * 1.5)], 1000)

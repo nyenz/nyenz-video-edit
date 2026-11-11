@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.20.0
+* **Scroll the tracks with the mouse wheel**: over the timeline the wheel moves the tracks up and down when they do not all fit
+  (**Shift** + wheel goes left/right, **Ctrl** + wheel zooms).
+* **Lock one sound track**: Voices, Music and Effects each have their own lock. A locked track cannot be changed; the others still can.
+* **Normalise**: choose parts (or a whole track) and press **Normalise** — each part is set to a steady loudness.
+  **Normalise together** keeps their balance and moves them as one. Never louder than 200 %, never clipping.
+* **Groups**: choose parts, press **Group these parts** and give it a name. Click the group's name to choose all its parts again;
+  **Lock** a group so nothing changes it. Grouped parts get a colour line.
+* **Separate again**: when a Music part still has a voice in it, choose those parts and press **Separate again**.
+  Only those parts are split once more; what is found is moved to the right tracks. You can undo it.
+* **Loudness goes up to 200 %**.
+
 ## 1.19.0
 * **The split sound is on the timeline** (Final): after Split, **Voices**, **Music** and **Effects** each get their own track under the
   video, with their waveforms.

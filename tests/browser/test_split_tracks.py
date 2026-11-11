@@ -107,3 +107,62 @@ def test_a_new_shape_starts_with_soft_edges_and_260_percent_in_9_16(live, page, 
     fr = page.evaluate("() => S.proj.settings.frame")
     assert fr["edge"] == 17 and fr["scale"] == 2.6
     assert page.errors == []
+
+
+def test_scroll_lock_one_track_group_and_normalise(live, page, split_movie):
+    pid = open_split(live, page, split_movie, "Design")
+    page.wait_for_selector("#laneStems .lane.stem", timeout=30000)
+    # the wheel over the tracks scrolls them up and down when they do not all fit
+    page.set_viewport_size({"width": 1366, "height": 640})
+    page.wait_for_timeout(300)
+    sc = page.query_selector("#tlScroll").bounding_box()
+    tall = page.evaluate("() => $('tlScroll').scrollHeight > $('tlScroll').clientHeight + 2")
+    if tall:
+        page.mouse.move(sc["x"] + 400, sc["y"] + 60)
+        page.mouse.wheel(0, 120)
+        page.wait_for_timeout(200)
+        assert page.evaluate("() => $('tlScroll').scrollTop") > 0
+        assert page.evaluate("() => $('tlScroll').scrollLeft") == 0
+    page.set_viewport_size({"width": 1366, "height": 768})
+    # lock only the Music track: Voices can still change
+    page.click("#laneStems .stem-head[data-layer=music] .lock-btn")
+    assert page.evaluate("() => S.proj.settings.locks.music") is True and page.evaluate("() => S.proj.settings.locks.voices") is False
+    page.click("#laneStems .stem-head[data-layer=music]")
+    page.keyboard.press("Delete")
+    assert page.evaluate("() => kept().some(p => p.mix && p.mix.music)") is False
+    page.wait_for_selector(".toast:has-text('Music track is locked')")
+    page.click("#laneStems .stem-head[data-layer=voices]")
+    page.keyboard.press("Delete")
+    assert page.evaluate("() => kept().every(p => p.mix && p.mix.voices.mute)")
+    page.keyboard.press("Control+z")
+    page.click("#laneStems .stem-head[data-layer=music] .lock-btn")
+    # group the first two Effects parts, lock the group
+    page.eval_on_selector("#laneStems .lane.stem[data-layer=effects]", "e => e.scrollIntoView({ block: 'nearest' })")
+    lane = page.query_selector("#laneStems .lane.stem[data-layer=effects]").bounding_box()
+    tl = page.query_selector("#tlScroll").bounding_box()
+    xs = page.evaluate("() => layout().slice(0, 2).map(r => px((r.out0 + r.out1) / 2) - $('tlScroll').scrollLeft)")
+    page.mouse.click(tl["x"] + xs[0], lane["y"] + 16)
+    page.keyboard.down("Control"); page.mouse.click(tl["x"] + xs[1], lane["y"] + 16); page.keyboard.up("Control")
+    page.click("#right button:has-text('Group these parts')")
+    page.fill(".dialog input", "Shots")
+    page.click(".dialog button:has-text('OK')")
+    assert page.evaluate("() => S.proj.settings.sound_groups.map(g => g.name)") == ["Shots"]
+    assert page.evaluate("() => kept().slice(0, 2).every(p => p.mix.effects.group === S.proj.settings.sound_groups[0].id)")
+    page.click("#right .grp-now button:has-text('Lock')")
+    page.keyboard.press("Delete")
+    assert page.evaluate("() => kept().slice(0, 2).some(p => p.mix.effects.mute)") is False         # a locked group stays
+    # choose the group again from the list (click away first)
+    page.click("#laneStems .stem-head[data-layer=voices]")
+    page.keyboard.press("Escape")
+    page.evaluate("() => { S.asel = new Map(); refreshAll({ keepVideo: true }); }")
+    page.click("#right .grp-name:has-text('Shots')")
+    assert page.evaluate("() => aselList().length") == 2
+    # Normalise the whole Music track: the quiet tone (about -21 dB) is brought up, never over 200 %
+    page.click("#laneStems .stem-head[data-layer=music]")
+    page.click("#right button:has-text('Normalise')")
+    page.wait_for_function("() => kept().every(p => p.mix && p.mix.music && p.mix.music.volume > 1.2)", timeout=30000)
+    assert page.evaluate("() => kept().every(p => p.mix.music.volume <= 2)")
+    page.evaluate("() => saveNow()")
+    saved = live.call("GET", f"/api/projects/{pid}")["project"]
+    assert saved["settings"]["sound_groups"][0]["locked"] is True and saved["pieces"][0]["mix"]["music"]["volume"] > 1.2
+    assert page.errors == []

@@ -876,3 +876,14 @@ body.previewing .frame-ov, body.previewing #badge { display: none !important; }
 .lane.stem .stem-head:hover { color: var(--ink); background: var(--raised); }
 .lane.stem .stem-head.on { color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
 .lane.stem.muted canvas { opacity: .4; }
+
+/* ---- sound groups ---- */
+.groups-box { border-top: 1px solid var(--line-soft); }
+.grp-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+.grp-row.locked .grp-name b { color: #ffc46b; }
+.grp-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; display: inline-block; }
+.grp-name { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; border: 0; background: none; color: var(--ink); text-align: left; padding: 4px 6px; border-radius: 6px; cursor: pointer; font: inherit; }
+.grp-name:hover { background: var(--raised); }
+.grp-name small { color: var(--faint); }
+.grp-now { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; background: var(--sunk); font-size: 13px; }
+.grp-now span { flex: 1; }

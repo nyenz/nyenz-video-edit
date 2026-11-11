@@ -89,7 +89,7 @@ FRAME_BGS = ("black", "white", "blur")
 MASK_SHAPES = ("none", "strip", "vstrip", "rect", "circle", "split")
 DEFAULT_FRAME: Dict[str, Any] = {"ratio": "original", "bg": "blur", "blur": 50.0, "scale": 1.0, "x": 0.0, "y": 0.0, "rotate": 0.0, "edge": 0.0,
                                  "mask": {"shape": "none", "x": 0.5, "y": 0.5, "w": 1.0, "h": 0.35, "feather": 20.0, "invert": False, "rot": 0.0}}
-SPLIT_ID = re.compile(r"^[0-9a-f]{32}/\d{9}-\d{9}$")
+SPLIT_ID = re.compile(r"^[0-9a-f]{32}/\d{9}-\d{9}(~\d{14})?$")      # ~stamp: a project's cleaned-up copy (Separate again)
 NOISE_LEVELS = {"off": 0.0, "light": 10.0, "medium": 18.0, "strong": 28.0}
 VOCALS = ("keep", "remove", "voice")
 
@@ -173,8 +173,11 @@ def clean_piece_mix(raw: Any) -> Optional[Dict[str, Dict[str, Any]]]:
         if not isinstance(v, dict):
             continue
         vol, mute = round(_num(v.get("volume"), 1.0, 0.0, 2.0), 3), bool(v.get("mute"))
-        if mute or abs(vol - 1.0) > 0.001:
+        group = str(v.get("group") or "")
+        if mute or abs(vol - 1.0) > 0.001 or re.fullmatch(r"g[0-9a-z]{1,10}", group):
             out[layer] = {"volume": vol, "mute": mute}
+            if re.fullmatch(r"g[0-9a-z]{1,10}", group):
+                out[layer]["group"] = group
     return out or None
 
 
@@ -182,7 +185,8 @@ def piece_layer_gain(piece: Dict[str, Any]) -> Optional[Dict[str, float]]:
     mix = piece.get("mix")
     if not mix:
         return None
-    return {k: 0.0 if v.get("mute") else float(v.get("volume", 1.0)) for k, v in mix.items()}
+    return {k: 0.0 if v.get("mute") else float(v.get("volume", 1.0)) for k, v in mix.items()
+            if v.get("mute") or abs(float(v.get("volume", 1.0)) - 1.0) > 0.001} or None
 
 
 def clean_place(raw: Any) -> Optional[Dict[str, float]]:
@@ -260,7 +264,12 @@ def clean_settings(raw: Any) -> Dict[str, Any]:
     fr = clean_frame(raw.get("frame")) if isinstance(raw.get("frame"), dict) else None
     s["frame"] = fr if frame_active(fr) else None
     lk = raw.get("locks") if isinstance(raw.get("locks"), dict) else {}
-    s["locks"] = {"video": bool(lk.get("video")), "sound": bool(lk.get("sound"))}   # locked tracks (like CapCut)
+    s["locks"] = {k: bool(lk.get(k)) for k in ("video", "sound", "voices", "music", "effects")}   # locked tracks (like CapCut)
+    groups = []
+    for g in raw.get("sound_groups") if isinstance(raw.get("sound_groups"), list) else []:
+        if isinstance(g, dict) and re.fullmatch(r"g[0-9a-z]{1,10}", str(g.get("id") or "")) and len(groups) < 50:
+            groups.append({"id": str(g["id"]), "name": str(g.get("name") or "Group")[:40], "locked": bool(g.get("locked"))})
+    s["sound_groups"] = groups                # named groups of sound parts (pieces[].mix[layer].group)
     return s
 
 
@@ -607,7 +616,7 @@ def _layer_mix(st: Dict[str, Any], live: List[Dict[str, Any]], src_path: str, pl
     for layer in MIX_LAYERS:
         if layer in st["mute"] or (_solo_any(st) and layer not in st["solo"]):
             gains[layer] = 0.0
-    own = any(p.get("mix") for p in live)                 # some pieces have their own layer loudness
+    own = any(piece_layer_gain(p) for p in live)          # some pieces have their own layer loudness
     if not st["mix_split"] or (all(abs(g - 1.0) < 0.001 for g in gains.values()) and not own):
         return None
     from .splitter import SplitStore

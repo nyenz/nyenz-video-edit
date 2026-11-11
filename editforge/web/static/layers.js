@@ -133,7 +133,8 @@ const Layers = (() => {
     if (!S.proj || !S.info.has_audio) return;
     const [a, b] = range();
     try {
-      L.info = await api("/api/split?id=" + encodeURIComponent(S.proj.source) + "&start=" + a.toFixed(3) + "&end=" + b.toFixed(3));
+      L.info = await api("/api/split?id=" + encodeURIComponent(S.proj.source) + "&start=" + a.toFixed(3) + "&end=" + b.toFixed(3) +
+        "&prefer=" + encodeURIComponent(st().mix_split || ""));          // keep this project's own cleaned-up split
     } catch (e) { L.info = null; return; }
     const sp = L.info.split;
     document.dispatchEvent(new CustomEvent("layers-info"));
@@ -232,5 +233,5 @@ const Layers = (() => {
   const state = () => (L.els ? Object.fromEntries(NAMES.map((n) => [n, { paused: L.els[n].paused, time: L.els[n].currentTime, gain: L.gains[n].gain.value, rate: L.els[n].playbackRate }])) : null);
   /** The split attached to this project ({id, start, end}), or null. */
   const split = () => (S.proj && L.info && L.info.split && st().mix_split === L.info.split.id ? L.info.split : null);
-  return { init, open: refresh, play, pause, follow, apply, on, paint, state, split, NAMES, TITLE, ICON, gainOf, ownGain };
+  return { init, open: refresh, refresh, play, pause, follow, apply, on, paint, state, split, NAMES, TITLE, ICON, gainOf, ownGain };
 })();

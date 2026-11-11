@@ -383,8 +383,8 @@ class SplitStore:
             return None
         for d in base.iterdir():
             meta = self._meta(d)
-            if not meta or meta.get("model") != MODEL_ID:
-                continue
+            if not meta or meta.get("model") != MODEL_ID or meta.get("derived"):
+                continue                                     # a project's own cleaned-up copy is only used by that project
             a, b = float(meta["start"]), float(meta["end"])
             if a <= start + 0.01 and b >= end - 0.01 and all((d / (k + ".flac")).is_file() for k in LAYERS):
                 if best is None or (b - a) < (best["end"] - best["start"]):
@@ -476,10 +476,16 @@ class Splitter:
         except (OSError, ValueError, TypeError, AttributeError):
             return max(0.02, guess)
 
-    def info(self, source: str, start: float, end: float) -> Dict[str, Any]:
-        """Everything the page needs to show the Split button: is it possible, ready, how long will it take."""
+    def info(self, source: str, start: float, end: float, prefer: str = "") -> Dict[str, Any]:
+        """Everything the page needs to show the Split button: is it possible, ready, how long will it take.
+        prefer: the split the project uses now; kept when it is of this video and covers the part."""
         fp = file_fingerprint(source)
-        hit = self.store.find(fp, start, end)
+        hit = None
+        if prefer and prefer.split("/")[0] == fp:
+            mine = self.store.resolve(prefer)
+            if mine and mine["start"] <= start + 0.01 and mine["end"] >= end - 0.01:
+                hit = mine
+        hit = hit or self.store.find(fp, start, end)
         out: Dict[str, Any] = {"available": available(), "model": self.model_ready(), "model_mb": round(MODEL_SIZE / 1e6) if MODEL_SIZE else 76,
                                "split": hit and {"id": hit["id"], "start": hit["start"], "end": hit["end"], "quality": hit.get("quality")},
                                "quality_note": QUALITY_NOTE, "job": self.status()}
