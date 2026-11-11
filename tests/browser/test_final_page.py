@@ -66,7 +66,10 @@ def test_the_mix_check_shows_the_measured_loudness_and_a_live_meter(live, page, 
     page.evaluate("() => { S.pieces = null; }")
     page.click(".ftabs button[data-panel=sound]")
     page.click("#checkMix")
-    page.wait_for_selector("#exportsDrawer .job .facts:has-text('LUFS')", timeout=240000)
+    page.wait_for_selector("#mixCheck .check-nums", timeout=240000)          # the Sound check result in the panel
+    assert "LUFS" in page.inner_text("#mixCheck")
+    page.evaluate("() => Exports.show()")
+    page.wait_for_selector("#exportsDrawer .job .facts:has-text('LUFS')", timeout=60000)
     text = page.inner_text("#exportsDrawer .job")
     assert "meets the YouTube standard" in text, text
     page.click("#exportsDrawer .job >> text=Watch")

@@ -159,7 +159,7 @@ def test_scroll_lock_one_track_group_and_normalise(live, page, split_movie):
     assert page.evaluate("() => aselList().length") == 2
     # Normalise the whole Music track: the quiet tone (about -21 dB) is brought up, never over 200 %
     page.click("#laneStems .stem-head[data-layer=music]")
-    page.click("#right button:has-text('Normalise')")
+    page.click("#right button:has-text('Same loudness')")
     page.wait_for_function("() => kept().every(p => p.mix && p.mix.music && p.mix.music.volume > 1.2)", timeout=30000)
     assert page.evaluate("() => kept().every(p => p.mix.music.volume <= 2)")
     page.evaluate("() => saveNow()")
@@ -193,7 +193,7 @@ def test_music_track_parts_normalise_and_going_down_under_voices(live, page, spl
     assert page.locator("#laneM .mpart.muted").count() == 1
     # Normalise the second part: the quiet song is brought up
     page.locator("#laneM .mpart").nth(1).click()
-    page.click("#right button:has-text('Normalise')")
+    page.click("#right button:has-text('Same loudness')")
     page.wait_for_function("() => S.proj.settings.layers[0].parts[1].volume > 1.2", timeout=30000)
     # the whole track can go up to 200 %
     page.fill("#right input[aria-label='Loudness of the whole music track']", "200")
