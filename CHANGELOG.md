@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.24.0
+* **Follow**: while the video plays, the timeline moves along so the red line always stays in view (it turns a page when
+  the line reaches the right edge, like CapCut). The **Follow** button next to the zoom switches it off or on; the app remembers.
+
 ## 1.23.0
 * **Cleaner**: the "More" menu (Combine, Advanced) is gone. A **Back** button sits at the top left of every page (Alt + Left arrow).
 * **Home, one folder per video**: the original, Odd and Even sit together in their video's folder (Edit and Final). Each

@@ -403,9 +403,20 @@ const T = { thumbW: 100, h: 64, drag: null };
 const X0 = () => (S.mode === "final" ? 152 : 16);           // Final shows track names at the left of the timeline
 function px(t) { return Math.round(t * S.pps) + X0(); }
 function timeAt(x) { return (x - X0()) / S.pps; }
+/** Follow: while playing, keep the red line in view. When it reaches the right edge the timeline turns a page
+ *  (like CapCut), so the line starts again near the left. Off: the timeline stays where you put it. */
+S.follow = (() => { try { return localStorage.getItem("ef.follow") !== "0"; } catch (e) { return true; } })();
+function paintFollow() { const b = $("bFollow"); if (!b) return; b.classList.toggle("on", S.follow); b.setAttribute("aria-pressed", String(S.follow)); }
+function followPlayhead() {
+  if (!S.follow || !S.playing || S.dragging) return;
+  const sc = $("tlScroll"), x = px(S.t), w = sc.clientWidth;
+  const head = (document.querySelector("#tlScroll .lane-head") || { offsetWidth: 0 }).offsetWidth;
+  if (x > sc.scrollLeft + w - 40 || x < sc.scrollLeft + head) sc.scrollLeft = Math.max(0, x - head - w * 0.12);
+}
 function renderPlayhead() {
   if (!S.playing) paintMeter();
   $("playhead").style.left = px(S.t) + "px";
+  followPlayhead();
   $("tNow").textContent = fmtTime(S.t);
   if (S.mode === "final") {                           // a section with its own position: draw it as it will be
     const at = segAt(S.t), p = at ? at.s.p : null;
@@ -2660,6 +2671,13 @@ function wire() {
   $("checkMix").addEventListener("click", soundCheck);
   $("beatBtn").addEventListener("click", beatCut);
   for (const id of ["sBass", "sTreble"]) $(id).addEventListener("input", soundLabels);
+  paintFollow();
+  $("bFollow").addEventListener("click", () => {
+    S.follow = !S.follow; paintFollow();
+    try { localStorage.setItem("ef.follow", S.follow ? "1" : "0"); } catch (e) { /* not kept */ }
+    toast(S.follow ? "Follow on: the timeline moves along with the video." : "Follow off: the timeline stays where you put it.");
+    followPlayhead();
+  });
   $("capAuto").addEventListener("change", () => { change(() => { S.proj.settings.captions = $("capAuto").checked ? "auto" : "off"; }, { keepVideo: true }); $("capNote").textContent = ""; fillFileSelects(); });
   $("capHeight").addEventListener("input", () => { $("capHeightV").textContent = $("capHeight").value + "% from the bottom"; paintRange($("capHeight")); const g = $("capGuide"); if (g) { g.hidden = false; g.style.bottom = $("capHeight").value + "%"; } });
   $("capHeight").addEventListener("change", () => { change(() => { S.proj.settings.caption_height = +$("capHeight").value; }, { keepVideo: true }); paintCaptions(); });

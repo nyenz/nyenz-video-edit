@@ -974,3 +974,8 @@ label.swl.tight { padding: 0; gap: 8px; font-size: 12.5px; }
 .cap-guide { position: absolute; left: 8%; right: 8%; height: 0; border-bottom: 2px dashed rgba(255, 230, 0, .8); pointer-events: none; z-index: 6; }
 .cap-guide[hidden] { display: none; }
 .cap-guide span { position: absolute; left: 50%; bottom: 4px; transform: translateX(-50%); padding: 1px 8px; border-radius: 6px; background: rgba(0, 0, 0, .6); color: #ffe600; font-size: 11px; font-weight: 600; white-space: nowrap; }
+
+/* 1.24: Follow the red line while playing */
+.follow-tl { gap: 5px; color: var(--muted); transition: color .15s, background .15s, border-color .15s; }
+.follow-tl.on { color: var(--accent); background: var(--accent-soft); }
+.follow-tl:hover { color: var(--ink); }
