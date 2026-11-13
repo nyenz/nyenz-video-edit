@@ -169,18 +169,18 @@
     <section data-for="text" data-stage="final" hidden>
       <div class="side-h sub"><h2>Words on screen</h2><button id="addText" class="btn"><i data-ic="plus" class="s"></i><span>Add words</span></button></div>
       <div class="pad"><div id="texts" class="list"></div></div>
-      <details class="sec"><summary><i data-ic="type"></i><span>Captions</span><i data-ic="chev" class="chev"></i></summary>
-        <div class="pad">
-          <div class="field"><span>Captions</span><select id="sCap"></select></div>
-          <button id="capAdd" class="btn"><i data-ic="upload" class="s"></i><span>Add a subtitle file (.srt)</span></button>
-          <div class="field"><span>Look</span><select id="sCapStyle"><option value="karaoke">Words light up as they are said</option><option value="plain">Plain</option><option value="boxed">In a dark box</option></select></div>
-          <div class="grid2">
-            <div class="field"><span>Place</span><select id="sCapPos"><option value="bottom">Bottom</option><option value="center">Middle</option><option value="top">Top</option></select></div>
-            <div class="field"><span>Size</span><select id="sCapSize"><option value="small">Small</option><option value="medium">Medium</option><option value="large">Large</option></select></div>
-          </div>
-          <div id="capNote" class="note" aria-live="polite"></div>
+      <div class="side-h sub"><h2>Captions</h2><label class="swl tight" title="The app listens to the speech and writes the captions when you export"><span>Auto</span><input type="checkbox" id="capAuto" class="sw" aria-label="Automatic captions"></label></div>
+      <div class="pad">
+        <div class="field"><span>Captions</span><select id="sCap"></select></div>
+        <button id="capAdd" class="btn"><i data-ic="upload" class="s"></i><span>Add a subtitle file (.srt)</span></button>
+        <div class="field"><span>Look</span><select id="sCapStyle"><option value="karaoke">Words light up as they are said</option><option value="plain">Plain</option><option value="boxed">In a dark box</option></select></div>
+        <div class="grid2">
+          <div class="field"><span>Place</span><select id="sCapPos"><option value="bottom">Bottom</option><option value="center">Middle</option><option value="top">Top</option></select></div>
+          <div class="field"><span>Size</span><select id="sCapSize"><option value="small">Small</option><option value="medium">Medium</option><option value="large">Large</option></select></div>
         </div>
-      </details>
+        <div class="field"><span>Height <b class="num" id="capHeightV"></b></span><input type="range" id="capHeight" class="rng" min="0" max="90" step="1" aria-label="How high the captions sit"></div>
+        <div id="capNote" class="note" aria-live="polite"></div>
+      </div>
     </section>
 
     <!-- The project (both stages, at the bottom) -->
@@ -216,6 +216,11 @@
         <button class="btn ghost icon" id="tEnd" title="Go to end (End)"><i data-ic="stepf"></i></button>
       </div>
       <div class="row tr-right">
+        <div id="levelMeter" class="lmeter-live" data-stage="final" data-state="silent" aria-label="Level now">
+          <span class="lm-label">Level</span>
+          <span class="lm-bar"><i class="lm-zone"></i><i class="lm-fill"></i><i class="lm-line"></i></span>
+          <b class="lm-word">Silent</b>
+        </div>
         <button class="btn ghost icon" id="tMute" title="Sound on / off"><i data-ic="vol"></i></button>
         <span id="shapeTag" class="note"></span>
       </div>

@@ -37,6 +37,7 @@ const ICONS = {
   x: "M18 6 6 18M6 6l12 12",
   chev: "M6 9l6 6 6-6",
   chevr: "M9 6l6 6-6 6",
+  chevl: "M15 6l-6 6 6 6",
   eye: "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 12m-3 0a3 3 0 1 0 6 0a3 3 0 1 0-6 0",
   fliph: "M12 3v18M8 7 3 12l5 5zM16 7l5 5-5 5z",
   flipv: "M3 12h18M7 8l5-5 5 5zM7 16l5 5 5-5z",
@@ -193,20 +194,21 @@ function toast(text, bad, action) {
 
 // ------------------------------------------------------------------ top bar (same on every page)
 const APP_NAME = "Nyenz Edit";
-const PAGES = [["/", "Home", "home"], ["/clips", "Clips", "scissors"], ["/edit", "Edit", "layers"], ["/final", "Final", "check"], ["/combine", "Combine", "combine"], ["/advanced", "Advanced", "code"]];
+const PAGES = [["/", "Home", "home"], ["/clips", "Clips", "scissors"], ["/edit", "Edit", "layers"], ["/final", "Final", "check"]];
+/** Back: to the page you came from inside the app, or else to Home at this stage. */
+function goBack(active) {
+  const home = "/?phase=" + ({ "/clips": "clips", "/edit": "edit", "/final": "final" }[active] || "clips");
+  let inApp = false;
+  try { inApp = !!document.referrer && new URL(document.referrer).origin === location.origin && new URL(document.referrer).pathname !== location.pathname; } catch (e) { /* no referrer */ }
+  if (inApp && history.length > 1) history.back(); else location.href = home;
+}
 function topBar(active, extra) {
-  // the three stages in order; Combine and Advanced wait under More
   const nav = el("nav", { class: "nav", "aria-label": "Pages" });
   PAGES.slice(1, 4).forEach(([href, name, ic], i) => nav.append(el("a", { href, class: active === href ? "on" : "", title: ["Stage 1: take clips out of a movie", "Stage 2: sections, versions and scenes", "Stage 3: sound, picture and export"][i] },
     el("span", { class: "n", text: String(i + 1) }), icon(ic, "s"), el("span", { text: name }))));
-  const more = el("div", { class: "navmore" + (PAGES.slice(4).some(([h]) => h === active) ? " here" : "") });
-  const menu = el("div", { class: "menu", role: "menu" });
-  const notes = { "/combine": "Put two videos together", "/advanced": "Write an edit as text" };
-  for (const [href, name, ic] of PAGES.slice(4)) menu.append(el("a", { href, class: active === href ? "on" : "", role: "menuitem" }, icon(ic, "s"), el("span", {}, el("span", { text: name }), el("small", { text: notes[href] || "" }))));
-  more.append(el("button", { type: "button", "aria-haspopup": "menu", onclick: (e) => { e.stopPropagation(); more.classList.toggle("open"); } }, icon("more", "s"), el("span", { text: PAGES.slice(4).find(([h]) => h === active) ? PAGES.slice(4).find(([h]) => h === active)[1] : "More" }), icon("chev", "s")), menu);
-  document.addEventListener("click", () => more.classList.remove("open"));
-  nav.append(more);
-  const bar = el("header", { class: "top" },
+  const back = el("button", { type: "button", class: "btn ghost back-btn", id: "backBtn", title: "Back (Alt + Left arrow)", onclick: () => goBack(active) }, icon("chevl", "s"), el("span", { text: "Back" }));
+  document.addEventListener("keydown", (e) => { if (e.altKey && e.key === "ArrowLeft") { e.preventDefault(); goBack(active); } });
+  const bar = el("header", { class: "top" }, back,
     el("a", { class: "brand", href: "/", title: "Home" }, el("img", { src: "/static/logo.svg", alt: "" }), el("span", { text: APP_NAME })),
     nav, el("div", { class: "grow" }), Update.pill());
   for (const x of extra || []) bar.append(x);

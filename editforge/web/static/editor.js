@@ -331,7 +331,7 @@ function tick() {
     } else { dress(v, nx.p); v.currentTime = nx.p.start; }
     badge(nx.p); prepNext(nx);
   }
-  Layers.follow(active(), V.seg.p); musicGains();
+  Layers.follow(active(), V.seg.p); musicGains(); paintMeter();
   if (!Layers.on() && V.seg.p) { const vv = active(), pp = V.seg.p; vv.volume = clamp(pp.volume * partShapeGain(pp, "original", vv.currentTime), 0, 1); }
   renderPlayhead(); renderOverlay();
   if (S.followPlay) scrollToPlayhead();
@@ -371,7 +371,7 @@ function musicPlay() {
     if (!heard(x)) continue;
     const m = musicPlayer(x.file); on.add(x.file);
     setMusicGain(m, musicLevel(x, S.t)); m.muted = S.mutedAll;
-    if (m.duration) m.currentTime = S.t % m.duration;
+    if (m.duration) m.currentTime = (S.t + (+x.start || 0)) % m.duration;
     const pr = m.play(); if (pr && pr.catch) pr.catch(() => {});
   }
   for (const [f, m] of MUSIC) if (!on.has(f)) m.pause();
@@ -404,6 +404,7 @@ const X0 = () => (S.mode === "final" ? 152 : 16);           // Final shows track
 function px(t) { return Math.round(t * S.pps) + X0(); }
 function timeAt(x) { return (x - X0()) / S.pps; }
 function renderPlayhead() {
+  if (!S.playing) paintMeter();
   $("playhead").style.left = px(S.t) + "px";
   $("tNow").textContent = fmtTime(S.t);
   if (S.mode === "final") {                           // a section with its own position: draw it as it will be
@@ -556,7 +557,9 @@ function renderTimeline() {
   });
   // music: one row per layer, with its own mute, solo and lock at the left; its parts (cut like the video) on the right
   const lm = $("laneM"); lm.replaceChildren(); lm.hidden = !layers().length;
-  S.duckSpans = ducking() ? voiceOut() : [];
+  S.duckBy = {};
+  for (const of of duckNeeds()) { if ((S.acts || {})[of] && S.acts[of].key === (S.proj.settings.mix_split || "-")) S.duckBy[of] = voiceOut(of); else loadVoices(false, of); }
+  S.duckSpans = S.duckBy.voices || [];
   if (S.msel && !layers()[S.msel.i]) S.msel = null;
   layers().forEach((x, i) => {
     const name = (S.files.find((f) => f.id === x.file) || { name: x.file.split("/").pop() }).name;
@@ -574,7 +577,7 @@ function renderTimeline() {
           ((r.q.even === undefined ? x.auto : r.q.even) ? " · " + ((r.q.even === undefined ? x.auto : r.q.even) === 2 ? "evened strong" : "evened") : "") + (r.q.fin || r.q.fout ? " · fades" : "") }));
       d.style.left = px(r.a) + "px"; d.style.width = Math.max(6, px(r.b) - px(r.a) - 2) + "px"; row.append(d);
     }
-    if (x.duck && x.duck.on) for (const [a, b] of S.duckSpans) {
+    if (x.duck && x.duck.on) for (const [a, b] of S.duckBy[x.duck.under || "voices"] || []) {
       const z = el("i", { class: "duckz" }); z.style.left = px(a) + "px"; z.style.width = Math.max(2, px(b) - px(a)) + "px"; row.append(z);
     }
     lm.append(row);
@@ -583,6 +586,7 @@ function renderTimeline() {
   renderStemLanes();
   renderLoudLane();
   if (S.mode === "final") prefetchEnvs();
+  if (S.mode === "final" && !S.playing) paintMeter();
   renderPlayhead();
 }
 
@@ -705,7 +709,7 @@ function musicShapeGain(x, t) {
   const s = r.q.even === undefined ? (x.auto || 0) : r.q.even;
   if (s) {
     const pts = envPoints({ file: x.file }, s), m = MUSIC.get(x.file), D = m && m.duration;
-    if (pts && D) g *= dbGain(envDb(pts, t % D));
+    if (pts && D) g *= dbGain(envDb(pts, (t + (+x.start || 0)) % D));
   }
   return g;
 }
@@ -743,7 +747,7 @@ async function soundCheck() {
   box.replaceChildren(note, bar);
   try {
     await saveNow();
-    const job = await api("/api/projects/" + S.id + "/render", { method: "POST", json: { preview: true } });
+    const job = await api("/api/projects/" + S.id + "/render", { method: "POST", json: { preview: true, replace: true } });
     let j;
     for (;;) {
       j = await api("/api/jobs/" + job.id);
@@ -755,6 +759,7 @@ async function soundCheck() {
     note.textContent = "Measuring…";
     const c = await api("/api/jobs/" + job.id + "/curve");
     S.check = Object.assign(c, { sig: JSON.stringify([S.proj.pieces, S.proj.settings]) });
+    api("/api/jobs/" + job.id, { method: "DELETE" }).catch(() => {});      // the quick version was only for measuring: no leftover file
   } catch (e) { box.replaceChildren(el("p", { class: "hint warn", text: errText(e) })); return; } finally { b.disabled = false; }
   renderCheck(); renderTimeline();
 }
@@ -820,6 +825,76 @@ function renderLoudLane() {
   }
 }
 
+// ---- The level meter (Final, next to the play buttons): how loud this moment will be on YouTube, as an estimate.
+// Every export is set to -14 LUFS as a whole, so a moment lands at -14 plus how far it is above or below your mix's
+// usual level. The meter works that out from the tracks and your settings (no rendering), also while paused.
+// Green = right, yellow = quiet, red = too loud. Sound check measures the real thing.
+S.songPeaks = new Map();
+function songPeaks(file) {
+  const v = S.songPeaks.get(file);
+  if (v && v !== "loading") return v;
+  if (!v) {
+    S.songPeaks.set(file, "loading");
+    (async () => {
+      for (let tries = 0; tries < 60; tries++) {
+        const r = await fetch("/api/peaks?id=" + encodeURIComponent(file), { headers: { "X-EditForge-Token": TOKEN } }).catch(() => null);
+        if (!r || (r.status !== 200 && r.status !== 202)) break;
+        if (r.status === 200) { S.songPeaks.set(file, new Uint8Array(await r.arrayBuffer())); S.meterAvg = null; paintMeter(); return; }
+        await new Promise((ok) => setTimeout(ok, 1500));
+      }
+      S.songPeaks.set(file, new Uint8Array(0));
+    })();
+  }
+  return null;
+}
+const pk = (P, sec) => { if (!P || !P.length) return 0; const i = Math.floor(sec * 50); return i >= 0 && i < P.length ? P[i] / 255 : 0; };
+/** The power of the whole mix at timeline time t (0 = silence), from the tracks' wave pictures and every setting. */
+function mixPower(t, L) {
+  let pw = 0;
+  const r = (L || layout()).find((q) => t >= q.out0 && t < q.out1);
+  if (r && S.info.has_audio && !r.p.mute && S.proj.settings.original_sound) {
+    const p = r.p, ts = p.reverse ? p.end - (t - r.out0) * p.speed : p.start + (t - r.out0) * p.speed;
+    if (stemsOn()) {
+      const sp = Layers.split();
+      for (const n of Layers.NAMES) {
+        const g = Layers.gainOf(n) * Layers.ownGain(p, n) * p.volume * partShapeGain(p, n, ts) * stemDuckGain(n, ts);
+        const a = pk((S.stemPeaks || {})[n], ts - sp.start) * g; pw += a * a;
+      }
+    } else { const a = pk(S.peaks, ts) * p.volume * partShapeGain(p, "original", ts); pw += a * a; }
+  }
+  for (const x of layers()) {
+    if (!heard(x)) continue;
+    const P = songPeaks(x.file); if (!P || !P.length) continue;
+    const D = P.length / 50, a = pk(P, (t + (+x.start || 0)) % D) * musicLevel(x, t); pw += a * a;
+  }
+  return pw;
+}
+/** The usual level of the mix: the average power where there is sound (worked out again after changes, a little later). */
+function mixAverage() {
+  const sig = S.undo.length + "|" + S.redo.length + "|" + rawTotal().toFixed(1) + "|" + (S.stemFor || "") + "|" + S.songPeaks.size + "|" + Object.keys(S.stemPeaks || {}).length + "|" + (S.peaks ? S.peaks.length : 0);
+  if (S.meterAvg && S.meterAvg.sig === sig) return S.meterAvg.v;
+  const L = layout(), T = L.length ? L[L.length - 1].out1 : 0, step = Math.max(0.25, T / 800);
+  let sum = 0, n = 0;
+  for (let t = step / 2; t < T; t += step) { const p = mixPower(t, L); if (p > 1e-5) { sum += p; n++; } }
+  S.meterAvg = { sig, v: n ? sum / n : 0 };
+  return S.meterAvg.v;
+}
+function paintMeter() {
+  const box = $("levelMeter"); if (!box || S.mode !== "final") return;
+  const avg = mixAverage();
+  // a short window around the playhead, like the ear hears it
+  const L = layout(), T = L.length ? L[L.length - 1].out1 : 0;
+  let pw = 0; for (let k = -3; k <= 3; k++) pw += mixPower(clamp(S.t + k * 0.06, 0, Math.max(0, T - 0.01)), L);
+  pw /= 7;
+  const lufs = avg > 0 && pw > 1e-6 ? -14 + 10 * Math.log10(pw / avg) : -60;
+  const pos = clamp((lufs + 40) / 34, 0, 1);                       // -40 .. -6
+  const state = lufs <= -45 ? "silent" : lufs > -8 ? "loud" : lufs < -26 ? "quiet" : "good";
+  box.dataset.state = state;
+  box.querySelector(".lm-fill").style.width = (pos * 100).toFixed(1) + "%";
+  box.querySelector(".lm-word").textContent = { silent: "Silent", loud: "Too loud", quiet: "Quiet", good: "Good" }[state];
+  box.title = "Level now: about " + (lufs <= -45 ? "silence" : lufs.toFixed(0) + " LUFS") + " on YouTube (estimate). The green zone is the right level; the line is -14. Sound check measures the real thing.";
+}
+
 // ---- the music tracks you added (Final): cut them into parts like the video, change each part on its own, normalise,
 // and let the music go down gradually while people talk (and back up after). The export does exactly the same.
 S.msel = null;                                       // { i: music track, ks: Set of part numbers }
@@ -835,19 +910,67 @@ function partGain(x, t) { for (const r of mspans(x)) if (t >= r.a && t < r.b) re
 function duckGain(x, t) {
   if (!x.duck || !x.duck.on) return 1;
   const low = x.duck.level === undefined ? DUCK_LEVEL : +x.duck.level;
-  for (const [a, b] of S.duckSpans || []) {
+  for (const [a, b] of (S.duckBy || {})[x.duck.under || "voices"] || []) {
     if (t < a) break;
     if (t <= b) return 1 - (1 - low) * clamp(Math.min((t - a) / DUCK_DOWN, (b - t) / DUCK_UP), 0, 1);
   }
   return 1;
 }
+const UNDER = { voices: "Voices", music: "Music", effects: "Effects" };
+/** A split track that goes down while another one is heard: its live gain at source time t. */
+function stemDuckGain(n, t) {
+  const dk = (S.proj.settings.ducks || {})[n]; if (!dk || !dk.on) return 1;
+  const act = (S.acts || {})[dk.under]; if (!act) return 1;
+  if (!act.spans) act.spans = joinSpans(act.ranges.map(([a, b]) => [a, b]), 1e9);
+  for (const [a, b] of act.spans) {
+    if (t < a) break;
+    if (t <= b) return 1 - (1 - dk.level) * clamp(Math.min((t - a) / DUCK_DOWN, (b - t) / DUCK_UP), 0, 1);
+  }
+  return 1;
+}
+/** A little before each stretch to a little after it; close ones joined (the same rule as the export). */
+function joinSpans(list, T) {
+  const sp = [];
+  for (const [a0, b0] of list.sort((u, v) => u[0] - v[0])) {
+    const a = Math.max(0, a0 - DUCK_DOWN), b = Math.min(T, b0 + DUCK_UP);
+    if (sp.length && a <= sp[sp.length - 1][1] + 0.3) sp[sp.length - 1][1] = Math.max(sp[sp.length - 1][1], b); else sp.push([a, b]);
+  }
+  return sp;
+}
+/** Set (or switch off) the going down of a whole split track. */
+async function setStemDuck(n, patch) {
+  if (trackLocked(n)) { lockedNote(n); renderInspector(); return; }
+  const cur = Object.assign({ on: false, level: DUCK_LEVEL, under: n === "voices" ? "music" : "voices" }, (S.proj.settings.ducks || {})[n] || {}, patch);
+  change(() => { const d = Object.assign({}, S.proj.settings.ducks || {}); if (cur.on) d[n] = cur; else delete d[n]; S.proj.settings.ducks = d; }, { keepVideo: true });
+  if (cur.on) { const v = await loadVoices(false, cur.under); if (v && !v.ranges.length) toast("Nothing was found on the " + UNDER[cur.under] + " track, so " + Layers.TITLE[n] + " stays as it is.", true); }
+  Layers.apply(); renderInspector();
+}
+/** The 'Go down while ... is heard' box of a split track. */
+function stemDuckBox(n, lk) {
+  const dk = Object.assign({ on: false, level: DUCK_LEVEL, under: n === "voices" ? "music" : "voices" }, (S.proj.settings.ducks || {})[n] || {});
+  const sw = el("input", { type: "checkbox", class: "sw", "aria-label": "Go down while another track is heard" }); sw.checked = !!dk.on; sw.disabled = lk;
+  sw.addEventListener("change", () => setStemDuck(n, { on: sw.checked }));
+  const seg = segmented(Object.keys(UNDER).filter((k) => k !== n).map((k) => [k, UNDER[k]]), dk.under, (v) => setStemDuck(n, { on: true, under: v }));
+  if (lk) for (const b of seg.children) b.disabled = true;
+  const val = el("b", { class: "num", text: Math.round(dk.level * 100) + "%" });
+  const r = el("input", { type: "range", class: "rng", min: "0", max: "80", step: "1", value: String(Math.round(dk.level * 100)), "aria-label": "Loudness while the other track is heard" });
+  r.disabled = lk || !dk.on;
+  r.addEventListener("input", () => { val.textContent = r.value + "%"; paintRange(r); });
+  r.addEventListener("change", () => setStemDuck(n, { on: true, level: r.value / 100 }));
+  setTimeout(() => paintRange(r), 0);
+  return el("div", { class: "pad duck-box" },
+    el("label", { class: "swl" }, el("span", {}, el("b", { text: "Whole " + Layers.TITLE[n].split(" (")[0] + " track: go down while" })), sw),
+    el("div", { class: "field" }, el("span", { text: "…this is heard" }), seg),
+    el("div", { class: "field" }, el("span", {}, "Loudness then ", val), r));
+}
 /** When someone talks (finished-video time), from the voices the app found in the source. */
-function voiceOut() {
-  if (!S.voice) return [];
+function voiceOut(of) {
+  const act = (S.acts || {})[of || "voices"];
+  if (!act) return [];
   const out = [];
   for (const r of layout()) {
     const p = r.p; if (p.mute) continue;
-    for (const [a, b] of S.voice.ranges) {
+    for (const [a, b] of act.ranges) {
       const x0 = Math.max(a, p.start), x1 = Math.min(b, p.end); if (x1 - x0 < 0.02) continue;
       out.push(p.reverse ? [r.out0 + (p.end - x1) / p.speed, r.out0 + (p.end - x0) / p.speed] : [r.out0 + (x0 - p.start) / p.speed, r.out0 + (x1 - p.start) / p.speed]);
     }
@@ -861,18 +984,43 @@ function voiceOut() {
   return sp;
 }
 function ducking() { return layers().some((x) => x.duck && x.duck.on); }
-async function loadVoices(force) {
+/** When a track is heard in the source (voices by default; music / effects need the split). */
+async function loadVoices(force, of) {
+  of = of || "voices";
+  S.acts = S.acts || {}; S.actBusy = S.actBusy || {};
   const key = S.proj.settings.mix_split || "-";
-  if (!force && S.voice && S.voice.key === key) return S.voice;
-  if (S.voiceBusy) return null;
-  S.voiceBusy = true;
+  if (!force && S.acts[of] && S.acts[of].key === key) return S.acts[of];
+  if (S.actBusy[of]) return null;
+  S.actBusy[of] = true;
   try {
     await saved();
-    const r = await api("/api/projects/" + S.id + "/voices");
-    S.voice = { key, ranges: r.ranges || [], from: r.from };
-  } catch (e) { toast(errText(e), true); return null; } finally { S.voiceBusy = false; }
+    const r = await api("/api/projects/" + S.id + "/voices?of=" + of);
+    S.acts[of] = { key, ranges: r.ranges || [], from: r.from };
+    if (of === "voices") S.voice = S.acts[of];
+  } catch (e) { toast(errText(e), true); S.acts[of] = { key, ranges: [], from: "sound", failed: true }; return null; } finally { S.actBusy[of] = false; }
   renderTimeline(); renderInspector();
-  return S.voice;
+  return S.acts[of];
+}
+/** Which tracks something goes down under right now (songs and split tracks). */
+function duckNeeds() {
+  const need = new Set();
+  for (const x of layers()) if (x.duck && x.duck.on) need.add(x.duck.under || "voices");
+  for (const dk of Object.values(S.proj.settings.ducks || {})) if (dk && dk.on) need.add(dk.under);
+  return need;
+}
+/** A song you add starts as a soft bed under the video: about 20 %, set from how loud the song itself really is
+ *  (a loud song a little lower, a quiet one a little higher). You can change it after. */
+async function autoSongLevel(file) {
+  try {
+    const r = await api("/api/split/levels", { method: "POST", json: { file, ranges: [[0, 180]] } });
+    const v = r.levels[0]; if (!v || v.rms < -70) return;
+    const vol = +clamp(0.2 * Math.pow(10, (-18 - v.rms) / 20), 0.05, 1).toFixed(2);
+    const i = layers().findIndex((x) => x.file === file && Math.abs(x.volume - 0.2) < 0.001);
+    if (i < 0) return;
+    setLayer(i, { volume: vol }); scheduleSave();
+    renderMusicLayers(); renderTimeline(); renderInspector(); if (S.playing) musicPlay();
+    toast("Song set to " + Math.round(vol * 100) + "% by itself (from how loud it is). It goes down while people talk.");
+  } catch (e) { /* the 20 % start stays */ }
 }
 function setLayer(i, patch) { S.proj.settings.layers = layers().map((y, j) => (j === i ? Object.assign({}, y, patch) : y)); }
 function musicLocked(i) {
@@ -913,7 +1061,8 @@ async function normaliseMusic(together) {
   const why = musicLocked(i); if (why) { toast(why, true); return; }
   toast("Measuring " + list.length + " part" + (list.length > 1 ? "s" : "") + "…");
   let r;
-  try { r = await api("/api/split/levels", { method: "POST", json: { file: x.file, ranges: list.map((q) => [q.a, q.b]) } }); } catch (e) { toast(errText(e), true); return; }
+  const sk = +x.start || 0;
+  try { r = await api("/api/split/levels", { method: "POST", json: { file: x.file, ranges: list.map((q) => [q.a + sk, q.b + sk]) } }); } catch (e) { toast(errText(e), true); return; }
   const TARGET = -18, gains = new Map();
   if (together) {
     const live = r.levels.filter((v) => v.rms > -70);
@@ -927,12 +1076,14 @@ async function normaliseMusic(together) {
   musicChange((c, k) => { if (gains.has(k)) { c.volume = +gains.get(k).toFixed(3); c.mute = false; } });
   toast("Same loudness for " + gains.size + " music part" + (gains.size > 1 ? "s" : "") + (together ? ", balance kept." : "."));
 }
-async function setDuck(i, on, level) {
+async function setDuck(i, on, level, under) {
   const x = layers()[i]; if (!x) return;
   const why = musicLocked(i); if (why) { toast(why, true); renderInspector(); return; }
   const cur = Object.assign({ on: false, level: DUCK_LEVEL }, x.duck || {});
-  change(() => { setLayer(i, { duck: { on: on === undefined ? cur.on : on, level: level === undefined ? cur.level : level } }); }, { keepVideo: true });
-  if (on) { const v = await loadVoices(); if (v && !v.ranges.length) toast("No voices were found in this video, so the music stays as it is.", true); }
+  const next = { on: on === undefined ? cur.on : on, level: level === undefined ? cur.level : level };
+  const u = under || cur.under; if (u && u !== "voices") next.under = u;
+  change(() => { setLayer(i, { duck: next }); }, { keepVideo: true });
+  if (next.on) { const v = await loadVoices(false, next.under || "voices"); if (v && !v.ranges.length) toast("Nothing was found on the " + UNDER[next.under || "voices"] + " track, so the music stays as it is.", true); }
   if (S.playing) musicPlay();
 }
 function onMusicDown(e) {
@@ -970,6 +1121,18 @@ function musicMenuItems(i, t) {
     "-", ["Remove this music", "trash", () => { change(() => { S.proj.settings.layers = layers().filter((_, k) => k !== i); }, { keepVideo: true }); S.msel = null; renderMusicLayers(); musicPlay(); if (!S.playing) musicPause(); }, { danger: true, off: lk }],
   ].filter(Boolean);
 }
+/** Where in the song it starts: type a time (1:23), or take it from where the song is playing now. */
+function songStartField(x, setTrack, lk) {
+  const cur = +x.start || 0, m = MUSIC.get(x.file), D = m && m.duration;
+  const inp = el("input", { class: "input short", value: fmtTime(cur, 1), "aria-label": "Where the song starts", inputmode: "decimal", title: "Minutes:seconds into the song, for example 1:05" });
+  const parse = (v) => { const p = String(v).trim().split(":").map(Number); if (p.some((n) => !isFinite(n))) return null; return p.length === 2 ? p[0] * 60 + p[1] : p.length === 1 ? p[0] : null; };
+  const set = (v) => { if (v === null || v < 0) { toast("Type a time like 1:05 (minutes:seconds).", true); inp.value = fmtTime(cur, 1); return; } if (D) v = Math.min(v, Math.max(0, D - 1)); if (Math.abs(v - (+(layers().find((y) => y.file === x.file) || {}).start || 0)) < 0.005) return; setTrack({ start: +v.toFixed(2) }); renderInspector(); };
+  inp.addEventListener("change", () => { const v = parse(inp.value); setTimeout(() => set(v), 0); });
+  inp.disabled = !!lk;
+  const here = btn("From here", { cls: "sm ghost", title: "Start the song with the bit that is playing at the playhead now", onclick: () => { if (lk) return; set(D ? ((S.t + cur) % D) : S.t + cur); } });
+  const zero = btn("Start", { cls: "sm ghost", title: "Start the song from its beginning", onclick: () => { if (!lk) set(0); } });
+  return el("div", { class: "field song-start" }, el("span", {}, "Song starts at ", el("small", { class: "note", text: D ? "of " + fmtTime(D, 0) : "" })), el("div", { class: "row" }, inp, here, zero));
+}
 function renderMusicInspector(R) {
   const i = S.msel.i, x = layers()[i], list = mselList(), lk = !!musicLocked(i);
   const name = (S.files.find((f) => f.id === x.file) || { name: x.file.split("/").pop() }).name;
@@ -995,9 +1158,15 @@ function renderMusicInspector(R) {
   dr.addEventListener("input", () => { dval.textContent = dr.value + "%"; paintRange(dr); });
   dr.addEventListener("change", () => setDuck(i, true, dr.value / 100));
   setTimeout(() => paintRange(dr), 0);
-  const vNote = !duck.on ? "Where someone talks, the music goes down gradually, and comes back up after." : !S.voice ? "Finding the voices…"
-    : S.voice.from === "voices" ? S.voice.ranges.length + " stretches of talking (from the split Voices track). They show as dips on the music."
-      : S.voice.ranges.length + " stretches of talking, guessed from the plain sound. Split the sound (Sound panel) for a much better result.";
+  const under = duck.under || "voices", act = (S.acts || {})[under];
+  const useg = segmented(Object.keys(UNDER).map((k) => [k, UNDER[k]]), under, (v) => {
+    if (v !== "voices" && !stemsOn()) { toast("Split the sound first (Sound panel): then the music can go down under " + UNDER[v] + ".", true); renderInspector(); return; }
+    setDuck(i, true, undefined, v);
+  });
+  if (lk) for (const b of useg.children) b.disabled = true;
+  const vNote = !duck.on ? "The music goes down gradually while that track is heard, and comes back up after." : !act ? "Listening…"
+    : act.from === "voices" || under !== "voices" ? act.ranges.length + " stretches found on the split " + UNDER[under] + " track. They show as dips on the music."
+      : act.ranges.length + " stretches of talking, guessed from the plain sound. Split the sound for a much better result.";
   R.append(el("div", { class: "pad" },
     list.length ? rng("Chosen parts", vols.length === 1 ? vols[0] : null, (v) => musicChange((c) => { c.volume = v; c.mute = false; }), "Loudness of the chosen music parts") : null,
     list.length ? el("label", { class: "swl" }, el("span", { text: "Mute the chosen parts" }), mute) : null,
@@ -1017,17 +1186,19 @@ function renderMusicInspector(R) {
     el("div", { class: "field" }, el("span", {}, el("b", { text: "Whole song" })) ),
     el("div", { class: "field even-field" }, el("span", {}, "Auto level ", el("small", { class: "note", text: "the song's own loud bits down, quiet bits up" })), autoSeg),
     rng("Loudness", x.volume, (v) => setTrack({ volume: v }), "Loudness of the whole music track"),
+    songStartField(x, setTrack, lk),
     fadeFields(x.fade_in === undefined ? 0.5 : x.fade_in, x.fade_out === undefined ? 1.5 : x.fade_out, (k, v) => setTrack(k === "fin" ? { fade_in: v } : { fade_out: v }), lk,
       ["Song fades in", "Song fades out"])));
   R.append(el("div", { class: "pad duck-box" },
     el("label", { class: "swl" }, el("span", {}, el("b", { text: "Go down while people talk" })), dsw),
-    el("div", { class: "field" }, el("span", {}, "Music while they talk ", dval), dr),
+    el("div", { class: "field" }, el("span", { text: "Go down under" }), useg),
+    el("div", { class: "field" }, el("span", {}, "Music loudness then ", dval), dr),
     el("p", { class: "hint", text: vNote })));
   R.append(el("div", { class: "pad" },
     btn(x.locked ? "Unlock this music" : "Lock this music", { icon: x.locked ? "unlock" : "lock", cls: "ghost wide", onclick: () => { change(() => setLayer(i, { locked: !x.locked }), { any: true }); } }),
     el("p", { class: "hint", text: "Click a part on the music track (Ctrl + click for more, Shift + click for all in between). S cuts the music at the playhead, Delete mutes the chosen parts. " +
       "The export is made ready for YouTube by itself: the whole mix is set to -14 LUFS with peaks under -1 dB." })));
-  if (duck.on && !S.voice) loadVoices();
+  if (duck.on && !act) loadVoices(false, under);
 }
 
 // ---- the split sound on the timeline (Final): one track each for voices, music and effects (like CapCut). Every part of a
@@ -1047,7 +1218,7 @@ async function loadStemPeaks() {
     for (let tries = 0; tries < 200 && S.stemFor === sp.id; tries++) {
       const r = await fetch("/api/peaks?split=" + encodeURIComponent(sp.id) + "&layer=" + n, { headers: { "X-EditForge-Token": TOKEN } }).catch(() => null);
       if (!r) return;
-      if (r.status === 200) { S.stemPeaks[n] = new Uint8Array(await r.arrayBuffer()); renderStemLanes(); return; }
+      if (r.status === 200) { S.stemPeaks[n] = new Uint8Array(await r.arrayBuffer()); renderStemLanes(); paintMeter(); return; }
       if (r.status !== 202) return;
       await new Promise((ok) => setTimeout(ok, 1500));
     }
@@ -1344,6 +1515,7 @@ function renderStemInspector(R) {
     lockedN ? el("p", { class: "hint warn", text: lockedN + " of these parts " + (lockedN === 1 ? "is" : "are") + " locked (track or group): they stay as they are." }) : null,
     el("p", { class: "hint", text: "Click parts on the sound tracks (Ctrl + click for more, Shift + click for all in between), or a track's name for the whole track. Ctrl + click a second track's name to choose two tracks together. Cuts are shared with the video sections." }));
   R.append(pad);
+  if (layersIn.length === 1 && layersIn[0] !== "found") R.append(stemDuckBox(layersIn[0], trackLocked(layersIn[0])));
   const gb = groupsBox(); if (gb) R.append(gb);
   paintRange(vol);
 }
@@ -1648,6 +1820,7 @@ function openPanel(name) {
   for (const s of document.querySelectorAll("#left [data-for]")) s.hidden = s.dataset.for !== name;
   Frame.setEditing(name === "frame");
   if (name === "text") renderTexts();
+  if ($("capAuto")) paintCaptions();
   if (name === "sound") { Layers.open(); renderMusicLayers(); }
   if (name === "frame") { Frame.renderPanel(); renderShape(); }
 }
@@ -1873,7 +2046,7 @@ async function quickPreview() {
   if (!kept().length) { toast("The timeline is empty: put a piece back first.", true); return; }
   try {
     await saveNow();
-    await api("/api/projects/" + S.id + "/render", { method: "POST", json: { preview: true } });
+    await api("/api/projects/" + S.id + "/render", { method: "POST", json: { preview: true, replace: true } });
     toast("Making a quick preview of the mix"); Exports.show();
   } catch (e) { toast(errText(e), true); }
 }
@@ -1884,6 +2057,24 @@ function fillFileSelects() {
   for (const f of S.files.filter((x) => x.subtitles)) c.append(el("option", { value: f.id, text: "From " + f.name }));
   if (![...c.options].some((o) => o.value === cc)) c.append(el("option", { value: cc, text: cc.split("/").pop() + " (missing)" }));
   c.value = cc;
+  paintCaptions();
+}
+/** Captions: the Auto switch, the height slider and the guide line in the viewer. */
+const CAP_PRESET = { bottom: 6, center: 45, top: 84 };
+function capHeight() { const st = S.proj.settings; return st.caption_height === undefined || st.caption_height === null ? CAP_PRESET[st.caption_position] || 6 : +st.caption_height; }
+function paintCaptions() {
+  const st = S.proj.settings, on = st.captions !== "off";
+  $("capAuto").checked = st.captions === "auto";
+  const r = $("capHeight"); r.value = String(Math.round(capHeight())); paintRange(r);
+  $("capHeightV").textContent = Math.round(capHeight()) + "% from the bottom";
+  if (!$("capNote").textContent || $("capNote").dataset.auto) {
+    $("capNote").dataset.auto = "1";
+    $("capNote").textContent = st.captions === "auto" ? "The captions are written when you export or make a preview (the app listens to the speech)." : on ? "" : "Captions are off.";
+  }
+  let g = $("capGuide");
+  if (!g) { g = el("div", { id: "capGuide", class: "cap-guide" }, el("span", { text: "Captions" })); $("over").append(g); }
+  g.hidden = !(on && S.mode === "final" && S.panel === "text");
+  g.style.bottom = capHeight() + "%";
 }
 const BINDS = [["sOrig", "original_sound", "check"], ["sTrans", "transition", "str"], ["sTransS", "transition_s", "num"], ["sFadeIn", "fade_in", "num"], ["sFadeOut", "fade_out", "num"],
   ["sCap", "captions", "str"], ["sCapStyle", "caption_style", "str"], ["sCapPos", "caption_position", "str"], ["sCapSize", "caption_size", "str"],
@@ -2283,11 +2474,13 @@ async function renderVersionList() {
       const pic = el("span", { class: "vpic" }); if (S.info.has_video) pic.append(lazyThumb(thumbUrl(S.proj.source, Math.max(0, Math.round(p.thumb_at || 1))), "", true));
       box.append(el("button", { type: "button", class: "vcard" + (on ? " on" : ""), onclick: on ? null : async () => { await saved(); location.href = "/edit?p=" + p.id; } },
         pic, el("span", { class: "t" }, el("span", { class: "vtag" + (p.id === root ? "" : " " + (p.version || "")), text: tag }), el("b", { class: "ellip", text: p.name }),
-          el("small", { text: fmtTime(p.length, 0) + " · " + p.pieces + " sections" }), p.done ? stepTicks(on ? Object.assign({}, p.done, stepFlags(S.proj)) : p.done) : null),
+          el("small", { text: fmtTime(p.length, 0) + " · " + p.pieces + " sections" }), p.done ? stepTicks(on ? Object.assign({}, p.done, stepFlags(S.proj)) : p.done) : null,
+          p.sent ? el("small", { class: "vnext good", text: "In Final" }) : null),
         on ? el("span", { class: "pill", text: "Open" }) : icon("chevr", "s")));
     }
     const me = projects.find((p) => p.id === S.id);
     S.madeVersions = !!(me && me.done && me.done.made_versions);
+    S.sentTo = (me && me.sent) || "";
     renderStepbar();
     $("verCount").textContent = rel.length > 1 ? rel.length + " versions" : "";
     $("verHint").hidden = rel.length > 1;
@@ -2315,6 +2508,12 @@ function renderStepbar() {
   mark("secVersions", done1, f.versions ? "done · this is the " + S.proj.version + " version" : done1 ? "done · Odd and Even are made (left)" : "2 s sections, two versions");
   mark("secThin", done2, done2 ? "done" + (rule.interval === 1 && gone ? " · " + gone + " seconds taken out" : " on this version") : "keep 1 2 3, cut 4 …");
   mark("secScenes", done3, done3 ? "done · " + (scenes || "") + (scenes === 1 ? " scene" : scenes ? " scenes" : "scenes separated") : "cut where each scene ends");
+  mark("secFinal", !!S.sentTo, S.sentTo ? "done · click to open it in Final" : "sound, picture, export");
+  // the step to do now is lit, so it is always clear where this version stands
+  const order = [["secVersions", done1], ["secThin", done2], ["secScenes", done3], ["secFinal", !!S.sentTo]];
+  const next = S.madeVersions && !f.versions ? "" : (order.find(([, d]) => !d) || [""])[0];
+  for (const [id] of order) $(id).classList.toggle("next", id === next);
+  if (S.madeVersions && !f.versions && !$("secNote").textContent) secNote("Odd and Even are made from this clip. Open one of them on the left and go on with step 2.");
 }
 /** The small 1 2 3 ticks of a version card: which steps it has had. */
 function stepTicks(f) {
@@ -2323,8 +2522,9 @@ function stepTicks(f) {
 }
 async function secVersions() {
   const f = stepFlags(S.proj);
-  if (S.madeVersions && !(await askYes("Odd and Even are already made from this clip (see the list on the left). Make another pair anyway?", "Make another pair"))) return;
-  if (f.versions && !(await askYes("This is already the " + S.proj.version + " version. Make Odd and Even versions of it as well?", "Make them"))) return;
+  // never twice: a second pair would be the same two videos again
+  if (S.madeVersions) { toast("Step 1 is done: Odd and Even are already made from this clip. Open one of them on the left."); return; }
+  if (f.versions) { toast("Step 1 is done: this is already the " + S.proj.version + " version. Go on with the next step."); return; }
   const b = $("secVersions"); b.disabled = true; secNote("Making the versions…");
   try {
     const r = await secCall("versions");
@@ -2336,7 +2536,7 @@ async function secVersions() {
 }
 async function secThin() {
   if (locked()) { lockedNote(); return; }
-  if (stepFlags(S.proj).thin && !(await askYes("'Remove every 4th second' was already done on this version. Do it again? It takes out even more.", "Do it again"))) return;
+  if (stepFlags(S.proj).thin) { toast("Step 2 is already done on this version. To change it, press Ctrl + Z (Undo) first."); return; }
   const b = $("secThin"); b.disabled = true; secNote("Cutting…");
   try {
     const r = await secCall("thin");
@@ -2405,7 +2605,7 @@ async function sendToFinal() {
   try {
     await saved();
     const r = await api("/api/projects/" + S.id + "/to-final", { method: "POST", json: {} });
-    toast("Sent '" + r.project.name + "' to Final. Opening it…");
+    toast(r.existing ? "'" + r.project.name + "' is already in Final. Opening it…" : "Sent '" + r.project.name + "' to Final. Opening it…");
     setTimeout(() => { location.href = "/final?p=" + r.project.id; }, 500);
   } catch (e) { toast(errText(e), true); }
 }
@@ -2453,12 +2653,18 @@ function wire() {
   $("musicAdd").addEventListener("click", () => addFileThen("audio", "musicProg", (d) => {
     if (d.has_video) { toast("That is a video. Choose a music file such as an MP3.", true); return; }
     if (layers().length >= 8) { toast("That is the most: 8 music layers.", true); return; }
-    change(() => { S.proj.settings.layers = layers().concat([{ file: d.id, volume: 0.5, mute: false, solo: false, auto: 1 }]); }, { keepVideo: true });
+    change(() => { S.proj.settings.layers = layers().concat([{ file: d.id, volume: 0.2, mute: false, solo: false, auto: 1, duck: { on: true, level: 0.5 } }]); }, { keepVideo: true });
     renderMusicLayers(); if (S.playing) musicPlay();
+    autoSongLevel(d.id);
   }));
   $("checkMix").addEventListener("click", soundCheck);
   $("beatBtn").addEventListener("click", beatCut);
   for (const id of ["sBass", "sTreble"]) $(id).addEventListener("input", soundLabels);
+  $("capAuto").addEventListener("change", () => { change(() => { S.proj.settings.captions = $("capAuto").checked ? "auto" : "off"; }, { keepVideo: true }); $("capNote").textContent = ""; fillFileSelects(); });
+  $("capHeight").addEventListener("input", () => { $("capHeightV").textContent = $("capHeight").value + "% from the bottom"; paintRange($("capHeight")); const g = $("capGuide"); if (g) { g.hidden = false; g.style.bottom = $("capHeight").value + "%"; } });
+  $("capHeight").addEventListener("change", () => { change(() => { S.proj.settings.caption_height = +$("capHeight").value; }, { keepVideo: true }); paintCaptions(); });
+  $("sCapPos").addEventListener("change", () => { delete S.proj.settings.caption_height; setTimeout(paintCaptions, 0); });
+  $("sCap").addEventListener("change", () => { $("capNote").textContent = ""; setTimeout(paintCaptions, 0); });
   $("capAdd").addEventListener("click", () => addFileThen("subtitles", "musicProg", (d) => {
     if (!d.subtitles) { toast("That is not a subtitle file (.srt or .vtt).", true); return; }
     change(() => { S.proj.settings.captions = d.id; }, { keepVideo: true }); fillFileSelects(); $("capNote").textContent = d.words + " words found.";

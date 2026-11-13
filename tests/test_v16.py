@@ -671,3 +671,66 @@ def test_auto_level_evens_out_an_imported_song_and_the_sound_check_finds_loud_sp
     st, cur = c.json("GET", f"/api/jobs/{off['id']}/curve")
     assert st == 200 and len(cur["points"]) > 15 and all(-70 <= v <= 0 for _, v in cur["points"])
     assert any(p["kind"] == "loud" for p in cur["problems"]) or any(p["kind"] == "quiet" for p in cur["problems"])
+
+
+# ---------------------------------------------------------------- 1.23: go down on every track, song start, captions height, no leftovers
+def test_going_down_settings_song_start_and_caption_height_are_cleaned():
+    st = P.clean_settings({"ducks": {"music": {"on": 1, "level": 0.4}, "voices": {"on": 1}, "effects": {"on": 0}, "x": {"on": 1}},
+                           "layers": [{"file": "u/x/a.mp3", "start": 75.5, "duck": {"on": 1, "under": "effects"}}, {"file": "u/x/b.mp3", "duck": {"on": 1, "under": "nope"}}],
+                           "caption_height": 140})
+    assert st["ducks"] == {"music": {"on": True, "level": 0.4, "under": "voices"}, "voices": {"on": True, "level": 0.3, "under": "music"}}
+    assert st["layers"][0]["start"] == 75.5 and st["layers"][0]["duck"]["under"] == "effects"
+    assert "under" not in st["layers"][1]["duck"] and "start" not in st["layers"][1]
+    assert st["caption_height"] == 90.0 and "caption_height" not in P.clean_settings({})
+    pts = P.duck_points([[2.0, 2.6]], 0.3)
+    assert pts[0] == [1.65, 0.0] and abs(pts[-1][0] - 3.4) < 1e-6 and abs(pts[1][1] + 10.46) < 0.1
+    from editforge.core.model import CaptionSpec
+    from editforge.planner.captions import ass_header
+    assert ",2,40,40,432,1" in ass_header(CaptionSpec(height_pct=40.0), 1920, 1080)       # 40 % of 1080 above the bottom
+    assert ",2,40,40,70,1" in ass_header(CaptionSpec(margin=70.0), 1920, 1080)
+
+
+def test_a_split_track_goes_down_under_another_and_a_song_can_start_in_its_middle(web, film, tmp_path):
+    c, state = web
+    folder = film["folder"].parent / (film["folder"].name + "~20260202000000")
+    folder.mkdir(exist_ok=True)
+    for name in ("music", "effects"):
+        shutil.copyfile(film["folder"] / (name + ".flac"), folder / (name + ".flac"))
+    run(["-f", "lavfi", "-i", "sine=frequency=300:duration=6", "-af", "volume='if(between(t,2,2.6),0.3,0)':eval=frame,pan=stereo|c0=c0|c1=c0",
+         "-c:a", "flac", str(folder / "voices.flac")])
+    (folder / "split.json").write_text(json.dumps({"model": S.MODEL_ID, "start": 0.0, "end": 6.0, "derived": True}))
+    sid = film["split"].split("/")[0] + "/" + folder.name
+    # the Music track goes down to 30 % while the Voices track is heard
+    job = export(c, film, {"mix_split": sid, "ducks": {"music": {"on": True, "level": 0.3, "under": "voices"}}})
+    assert job["status"] == "done", job
+    y = decode(job["output_path"])
+    lv = lambda a, b, f=1000: level(y[int(44100 * a): int(44100 * b)], f)
+    A = lv(0.6, 1.4)
+    assert A > 0.01 and 0.2 < lv(2.15, 2.5) / A < 0.42 and lv(4.0, 5.0) / A > 0.85
+    st, body = c.json("GET", f"/api/projects/{film['proj']['id']}/voices?of=music")
+    assert st == 200 and body["of"] == "music" and body["ranges"]
+    # a song that is silent for its first 3 s: started at 3 s into the file, it is heard from the very start
+    song = tmp_path / "late.wav"
+    run(["-f", "lavfi", "-i", "sine=frequency=500:duration=8", "-af", "volume='if(gte(t,3),0.3,0)':eval=frame", str(song)])
+    mid = c.upload(song)
+    base = export(c, film, {"original_sound": False, "layers": [{"file": mid, "volume": 1.0, "fade_in": 0, "fade_out": 0}]})
+    y0 = decode(base["output_path"])
+    late = export(c, film, {"original_sound": False, "layers": [{"file": mid, "volume": 1.0, "fade_in": 0, "fade_out": 0, "start": 3.0}]})
+    y1 = decode(late["output_path"])
+    q = lambda y, a, b: level(y[int(44100 * a): int(44100 * b)], 500)
+    assert q(y0, 0.5, 2.0) < 0.1 * q(y0, 3.5, 5.0)
+    assert q(y1, 0.5, 2.0) > 0.7 * q(y1, 3.5, 4.5)
+    shutil.rmtree(folder, ignore_errors=True)
+
+
+def test_quick_previews_leave_no_leftover_files(web, film):
+    c, state = web
+    pid = film["proj"]["id"]
+    a = export(c, film, {})
+    st, b = c.json("POST", f"/api/projects/{pid}/render", {"preview": True, "replace": True})
+    b = c.wait_jobs([b["id"]], 180)[0]
+    assert b["status"] == "done" and Path(b["output_path"]).is_file()
+    assert not Path(a["output_path"]).exists() and state.store.get(a["id"]) is None        # the older quick version is gone
+    full = c.json("POST", f"/api/projects/{pid}/render", {"preview": False})[1]
+    full = c.wait_jobs([full["id"]], 240)[0]
+    assert state.drop_previews(pid) == 1 and Path(full["output_path"]).is_file()          # finished videos are never touched

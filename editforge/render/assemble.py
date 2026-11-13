@@ -24,8 +24,10 @@ def music_chain(m: MusicSpec, total_s: float, sr: int, layout: str) -> Optional[
     length = (min(m.end_s, total_s) if m.end_s is not None else total_s) - m.start_s
     if length <= 0.05:
         return None
-    parts = [f"aformat=sample_fmts=fltp:sample_rates={sr}:channel_layouts={layout}",
-             f"atrim=duration={length:.4f}", "asetpts=PTS-STARTPTS", f"volume={m.volume:.5f}"]
+    parts = [f"aformat=sample_fmts=fltp:sample_rates={sr}:channel_layouts={layout}"]
+    if m.skip > 0:
+        parts += [f"atrim=start={m.skip:.4f}", "asetpts=PTS-STARTPTS"]
+    parts += [f"atrim=duration={length:.4f}", "asetpts=PTS-STARTPTS", f"volume={m.volume:.5f}"]
     if m.extra:
         parts.append(m.extra)
     if m.fade_in > 0:
