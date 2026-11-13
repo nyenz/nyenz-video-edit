@@ -291,3 +291,51 @@ def test_even_out_fades_auto_level_and_the_sound_check(live, page, split_movie, 
     saved = live.call("GET", f"/api/projects/{pid}")["project"]
     assert saved["pieces"][0]["mix"]["music"]["even"] == 1 and saved["settings"]["layers"][0]["auto"] == 2
     assert page.errors == []
+
+
+def test_start_mix_go_down_on_tracks_song_start_meter_and_captions(live, page, split_movie, tmp_path):
+    from tools.make_samples import run
+    song = tmp_path / "Song3.wav"
+    run(["-f", "lavfi", "-i", "sine=frequency=500:duration=60", "-af", "volume=0.5", str(song)])
+    mid = live.upload(str(song))
+    pid = open_split(live, page, split_movie, "Sound 123")
+    page.wait_for_selector("#laneStems .lane.stem", timeout=30000)
+    # the level meter is there and reads the mix
+    assert page.is_visible("#levelMeter")
+    page.evaluate("() => seek(20)")
+    page.wait_for_function("() => document.getElementById('levelMeter').dataset.state !== 'silent'", timeout=30000)
+    # a split track goes down while another one is heard
+    page.click("#laneStems .stem-head[data-layer=music]")
+    page.click("#right input[aria-label='Go down while another track is heard']")
+    page.wait_for_function("() => S.proj.settings.ducks && S.proj.settings.ducks.music && S.acts && S.acts.voices", timeout=30000)
+    assert page.evaluate("() => S.proj.settings.ducks.music") == {"on": True, "level": 0.3, "under": "voices"}
+    page.click("#right .duck-box .seg button:has-text('Effects')")
+    page.wait_for_function("() => S.proj.settings.ducks.music.under === 'effects' && S.acts.effects", timeout=30000)
+    assert page.evaluate("() => stemDuckGain('music', 20)") < 0.5
+    page.keyboard.press("Escape")
+    # a song: where it starts, and what it goes down under
+    page.evaluate("(id) => { change(() => { S.proj.settings.layers = [{ file: id, volume: 0.2, mute: false, solo: false, auto: 1, duck: { on: true, level: 0.5 } }]; }, { keepVideo: true }); loadFiles(); }", mid)
+    page.wait_for_selector("#laneM .mpart")
+    page.locator("#laneM .mpart").first.click(position={"x": 30, "y": 12})
+    page.fill("#right input[aria-label='Where the song starts']", "0:20")
+    page.dispatch_event("#right input[aria-label='Where the song starts']", "change")
+    page.wait_for_function("() => S.proj.settings.layers[0].start === 20")
+    page.click("#right .duck-box .seg button:has-text('Music')")
+    page.wait_for_function("() => S.proj.settings.layers[0].duck.under === 'music'", timeout=30000)
+    # the song's own loudness sets its start level
+    page.evaluate("(id) => autoSongLevel(id)", mid)
+    page.wait_for_function("() => Math.abs(S.proj.settings.layers[0].volume - 0.2) > 0.005", timeout=30000)
+    assert 0.05 <= page.evaluate("() => S.proj.settings.layers[0].volume") <= 1
+    # captions: the Auto switch and the height
+    page.click(".ftabs button[data-panel=text]")
+    page.click("#capAuto")
+    assert page.evaluate("() => S.proj.settings.captions") == "auto"
+    page.fill("#capHeight", "40")
+    page.dispatch_event("#capHeight", "change")
+    assert page.evaluate("() => S.proj.settings.caption_height") == 40 and page.is_visible("#capGuide")
+    page.click("#capAuto")
+    assert page.evaluate("() => S.proj.settings.captions") == "off"
+    page.evaluate("() => saveNow()")
+    saved = live.call("GET", f"/api/projects/{pid}")["project"]["settings"]
+    assert saved["ducks"]["music"]["under"] == "effects" and saved["layers"][0]["start"] == 20 and saved["caption_height"] == 40
+    assert page.errors == []

@@ -190,6 +190,7 @@ class MusicSpec:
     fade_out: float = 2.0
     line: int = 0
     extra: str = ""               # more FFmpeg filters after the loudness (the parts' loudness, going down under voices)
+    skip: float = 0.0             # where in the file the music starts (seconds)
 
 
 @dataclass
@@ -244,6 +245,7 @@ class CaptionSpec:
     lines: List[CaptionLine] = field(default_factory=list)
     language: str = ""
     source: str = ""
+    height_pct: Optional[float] = None    # how high the captions sit: % of the picture height above the bottom edge (None = position)
 
 
 @dataclass

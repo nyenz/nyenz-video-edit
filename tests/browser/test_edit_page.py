@@ -90,24 +90,45 @@ def test_the_three_buttons_in_order(live, page, movie_id):
     page.wait_for_selector("#secVersionList .vcard.on .vsteps")
     assert page.eval_on_selector_all("#secVersionList .vcard.on .vsteps i", "els => els.map(e => e.className)") == ["done", "done", "done"]
     steps = page.evaluate("() => S.proj.steps.length")
-    page.click("#secThin")
-    page.wait_for_selector(".dialog:has-text('already done')")
-    page.click(".dialog button:has-text('Cancel')")
+    page.click("#secThin")                                      # done once: it cannot be done twice
+    page.wait_for_selector(".toast:has-text('Step 2 is already done')")
     assert page.evaluate("() => S.proj.steps.length") == steps
+    page.click("#secVersions")
+    page.wait_for_selector(".toast:has-text('Step 1 is done')")
     page.click("#secScenes")
     page.wait_for_selector(".dialog:has-text('already separated')")
     page.click(".dialog button:has-text('Cancel')")
-    # the clip the versions were made from: step 1 is done there, and Home shows the ticks too
+    assert "next" in page.get_attribute("#secFinal", "class")   # the step to do now is lit
+    # send to Final once; a second time opens the same Final project (never two of the same thing)
+    vid = page.evaluate("() => S.id")
+    first = live.call("POST", f"/api/projects/{vid}/to-final", {})
+    again = live.call("POST", f"/api/projects/{vid}/to-final", {})
+    assert again["project"]["id"] == first["project"]["id"] and again.get("existing") is True and not first.get("existing")
+    # the clip the versions were made from: step 1 is done there and cannot be done again
     page.goto(f"{live.base}/edit?p={pid}")
     wait_ready(page)
     page.wait_for_function("() => document.getElementById('secVersions').classList.contains('done')", timeout=10000)
     page.click("#secVersions")
-    page.wait_for_selector(".dialog:has-text('already made')")
-    page.click(".dialog button:has-text('Cancel')")
+    page.wait_for_selector(".toast:has-text('already made')")
     assert page.locator("#secVersionList .vcard").count() == 3
-    page.goto(f"{live.base}/")
-    page.click("#phases .phase:nth-child(2)")
-    page.wait_for_selector(".pcard .vsteps")
+    assert page.locator("#secVersionList .vnext.good").count() == 1          # the one that is in Final says so
+    # Back goes to Home at this stage
+    page.click("#backBtn")
+    page.wait_for_selector(".vfolder")
+    # Home, Edit: one folder for the video, with the original, Odd and Even inside, each with its level
+    folder = page.locator(".vfolder").first
+    assert folder.locator(".pcard").count() == 3
+    assert folder.locator(".chip-tag.top").all_inner_texts() == ["Original", "Odd", "Even"]
+    nexts = folder.locator(".plevel .next").all_inner_texts()
+    assert nexts[0].startswith("Versions made") and "In Final" in nexts and any(n.startswith("Next: step 2") for n in nexts)
+    assert page.locator(".navmore").count() == 0 and page.locator("a[href='/combine']").count() == 0      # More is gone
+    folder.locator(".vf-h").click()                             # a folder closes and opens
+    assert page.locator(".vfolder.shut").count() == 1
+    page.locator(".vfolder .vf-h").first.click()
+    # Home, Final: the same folder holds the Final project
+    page.click("#phases .phase:nth-child(3)")
+    page.wait_for_selector(".vfolder .pcard")
+    assert page.locator(".vfolder").count() == 1 and page.locator(".vfolder .pcard").count() == 1
     assert page.errors == []
 
 

@@ -84,7 +84,7 @@ function render() {
     : "Choose a video to cut into pieces. It is used where it is, nothing is copied.";
   $("fromClip").hidden = H.phase !== "edit";
   const list = shown(), grid = $("grid"), all = itemsOf(H.phase), trashN = all.filter((p) => p.trashed && !p.job).length;
-  $("projTitle").textContent = H.trash ? "Trash" : { clips: "Clip projects", edit: "Edit projects", final: "Finished videos" }[H.phase];
+  $("projTitle").textContent = H.trash ? "Trash" : { clips: "Clip projects", edit: "Edit projects", final: "Final projects and finished videos" }[H.phase];
   $("projCount").textContent = list.length ? String(list.length) : "";
   $("trashBtn").hidden = !hasTrash || made;
   $("trashCount").textContent = String(trashN); $("trashCount").hidden = !trashN || H.trash;
@@ -109,7 +109,11 @@ function render() {
       el("span", { class: "hint", text: hint })));
     return;
   }
-  for (const p of list) grid.append(H.phase === "clips" ? clipCard(p) : p.job ? finalCard(p) : card(p));
+  if (H.phase === "clips" || H.trash) { for (const p of list) grid.append(H.phase === "clips" ? clipCard(p) : p.job ? finalCard(p) : card(p)); }
+  else {
+    grid.className = "proj-folders";
+    for (const g of folders(list)) grid.append(folderNode(g, (p) => (p.job ? finalCard(p) : card(p))));
+  }
   const ids = new Set(list.map((x) => x.id));
   for (const id of [...H.pick]) if (!ids.has(id)) H.pick.delete(id);
   paintPicks();
@@ -246,12 +250,70 @@ function clipCard(p) {
   if (p.freed) pic.append(el("span", { class: "chip-tag top", text: "Movie freed" }));
   const meta = p.clips + " clip" + (p.clips === 1 ? "" : "s") + " | " + fmtTime(p.length, 0);
   const open = () => { if (!H.trash) location.href = "/clips?c=" + p.id; };
-  const f = p.done || {};
-  const ticks = stageOf(p) === "edit" ? el("span", { class: "vsteps", title: "Edit steps done on this version" },
-    ...[[1, f.versions || f.made_versions, "Odd / Even versions"], [2, f.thin, "Remove every 4th second"], [3, f.scenes, "Separate scenes"]]
-      .map(([n, on, what]) => el("i", { class: on ? "done" : "", title: what + (on ? ": done" : ": not yet"), text: String(n) }))) : null;
+  const ticks = stageOf(p) === "edit" ? levelLine(p) : null;
   return cardShell(p, pic, [el("small", { class: "num", text: meta }), ticks,
     H.view === "list" ? el("small", { class: "num when", text: "From " + p.source_name + " · opened " + ago(p.opened) }) : null], open, "From " + p.source_name);
+}
+/** Where an Edit project stands: the steps done (1 2 3, then Final) and what comes next. */
+function levelOf(p) {
+  const f = p.done || {}, root = !p.version;
+  const steps = [[1, !!(f.versions || f.made_versions), "Odd / Even versions"], [2, !!f.thin, "Remove every 4th second"], [3, !!f.scenes, "Separate scenes"]];
+  const next = p.sent ? "In Final" : root && !f.made_versions ? "Next: step 1, Odd / Even" : root ? "Versions made: work on Odd and Even"
+    : !f.thin ? "Next: step 2, remove every 4th second" : !f.scenes ? "Next: step 3, separate scenes" : "Ready: send to Final";
+  return { steps, next, sent: !!p.sent, ready: !p.sent && !root && f.thin && f.scenes };
+}
+function levelLine(p) {
+  const L = levelOf(p);
+  return el("span", { class: "plevel" },
+    el("span", { class: "vsteps" }, ...L.steps.map(([n, on, what]) => el("i", { class: on ? "done" : "", title: what + (on ? ": done" : ": not yet"), text: String(n) })),
+      el("i", { class: "fin" + (L.sent ? " done" : ""), title: L.sent ? "Sent to Final" : "Not in Final yet" }, icon("check", "s"))),
+    el("small", { class: "next" + (L.sent ? " good" : L.ready ? " ready" : ""), text: L.next }));
+}
+// ------------------------------------------------------------------ folders: one per video (Edit and Final)
+const FOLD = (() => { try { return new Set(JSON.parse(localStorage.getItem("ef.home.folded") || "[]")); } catch (e) { return new Set(); } })();
+const OLDER = new Set();                       // final projects whose older exports are shown
+function rootOf(x) {
+  if (x.job) { const p = H.projects.find((q) => q.id === x.project_id); return p ? p.root : ""; }
+  return x.root || x.id;
+}
+const verRank = (p) => (p.version === "odd" ? 1 : p.version === "even" ? 2 : 0);
+/** The shown items, in folders: [{ id, name, items }]. Inside: the original, then Odd, then Even; in Final each project is followed by its newest video. */
+function folders(list) {
+  const map = new Map();
+  for (const x of list) {
+    const r = rootOf(x) || "~loose";
+    if (!map.has(r)) { const rp = H.projects.find((q) => q.id === r); map.set(r, { id: r, name: r === "~loose" ? "Other finished videos" : (rp ? rp.name : x.root_name || x.name), items: [], opened: 0 }); }
+    const g = map.get(r); g.items.push(x); g.opened = Math.max(g.opened, x.opened || x.when || 0);
+  }
+  const out = [...map.values()].sort((a, b) => (a.id === "~loose") - (b.id === "~loose") || b.opened - a.opened);
+  for (const g of out) {
+    const projs = g.items.filter((x) => !x.job).sort((a, b) => verRank(a) - verRank(b) || a.name.localeCompare(b.name));
+    const vids = g.items.filter((x) => x.job).sort((a, b) => b.when - a.when);
+    const rows = [];
+    for (const p of projs) {
+      rows.push(p);
+      const mine = vids.filter((v) => v.project_id === p.id);
+      mine.forEach((v, k) => { v.older = k > 0; v.olderCount = k === 0 ? mine.length - 1 : 0; if (k === 0 || OLDER.has(p.id)) rows.push(v); });
+    }
+    for (const v of vids) if (!projs.some((p) => p.id === v.project_id)) { v.older = false; v.olderCount = 0; rows.push(v); }
+    g.items = rows;
+  }
+  return out;
+}
+function folderNode(g, make) {
+  const shut = FOLD.has(g.id);
+  const projs = g.items.filter((x) => !x.job), vids = g.items.filter((x) => x.job && !x.older);
+  const sum = H.phase === "edit"
+    ? projs.length + (projs.length === 1 ? " version" : " versions") + " · " + projs.filter((p) => p.sent).length + " in Final"
+    : (projs.length ? projs.length + (projs.length === 1 ? " project" : " projects") + " · " : "") + vids.length + (vids.length === 1 ? " finished video" : " finished videos");
+  const body = el("div", { class: "proj-grid" + (H.view === "list" ? " as-list" : "") });
+  for (const x of g.items) body.append(make(x));
+  const head = el("button", { class: "vf-h", type: "button", "aria-expanded": String(!shut), title: shut ? "Open this folder" : "Close this folder",
+    onclick: () => { if (FOLD.has(g.id)) FOLD.delete(g.id); else FOLD.add(g.id); try { localStorage.setItem("ef.home.folded", JSON.stringify([...FOLD].slice(-200))); } catch (e) { /* off */ } render(); } },
+    icon("folder", "s"), el("b", { class: "ellip", text: g.name }), el("span", { class: "note num", text: sum }), el("span", { class: "grow" }), icon(shut ? "chevr" : "chev", "s"));
+  const node = el("section", { class: "vfolder" + (shut ? " shut" : ""), "data-root": g.id }, head);
+  if (!shut) node.append(body);
+  return node;
 }
 /** Phase 2 card: an edit project. */
 function card(p) {
@@ -262,16 +324,13 @@ function card(p) {
       p.trashed ? null : btn("Find it again", { icon: "link", cls: "sm", onclick: (e) => { e.stopPropagation(); relink(p); } }));
   } else if (p.has_video) addImg(pic, thumbUrl(p.source, p.thumb_at, true));
   else pic.append(icon("music", "l"));
-  if (p.version) pic.append(el("span", { class: "chip-tag top", text: p.version.charAt(0).toUpperCase() + p.version.slice(1) }));
-  if (p.steps) pic.append(el("span", { class: "chip-tag", text: (p.steps + 1) + " steps" }));
+  pic.append(el("span", { class: "chip-tag top" + (p.version ? " ver-" + p.version : " plain"), text: p.version ? p.version.charAt(0).toUpperCase() + p.version.slice(1) : "Original" }));
+  if (stageOf(p) === "final") pic.append(el("span", { class: "chip-tag", text: "Project" }));
   const tb = taskBadge(p.task);
   if (tb) pic.append(tb);
   const edited = "Edited: " + fmtTime(p.length, 0) + " · " + p.pieces + " pieces" + (p.where ? "\n" + (p.linked ? "Used where it is: " : "Copy: ") + p.where : "");
   const open = () => { if (H.trash) return; if (p.missing) relink(p); else location.href = pageOf(p); };
-  const f = p.done || {};
-  const ticks = stageOf(p) === "edit" ? el("span", { class: "vsteps", title: "Edit steps done on this version" },
-    ...[[1, f.versions || f.made_versions, "Odd / Even versions"], [2, f.thin, "Remove every 4th second"], [3, f.scenes, "Separate scenes"]]
-      .map(([n, on, what]) => el("i", { class: on ? "done" : "", title: what + (on ? ": done" : ": not yet"), text: String(n) }))) : null;
+  const ticks = stageOf(p) === "edit" ? levelLine(p) : null;
   return cardShell(p, pic, [el("small", { class: "num", text: meta }), ticks,
     H.view === "list" ? el("small", { class: "num when", text: "Edited " + fmtTime(p.length, 0) + " · opened " + ago(p.opened) }) : null], open, edited);
 }
@@ -282,7 +341,11 @@ function finalCard(v) {
   pic.append(el("span", { class: "chip-tag", text: fmtTime(v.duration, 0) }));
   if (v.loudness) pic.append(el("span", { class: "chip-tag top" + (v.loudness.ok ? " good" : ""), text: v.loudness.lufs.toFixed(1) + " LUFS" }));
   const open = () => watch(v);
-  return cardShell(v, pic, [el("small", { class: "num", text: fmtShort(v.size) + " | " + (v.project_name ? "from " + v.project_name : "made " + ago(v.when)) })], open, v.name);
+  pic.append(el("span", { class: "chip-tag kind" + (v.older ? " plain" : " good"), text: v.older ? "Older export" : "Finished video" }));
+  const more = v.olderCount ? el("button", { type: "button", class: "older-btn", title: "Earlier exports of the same project",
+    onclick: (e) => { e.stopPropagation(); if (OLDER.has(v.project_id)) OLDER.delete(v.project_id); else OLDER.add(v.project_id); render(); } },
+    el("span", { text: (OLDER.has(v.project_id) ? "Hide " : "Show ") + v.olderCount + " older" })) : null;
+  return cardShell(v, pic, [el("small", { class: "num", text: fmtShort(v.size) + " | made " + ago(v.when) }), more], open, v.name + (v.project_name ? "\nFrom " + v.project_name : ""));
 }
 function watch(v) {
   const box = el("div", { class: "watch" }, miniPlayer(mediaUrl(v.id, false), { meter: !!v.loudness, loudness: v.loudness }));

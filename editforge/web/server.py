@@ -454,13 +454,14 @@ class AppState:
         bad = [b for b in bad if b["end"] - b["start"] >= 3.4]
         return {"points": pts, "problems": bad, "loudness": job.get("result", {}).get("loudness")}
 
-    def voices(self, pid: str) -> Dict[str, Any]:
+    def voices(self, pid: str, of: str = "voices") -> Dict[str, Any]:
         """When someone talks in this project's video (source time), for 'Music goes down under voices'."""
         proj = project_mod.clean_project(self.load_project(pid), 1e9)
         src = self.resolve_input(str(proj["source"]))
         info = probe_media(src)
         split = bool(proj["settings"].get("mix_split")) and bool(self.splitter.store.resolve(proj["settings"]["mix_split"]))
-        return {"ranges": project_mod.voice_ranges(proj, src, info, str(self.home)), "from": "voices" if split else "sound"}
+        of = of if of in project_mod.MIX_LAYERS else "voices"
+        return {"ranges": project_mod.activity_ranges(proj, src, of, info, str(self.home)), "from": "voices" if split else "sound", "of": of}
 
     def resplit_status(self, pid: str) -> Dict[str, Any]:
         job = getattr(self, "resplits", {}).get(pid)
@@ -912,9 +913,17 @@ class AppState:
                             "thumb_at": _thumb_time(pieces, dur), "done": project_mod.step_flags(d)})
             except (KeyError, TypeError, ValueError):
                 continue
-        made = {d["parent"] for d in out if d["version"] and not d["trashed"]}
-        for d in out:                                   # Odd / Even were already made from this clip
-            d["done"]["made_versions"] = d["id"] in made
+        made = {d["parent"] for d in out if d["version"] and not d["trashed"] and d["stage"] == "edit"}
+        by_id = {d["id"]: d for d in out}
+        sent = {d["parent"]: d["id"] for d in out if d["stage"] == "final" and not d["trashed"] and d["parent"]}
+        for d in out:
+            d["done"]["made_versions"] = d["id"] in made     # Odd / Even were already made from this clip
+            d["sent"] = sent.get(d["id"], "")                # its Final project, when it was sent on
+            root, seen = d, set()                            # the first project of this video: its folder on Home
+            while root["parent"] in by_id and root["id"] not in seen:
+                seen.add(root["id"])
+                root = by_id[root["parent"]]
+            d["root"], d["root_name"] = root["id"], root["name"]
         return sorted(out, key=lambda d: d["opened"], reverse=True)
 
     def _fp_of(self, source: str) -> str:
@@ -971,6 +980,7 @@ class AppState:
             self.project_path(pid).unlink()
         except OSError:
             return False
+        self.drop_previews(pid)
         self.freed = self._drop_upload(str(proj.get("source") or "")) + self.drop_video_caches(fp)
         return True
 
@@ -1238,6 +1248,18 @@ class AppState:
     def made_clips(self) -> List[Dict[str, Any]]:
         """Every made clip (to start an Edit project from one). Older name of clip_library."""
         return self.clip_library()
+
+    def drop_previews(self, pid: str) -> int:
+        """Delete the finished quick-preview files of a project (they are only for a look or a sound check). Returns how many."""
+        n = 0
+        for job in self.store.list(500):
+            opts = job.get("options") if isinstance(job.get("options"), dict) else {}
+            if opts.get("preview") and opts.get("kind") == "project" and str(opts.get("project_id") or "") == pid \
+                    and job.get("status") in ("done", "failed", "cancelled", "interrupted"):
+                shutil.rmtree(self.outputs / job["id"], ignore_errors=True)
+                self.store.delete(job["id"])
+                n += 1
+        return n
 
     def final_videos(self) -> List[Dict[str, Any]]:
         """Phase 3: finished videos made from Edit projects (not quick previews, not clips)."""
@@ -1679,9 +1701,10 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 self._json(self.state.resplit_status(path.split("/")[3]))
             elif re.fullmatch(rf"/api/projects/{PROJECT_ID}/voices", path):
-                if self._guard() is None:
+                query = self._guard()
+                if query is None:
                     return
-                self._json(self.state.voices(path.split("/")[3]))
+                self._json(self.state.voices(path.split("/")[3], (query.get("of") or ["voices"])[0]))
             elif re.fullmatch(rf"/api/projects/{PROJECT_ID}/task", path):
                 if self._guard() is None:
                     return
@@ -1907,6 +1930,8 @@ class Handler(BaseHTTPRequestHandler):
                 data = self._read_json()
                 if data is None:
                     return
+                if data.get("replace"):                          # quick versions are throwaways: keep only the newest one
+                    self.state.drop_previews(path.split("/")[3])
                 self._json({"id": self._render_project(path.split("/")[3], bool(data.get("preview")))}, 201)
             elif path == "/api/beats":
                 data = self._read_json()
@@ -2108,6 +2133,9 @@ class Handler(BaseHTTPRequestHandler):
         st = self.state
         if (proj.get("stage") or "edit") == "final":
             raise EditForgeError("This one is already in Final.", "Open it from the Final tab.")
+        for d in st.all_projects():                     # sent before: open that one, never a second copy of the same thing
+            if d.get("parent") == proj["id"] and d.get("stage") == "final" and not d.get("trashed"):
+                return {"project": {"id": d["id"], "name": d.get("name")}, "existing": True}
         new = st.save_project(uuid.uuid4().hex[:12], {"name": proj.get("name"), "source": proj["source"], "pieces": proj.get("pieces"),
                                                       "steps": proj.get("steps"), "rule": proj.get("rule"), "settings": proj.get("settings"),
                                                       "texts": proj.get("texts"), "stage": "final", "parent": proj["id"],
@@ -2224,7 +2252,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 layers.append({"path": self.state.resolve_input(x["file"]), "volume": x["volume"], "mute": x["mute"], "solo": x["solo"],
                                "parts": x.get("parts"), "duck": x.get("duck"), "auto": x.get("auto"),
-                               "fade_in": x.get("fade_in"), "fade_out": x.get("fade_out")})
+                               "fade_in": x.get("fade_in"), "fade_out": x.get("fade_out"), "start": x.get("start")})
             except EditForgeError:
                 raise EditForgeError("A music file of this project is gone.", "Open Audio and remove that music, or add it again.")
         captions_path = None

@@ -171,7 +171,7 @@ class ItemBuilder:
         from ..analysis import evenout
         a, length = self.source_window(it)
         lo, hi = max(a, sh["a"]), min(a + length, sh["b"])
-        parts = evenout.filters(sh.get("env") or [], lo, hi, offset=a) if hi > lo else []
+        parts = (evenout.filters(sh.get("env") or [], lo, hi, offset=a) + evenout.filters(sh.get("duck") or [], lo, hi, offset=a)) if hi > lo else []
         A, B = sh["a"], sh["b"]
         fin, fout = float(sh.get("fin") or 0), float(sh.get("fout") or 0)
         if sh.get("rev"):                      # played backwards: it starts at the end of its source part

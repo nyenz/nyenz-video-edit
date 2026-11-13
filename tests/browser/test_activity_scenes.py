@@ -72,6 +72,8 @@ def test_choose_several_projects_on_home_and_separate_them_all(live, page, movie
     page.locator('#grid .pcard[data-id="%s"]' % a).click(modifiers=["Control"])
     page.locator('#grid .pcard[data-id="%s"]' % b).click(modifiers=["Control"])
     assert page.is_visible("#pickBar") and "2 chosen" in page.inner_text("#pickBar")
+    page.locator('#grid .pcard[data-id="%s"]' % a).scroll_into_view_if_needed()      # (scrolling closes an open menu)
+    page.wait_for_timeout(300)
     page.locator('#grid .pcard[data-id="%s"]' % a).click(button="right")
     assert page.locator(".menu.ctx", has_text="Separate scenes in 2 projects").count() == 1
     page.keyboard.press("Escape")

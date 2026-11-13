@@ -110,6 +110,8 @@ def ass_header(spec: CaptionSpec, width: int, height: int) -> str:
     outline_col = ass_color(spec.outline + "@0.6") if spec.style == "boxed" else ass_color(spec.outline)
     align = POS_ALIGN.get(spec.position, 2)
     margin_v = int(round(spec.margin * scale))
+    if spec.height_pct is not None:            # set by hand: the bottom of the words sits this far above the bottom edge
+        align, margin_v = 2, int(round(height * max(0.0, min(90.0, spec.height_pct)) / 100.0))
     font = (spec.font or "Arial")
     # PrimaryColour is the highlighted (already sung) colour, SecondaryColour is the waiting colour.
     primary = ass_color(spec.highlight) if spec.style == "karaoke" else ass_color(spec.color)

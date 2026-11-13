@@ -265,6 +265,8 @@ def clean_settings(raw: Any) -> Dict[str, Any]:
         s["caption_position"] = raw["caption_position"]
     if raw.get("caption_size") in CAPTION_SIZES:
         s["caption_size"] = raw["caption_size"]
+    if raw.get("caption_height") is not None and raw.get("caption_height") != "":
+        s["caption_height"] = round(_num(raw.get("caption_height"), 6.0, 0.0, 90.0), 1)   # by hand: % above the bottom edge
     if raw.get("noise") in NOISE_LEVELS:
         s["noise"] = raw["noise"]
     if raw.get("vocals") in VOCALS:
@@ -285,6 +287,11 @@ def clean_settings(raw: Any) -> Dict[str, Any]:
             dk = x.get("duck") if isinstance(x.get("duck"), dict) else {}
             if dk.get("on"):
                 y["duck"] = {"on": True, "level": round(_num(dk.get("level"), DUCK_LEVEL, 0.0, 1.0), 3)}
+                if dk.get("under") in ("music", "effects"):
+                    y["duck"]["under"] = dk["under"]      # what it goes down under (voices when not said)
+            skip = round(_num(x.get("start"), 0.0, 0.0, 36000.0), 2)
+            if skip >= 0.05:
+                y["start"] = skip                         # where in the song it starts (seconds into the file)
             if x.get("locked"):
                 y["locked"] = True
             try:
@@ -304,6 +311,14 @@ def clean_settings(raw: Any) -> Dict[str, Any]:
     s["mix_split"] = sid if SPLIT_ID.match(sid) else ""
     for layer in STEM_KEYS:
         s["mix_" + layer] = round(_num(raw.get("mix_" + layer), 1.0, 0.0, 2.0), 3)
+    ducks: Dict[str, Dict[str, Any]] = {}                 # split tracks that go down while another one is heard
+    rd = raw.get("ducks") if isinstance(raw.get("ducks"), dict) else {}
+    for layer in STEM_KEYS:
+        dk = rd.get(layer) if isinstance(rd.get(layer), dict) else {}
+        under = dk.get("under") if dk.get("under") in MIX_LAYERS else ("voices" if layer != "voices" else "music")
+        if dk.get("on") and under != layer:
+            ducks[layer] = {"on": True, "level": round(_num(dk.get("level"), DUCK_LEVEL, 0.0, 1.0), 3), "under": under}
+    s["ducks"] = ducks
     fr = clean_frame(raw.get("frame")) if isinstance(raw.get("frame"), dict) else None
     s["frame"] = fr if frame_active(fr) else None
     lk = raw.get("locks") if isinstance(raw.get("locks"), dict) else {}
@@ -477,28 +492,60 @@ def voice_ranges(project: Dict[str, Any], src_path: str, media: Any = None, stem
     return find_voice(src_path, 0.0, stem=False)
 
 
-def _shape_of(sh: Dict[str, Any], env_path: Optional[str], offset: float, p: Dict[str, Any], cache: Optional[str]) -> Optional[Dict[str, Any]]:
+def activity_ranges(project: Dict[str, Any], src_path: str, of: str, media: Any = None, stems_home: Optional[str] = None,
+                    planner: Any = None) -> List[List[float]]:
+    """When the Voices / Music / Effects track is heard (source time). Voices can be guessed without a split; the others need one."""
+    if of == "voices":
+        return voice_ranges(project, src_path, media, stems_home, planner)
+    sid = project["settings"].get("mix_split") or ""
+    if sid and of in MIX_LAYERS:
+        from .splitter import SplitStore
+        info = SplitStore(stems_home).resolve(sid)
+        if info and info["id"].split("/")[0] == source_identity(src_path)["fp"]:
+            return find_voice(info["files"][of], info["start"])
+    if planner is not None:
+        planner.notes.append(f"Going down under {of}: the sound is not split, so nothing goes down. Split the sound first.")
+    return []
+
+
+def duck_points(ranges: Sequence[Sequence[float]], level: float) -> List[List[float]]:
+    """Going down as a loudness curve [[seconds, dB], ...] in the same clock as the ranges: gradually down before each
+    stretch, back up after it."""
+    db = max(-60.0, 20.0 * math.log10(max(level, 0.001)))
+    pts: List[List[float]] = []
+    for a, b in duck_spans([(float(x), float(y)) for x, y in ranges], 1e9):
+        if b - a >= DUCK_DOWN + DUCK_UP:
+            pts += [[a, 0.0], [a + DUCK_DOWN, db], [b - DUCK_UP, db], [b, 0.0]]
+        else:
+            pts += [[a, 0.0], [a + (b - a) * DUCK_DOWN / (DUCK_DOWN + DUCK_UP), db * (b - a) / (DUCK_DOWN + DUCK_UP)], [b, 0.0]]
+    return pts
+
+
+def _shape_of(sh: Dict[str, Any], env_path: Optional[str], offset: float, p: Dict[str, Any], cache: Optional[str],
+              duck: Optional[List[List[float]]] = None) -> Optional[Dict[str, Any]]:
     from .analysis import evenout
-    if not (sh.get("even") or sh.get("fin") or sh.get("fout")):
+    dpts = [list(x) for x in evenout.window(duck, p["start"] - 0.5, p["end"] + 0.5)] if duck else []
+    if not (sh.get("even") or sh.get("fin") or sh.get("fout") or dpts):
         return None
     env: List[List[float]] = []
     if sh.get("even") and env_path:
         full = evenout.envelope(env_path, int(sh["even"]), cache)
         env = [list(x) for x in evenout.window(evenout.shifted(full, offset), p["start"] - 0.5, p["end"] + 0.5)]
-    return {"env": env, "a": float(p["start"]), "b": float(p["end"]), "fin": float(sh.get("fin") or 0), "fout": float(sh.get("fout") or 0),
-            "rev": bool(p.get("reverse"))}
+    return {"env": env, "duck": dpts, "a": float(p["start"]), "b": float(p["end"]), "fin": float(sh.get("fin") or 0),
+            "fout": float(sh.get("fout") or 0), "rev": bool(p.get("reverse"))}
 
 
-def attach_shapes(live: List[Dict[str, Any]], groups: List[List[Any]], src_path: str, mix: Optional[Dict[str, Any]], cache: Optional[str]) -> None:
-    """Even out and fades of each section's own sound (the plain sound, or each split layer) go onto its segments."""
+def attach_shapes(live: List[Dict[str, Any]], groups: List[List[Any]], src_path: str, mix: Optional[Dict[str, Any]], cache: Optional[str],
+                  ducks: Optional[Dict[str, List[List[float]]]] = None) -> None:
+    """Even out, fades and going down of each section's own sound (the plain sound, or each split layer) go onto its segments.
+    ``ducks``: for each split layer that goes down, its curve in source time."""
     for p, segs in zip(live, groups):
         shape: Dict[str, Dict[str, Any]] = {}
         if mix:
-            for name, v in (p.get("mix") or {}).items():
-                if name in mix["files"]:
-                    sh = _shape_of(v, mix["files"][name], float(mix["start"]), p, cache)
-                    if sh:
-                        shape[name] = sh
+            for name in mix["files"]:
+                sh = _shape_of((p.get("mix") or {}).get(name) or {}, mix["files"][name], float(mix["start"]), p, cache, (ducks or {}).get(name))
+                if sh:
+                    shape[name] = sh
         else:
             sh = _shape_of(p, src_path, 0.0, p, cache)
             if sh:
@@ -526,10 +573,11 @@ def music_shape(t: Dict[str, Any], total: float, cache: Optional[str]) -> str:
                 dur = float(probe_media(t["path"]).duration or 0)
             if dur > 0.5:
                 env = evenout.envelope(t["path"], int(s), cache)
-                k = int(a // dur)
-                while k * dur < b and env:
-                    lo, hi = max(a, k * dur), min(b, (k + 1) * dur)   # the song plays again from the start when it ends
-                    chain += evenout.filters(evenout.shifted(env, k * dur), lo, hi)
+                skip = float(t.get("start") or 0.0)                  # the song starts this far into its file
+                k = int((a + skip) // dur)
+                while k * dur - skip < b and env:
+                    lo, hi = max(a, k * dur - skip), min(b, (k + 1) * dur - skip)   # the song plays again from its start when it ends
+                    chain += evenout.filters(evenout.shifted(env, k * dur - skip), lo, hi)
                     k += 1
         fin, fout = float(q.get("fin") or 0), float(q.get("fout") or 0)
         if fin:
@@ -917,7 +965,7 @@ def _layer_mix(st: Dict[str, Any], live: List[Dict[str, Any]], src_path: str, pl
         if layer in st["mute"] or (_solo_any(st) and layer not in st["solo"]):
             gains[layer] = 0.0
     own = any(piece_layer_gain(p) or any(clean_shape(v) for v in (p.get("mix") or {}).values()) for p in live)   # own loudness / even out / fades
-    if not st["mix_split"] or (all(abs(g - 1.0) < 0.001 for g in gains.values()) and not own):
+    if not st["mix_split"] or (all(abs(g - 1.0) < 0.001 for g in gains.values()) and not own and not st.get("ducks")):
         return None
     from .splitter import SplitStore
     info = SplitStore(stems_home).resolve(st["mix_split"])
@@ -1014,7 +1062,7 @@ def plan_project(project: Dict[str, Any], src_path: str, *, music_path: Optional
         raise ScriptError("The finished video would be empty.", "Put a piece back, or make a piece longer.")
     audio = AudioSpec()
     tracks = ([{"path": music_path, "volume": float(st["music_volume"]), "mute": False, "solo": False}] if music_path else []) + layers
-    voice_src: Optional[List[tuple]] = None
+    act_out: Dict[str, List[tuple]] = {}                 # when each track is heard, in finished-video time
     cache = str(Path(stems_home) / "thumbs") if stems_home else None
     for t in tracks:
         if t.get("mute") or (solo and not t.get("solo")):
@@ -1025,11 +1073,13 @@ def plan_project(project: Dict[str, Any], src_path: str, *, music_path: Optional
         fi = t.get("fade_in")
         fo = t.get("fade_out")
         m = MusicSpec(t["path"], float(t["volume"]), False, 0.0, None, True, 0.5 if fi is None else float(fi), 1.5 if fo is None else float(fo))
+        m.skip = float(t.get("start") or 0.0)
         duck = t.get("duck") if isinstance(t.get("duck"), dict) and t["duck"].get("on") else None
-        if duck and voice_src is None:
-            voice_src = map_ranges(voice_ranges(project, src_path, media, stems_home, planner), planner.segs, float(planner.F))
+        under = (duck or {}).get("under") or "voices"
+        if duck and under not in act_out:
+            act_out[under] = map_ranges(activity_ranges(project, src_path, under, media, stems_home, planner), planner.segs, float(planner.F))
         total_s = planner.total / float(planner.F)
-        m.extra = ",".join(x for x in (music_shape(t, total_s, cache), music_envelope(t.get("parts"), duck, voice_src or [], total_s)) if x)
+        m.extra = ",".join(x for x in (music_shape(t, total_s, cache), music_envelope(t.get("parts"), duck, act_out.get(under) or [], total_s)) if x)
         audio.music.append(m)
     if audio.music or (media.has_audio and not silent):
         audio.loudnorm = dict(FINAL_LOUDNESS)             # always last, on the whole mix (video sound + every music layer)
@@ -1045,7 +1095,12 @@ def plan_project(project: Dict[str, Any], src_path: str, *, music_path: Optional
         if vocals != "keep" or st["voice_boost"] or st["compress"] or abs(st["bass"]) >= 0.5 or abs(st["treble"]) >= 0.5:
             audio.voice = voice
     if media.has_audio and not silent:
-        attach_shapes([p for p, g in pairs if g], groups, src_path, audio.mix, cache)
+        stem_ducks: Dict[str, List[List[float]]] = {}
+        if audio.mix:
+            for name, dk in (st.get("ducks") or {}).items():
+                if name in audio.mix["files"]:
+                    stem_ducks[name] = duck_points(activity_ranges(project, src_path, dk["under"], media, stems_home, planner), float(dk["level"]))
+        attach_shapes([p for p, g in pairs if g], groups, src_path, audio.mix, cache, stem_ducks)
     audio.fade_in, audio.fade_out = float(st["fade_in"]), float(st["fade_out"])
     audio.fade_video = planner.has_video
     texts: List[TextOverlay] = []
@@ -1073,7 +1128,7 @@ def plan_project(project: Dict[str, Any], src_path: str, *, music_path: Optional
             planner.warn("No speech was found in the pieces that are kept, so there are no captions.")
         else:
             captions = CaptionSpec("burn", st["caption_style"], CAPTION_SIZES[st["caption_size"]], "#ffffff", "#ffe600", "#000000",
-                                   st["caption_position"], 70.0, None, False, lines, "", source)
+                                   st["caption_position"], 70.0, None, False, lines, "", source, st.get("caption_height"))
             planner.notes.append(f"Captions: {len(lines)} line(s) from {source}.")
     tl = Timeline(planner.segs, out, media.path, planner.D, media.fps, planner.total, texts, [], audio, captions, "encode",
                   planner.warnings, planner.notes)

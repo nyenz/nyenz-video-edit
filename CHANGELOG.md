@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.23.0
+* **Cleaner**: the "More" menu (Combine, Advanced) is gone. A **Back** button sits at the top left of every page (Alt + Left arrow).
+* **Home, one folder per video**: the original, Odd and Even sit together in their video's folder (Edit and Final). Each
+  card shows its level: steps 1 2 3 and Final, and what comes next. Folders open and close.
+* **Edit, no step twice**: step 1 and step 2 cannot be done a second time, the step to do now is lit, and sending to
+  Final a second time opens the same Final project instead of making a copy.
+* **Final on Home**: each project is followed by its newest finished video; older exports of the same project are tucked
+  behind "Show older".
+* **No leftover videos**: quick previews replace each other, and the Sound check deletes its quick version when done.
+* **Sound starts right by itself**: after a split, Voices 100 % (kept even), Music 100 %, Effects 80 %. A song you add
+  starts near 20 %, set from how loud the song really is, and goes down while people talk.
+* **Song starts at**: choose where in the song it begins (type 1:05, or "From here").
+* **Go down while…** for every track: your song, Voices, Music, Effects. Each has its own loudness and you choose which
+  track it goes down under.
+* **Level meter** next to the play buttons: green is right, yellow quiet, red too loud (an estimate of YouTube's level).
+* **Captions**: an Auto switch (off to start) and a Height slider with a guide line in the viewer.
+* The split explanation is short now.
+
 ## 1.22.0
 * **Even out** (what most people expect from "normalise"): loud moments go down, quiet moments go up, slowly, so nothing
   distorts, and the parts that are fine are left exactly as they are. **Off / Gentle / Strong**, for:

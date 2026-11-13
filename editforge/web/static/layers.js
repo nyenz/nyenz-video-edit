@@ -24,7 +24,8 @@ const Layers = (() => {
   const gainOf = (n) => { const v = st()["mix_" + n]; return v === undefined ? 1 : +v; };
   /** A piece's own loudness of a layer (1 = as the slider says; 0 = muted). */
   const ownGain = (p, n) => { const m = p && p.mix && p.mix[n]; return m ? (m.mute ? 0 : +m.volume) : 1; };
-  const changed = () => NAMES.some((n) => Math.abs(gainOf(n) - 1) > 0.001) || (S.proj && S.proj.pieces.some((p) => !p.off && p.mix && Object.keys(p.mix).length));
+  const changed = () => NAMES.some((n) => Math.abs(gainOf(n) - 1) > 0.001) || (S.proj && S.proj.pieces.some((p) => !p.off && p.mix && Object.keys(p.mix).length)) ||
+    (S.proj && Object.keys(st().ducks || {}).length > 0);
 
   /** The part of the video to split: what the pieces use (plus a little margin), or everything. */
   function range() {
@@ -124,13 +125,13 @@ const Layers = (() => {
     if (ready) {
       const [u0, u1] = used();
       const outside = st().mix_split && info.split.id === st().mix_split && (u0 < info.split.start - 0.05 || u1 > info.split.end + 0.05);
-      hint.textContent = outside ? "Part of your video is outside the split part. Press Split again." : changed() ? "Your mix is used in the viewer and in the export." : "Move a slider to change the mix. At 100% everything, the original sound is used.";
+      hint.textContent = outside ? "Part of your video is outside the split part. Press Split again." : changed() ? "Your mix plays in the viewer and goes into the export." : "Move a slider to change the mix.";
       if (outside) hint.classList.add("warn");
     } else if (running) {
       const j = info.job;
-      hint.textContent = j.state === "downloading" ? "Getting the sound helper (once, " + info.model_mb + " MB)…" : "Splitting the sound. You can keep editing; the viewer plays the plain sound until it is done.";
+      hint.textContent = j.state === "downloading" ? "Getting the sound helper (once, " + info.model_mb + " MB)…" : "Splitting the sound. You can keep editing meanwhile.";
     } else {
-      hint.textContent = "Voices, music and effects (like gunshots) as three layers you can turn up, down or off. It takes " + span($("lyMode").value === "best" ? info.estimate_best_s : info.estimate_s) + " for " + ($("lyPart").value === "all" ? "the whole video" : "the part you use") + "." + (info.model ? "" : " First time: downloads a " + info.model_mb + " MB helper.");
+      hint.textContent = "Makes three tracks: voices, music, effects. Takes about " + span($("lyMode").value === "best" ? info.estimate_best_s : info.estimate_s) + "." + (info.model ? "" : " First time: a " + info.model_mb + " MB download.");
     }
     if (running) {
       const j = info.job, p = Math.round((j.progress || 0) * 100);
@@ -150,7 +151,14 @@ const Layers = (() => {
     if (setNames(sp)) { build(); if (L.els) { pause(); try { L.ctx.close(); } catch (e) { /* already closed */ } L.els = null; L.ctx = null; L.gains = null; L.loaded = ""; } }
     document.dispatchEvent(new CustomEvent("layers-info"));
     if (sp && st().mix_split !== sp.id && !(st().mix_split && L.info.job && L.info.job.state === "running")) {
-      st().mix_split = sp.id; scheduleSave();               // a finished split of this video is attached to the project by itself
+      const first = !st().mix_split && BASE.every((n) => Math.abs(gainOf(n) - 1) < 0.001) && !S.proj.pieces.some((p) => p.mix && Object.keys(p.mix).length);
+      st().mix_split = sp.id;                                // a finished split of this video is attached to the project by itself
+      if (first) {                                           // a good mix to start from, by itself: Voices 100 % and kept even, Music 100 %, Effects 80 %
+        st().mix_effects = 0.8;
+        for (const p of S.proj.pieces) p.mix = Object.assign({}, p.mix || {}, { voices: { volume: 1, mute: false, even: 1 } });
+        if (typeof toast === "function") toast("Sound split. Start mix set by itself: Voices 100% (kept even), Music 100%, Effects 80%.");
+      }
+      scheduleSave();
     }
     paint(); apply();
     const j = L.info.job;
@@ -193,7 +201,8 @@ const Layers = (() => {
     const p = piece || (typeof V !== "undefined" && V.seg && V.seg.p);
     const f = S.mutedAll || (p && p.mute) || !st().original_sound ? 0 : (p ? Math.max(0, p.volume) : 1);
     const shape = p && typeof partShapeGain === "function" && typeof active === "function" ? partShapeGain(p, n, active().currentTime) : 1;   // even out, fades
-    L.gains[n].gain.value = Math.max(0, v) * f * ownGain(p, n) * shape;
+    const duck = typeof stemDuckGain === "function" && typeof active === "function" ? stemDuckGain(n, active().currentTime) : 1;   // going down under another track
+    L.gains[n].gain.value = Math.max(0, v) * f * ownGain(p, n) * shape * duck;
   }
   function gainsNow(p) { for (const n of NAMES) setGain(n, gainOf(n), p); }
   function on() { return usable(); }
