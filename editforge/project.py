@@ -64,6 +64,8 @@ SHAPES: Dict[str, tuple] = {
 }
 #: quality name -> (CRF, x264 preset). Lower CRF is better; "medium" squeezes more quality into each megabyte than "veryfast".
 QUALITIES: Dict[str, tuple] = {"best": (17, "medium"), "high": (20, "veryfast"), "small": (23, "veryfast")}
+#: the long side of the exported picture. 4K is the default: YouTube gives 4K uploads its best quality, also for viewers on 1080p.
+EXPORT_SIZES: Dict[str, Optional[int]] = {"4k": 3840, "1440": 2560, "1080": 1920, "source": None}
 DEFAULT_SETTINGS: Dict[str, Any] = {
     "shape": "original", "transition": "none", "transition_s": 0.3, "music": "", "music_volume": 0.25, "duck": True,
     "original_sound": True, "even_loudness": False, "fade_in": 0.0, "fade_out": 0.0, "quality": "best",
@@ -258,6 +260,7 @@ def clean_settings(raw: Any) -> Dict[str, Any]:
     s["fade_out"] = round(_num(raw.get("fade_out"), 0.0, 0.0, 10.0), 3)
     if raw.get("quality") in QUALITIES:
         s["quality"] = raw["quality"]
+    s["export_size"] = raw.get("export_size") if raw.get("export_size") in EXPORT_SIZES else "4k"
     s["captions"] = str(raw.get("captions") or "off")[:300]          # "off", "auto" (listen to the speech) or a subtitle file id
     if raw.get("caption_style") in CAPTION_STYLES:
         s["caption_style"] = raw["caption_style"]
@@ -331,7 +334,7 @@ def clean_settings(raw: Any) -> Dict[str, Any]:
     return s
 
 
-DUCK_LEVEL = 0.3            # how loud the music stays while someone talks (30 %)
+DUCK_LEVEL = 0.35           # how loud the music stays while someone talks (35 %)
 DUCK_DOWN, DUCK_UP = 0.35, 0.8   # seconds to go down before the voice, and back up after it (gradually)
 MAX_MUSIC_PARTS = 2000
 
@@ -637,11 +640,11 @@ def frame_active(fr: Optional[Dict[str, Any]]) -> bool:
             or abs(fr["rotate"]) > 1e-3 or fr["mask"]["shape"] != "none" or fr.get("edge", 0) > 0.5)
 
 
-def frame_size(fr: Dict[str, Any], width: int, height: int, preview: bool) -> tuple:
-    """Canvas size: the long side stays as long as the video's long side (854 in a quick preview)."""
+def frame_size(fr: Dict[str, Any], width: int, height: int, preview: bool, long_side: Optional[int] = None) -> tuple:
+    """Canvas size: the long side is the export size (4K ...), or as long as the video's long side (854 in a quick preview)."""
     r = FRAME_RATIOS[fr["ratio"]]
     a = r[0] / r[1] if r else width / max(1, height)
-    long = 854 if preview else max(width, height)
+    long = 854 if preview else (long_side or max(width, height))
     w, h = (long, long / a) if a >= 1 else (long * a, long)
     return max(2, int(round(w / 2)) * 2), max(2, int(round(h / 2)) * 2)
 
@@ -1006,9 +1009,13 @@ def plan_project(project: Dict[str, Any], src_path: str, *, music_path: Optional
     out = resolve_output(media, preset=preset, fit=fit, quality=f"crf:{crf}", preview=preview, notes=notes)
     if not preview:
         out.x264_preset = x264
+    long_side = EXPORT_SIZES.get(st.get("export_size") or "4k")
     if frame and out.has_video:                                # the Frame panel: its own canvas, layers and mask
-        out.width, out.height = frame_size(frame, media.width, media.height, preview)
+        out.width, out.height = frame_size(frame, media.width, media.height, preview, long_side)
         out.fit, out.frame = "frame", dict(frame)
+    elif out.has_video and not preview and long_side and max(out.width, out.height) != long_side:
+        k = long_side / max(out.width, out.height)            # the chosen export size, same shape
+        out.width, out.height = max(2, int(round(out.width * k / 2)) * 2), max(2, int(round(out.height * k / 2)) * 2)
     elif preview and preset != "original" and out.has_video:      # keep the chosen shape in the small preview
         full = resolve_output(media, preset=preset, fit=fit)
         out.height = 480 if full.height <= full.width else 854

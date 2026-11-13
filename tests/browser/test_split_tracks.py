@@ -203,7 +203,7 @@ def test_music_track_parts_normalise_and_going_down_under_voices(live, page, spl
     page.click("#right input[aria-label='Go down while people talk']")
     page.wait_for_selector("#laneM .duckz", timeout=30000)
     assert page.evaluate("() => S.voice.from") == "voices"
-    assert page.evaluate("() => S.proj.settings.layers[0].duck") == {"on": True, "level": 0.3}
+    assert page.evaluate("() => S.proj.settings.layers[0].duck") == {"on": True, "level": 0.35}
     assert abs(page.evaluate("() => duckGain(S.proj.settings.layers[0], 20)") - 0.3) < 0.01
     # right-click a music part
     page.locator("#laneM .mpart").nth(1).click(button="right")
@@ -308,7 +308,7 @@ def test_start_mix_go_down_on_tracks_song_start_meter_and_captions(live, page, s
     page.click("#laneStems .stem-head[data-layer=music]")
     page.click("#right input[aria-label='Go down while another track is heard']")
     page.wait_for_function("() => S.proj.settings.ducks && S.proj.settings.ducks.music && S.acts && S.acts.voices", timeout=30000)
-    assert page.evaluate("() => S.proj.settings.ducks.music") == {"on": True, "level": 0.3, "under": "voices"}
+    assert page.evaluate("() => S.proj.settings.ducks.music") == {"on": True, "level": 0.35, "under": "voices"}
     page.click("#right .duck-box .seg button:has-text('Effects')")
     page.wait_for_function("() => S.proj.settings.ducks.music.under === 'effects' && S.acts.effects", timeout=30000)
     assert page.evaluate("() => stemDuckGain('music', 20)") < 0.5

@@ -678,7 +678,7 @@ def test_going_down_settings_song_start_and_caption_height_are_cleaned():
     st = P.clean_settings({"ducks": {"music": {"on": 1, "level": 0.4}, "voices": {"on": 1}, "effects": {"on": 0}, "x": {"on": 1}},
                            "layers": [{"file": "u/x/a.mp3", "start": 75.5, "duck": {"on": 1, "under": "effects"}}, {"file": "u/x/b.mp3", "duck": {"on": 1, "under": "nope"}}],
                            "caption_height": 140})
-    assert st["ducks"] == {"music": {"on": True, "level": 0.4, "under": "voices"}, "voices": {"on": True, "level": 0.3, "under": "music"}}
+    assert st["ducks"] == {"music": {"on": True, "level": 0.4, "under": "voices"}, "voices": {"on": True, "level": 0.35, "under": "music"}}
     assert st["layers"][0]["start"] == 75.5 and st["layers"][0]["duck"]["under"] == "effects"
     assert "under" not in st["layers"][1]["duck"] and "start" not in st["layers"][1]
     assert st["caption_height"] == 90.0 and "caption_height" not in P.clean_settings({})
@@ -734,3 +734,43 @@ def test_quick_previews_leave_no_leftover_files(web, film):
     full = c.json("POST", f"/api/projects/{pid}/render", {"preview": False})[1]
     full = c.wait_jobs([full["id"]], 240)[0]
     assert state.drop_previews(pid) == 1 and Path(full["output_path"]).is_file()          # finished videos are never touched
+
+
+# ---------------------------------------------------------------- 1.25: export size (4K by default), clips keep the movie's size
+def test_the_export_is_4k_by_default_and_the_size_can_be_chosen(web, film):
+    c, state = web
+    from editforge.core.media import probe_media
+    j = export(c, film, {}, preview=False)
+    assert j["status"] == "done", j
+    m = probe_media(j["output_path"])
+    assert max(m.width, m.height) == 3840 and abs(m.width / m.height - 320 / 180) < 0.02
+    j = export(c, film, {"export_size": "1080", "frame": {"ratio": "9:16"}}, preview=False)
+    m = probe_media(j["output_path"])
+    assert (m.width, m.height) == (1080, 1920)
+    j = export(c, film, {"export_size": "source"}, preview=False)
+    m = probe_media(j["output_path"])
+    assert (m.width, m.height) == (320, 180)
+    assert P.clean_settings({})["export_size"] == "4k" and P.clean_settings({"export_size": "8k"})["export_size"] == "4k"
+
+
+def test_separate_again_works_on_effects_parts(web, film):
+    """Effects parts with some voice in them: separated once more, what was pulled out lands on 'Found again'."""
+    c, state = web
+    state.splitter.engine_factory = lambda path: scalar_engine
+    state.splitter.model_ready = lambda: True
+    proj = c.json("GET", f"/api/projects/{film['proj']['id']}")[1]["project"]
+    proj["settings"]["mix_split"] = film["split"]
+    c.json("PUT", f"/api/projects/{proj['id']}", proj)
+    status, r = c.json("POST", f"/api/projects/{proj['id']}/resplit", {"layer": "effects", "ranges": [[1.0, 3.0]]})
+    assert status == 200, r
+    end = time.time() + 60
+    while time.time() < end and r.get("state") == "running":
+        time.sleep(0.2)
+        r = c.json("GET", f"/api/projects/{proj['id']}/resplit")[1]
+    assert r["state"] == "done", r
+    got = state.splitter.store.resolve(r["id"])
+    assert got["found_from"] == ["effects"] and "found" in got["files"]
+    fx, found = decode(got["files"]["effects"]), decode(got["files"]["found"])
+    out_part, in_part = slice(int(44100 * 4.0), int(44100 * 5.0)), slice(int(44100 * 1.6), int(44100 * 2.4))
+    A = level(fx[out_part], 3000)
+    assert A > 0.02 and level(found[in_part], 3000) / A > 0.3 and level(found[out_part], 3000) / A < 0.05

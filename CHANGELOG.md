@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.25.0
+* **4K export by default**: the export dialog has **Picture size**: 4K (the default), 1440p, 1080p or "As the video". With
+  4K + Best quality YouTube streams your video at its highest quality, also to people watching in 1080p. Clips in stage 1
+  keep the movie's own size.
+* **Sound starts right**: after a split, Music (from the video) is 50 %, Voices 100 % (kept even), Effects 80 %.
+  A song you add starts near 20 % (set from its own loudness), goes down to 35 % while people talk, and fades in and out
+  over 3 s.
+* "Go down while…" starts at 35 % for every track.
+* Checked: a louder Effects part does reach the export, and Separate again works on Effects parts (what it finds goes to
+  "Found again").
+
 ## 1.24.0
 * **Follow**: while the video plays, the timeline moves along so the red line always stays in view (it turns a page when
   the line reaches the right edge, like CapCut). The **Follow** button next to the zoom switches it off or on; the app remembers.

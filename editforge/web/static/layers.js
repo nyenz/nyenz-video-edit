@@ -153,10 +153,10 @@ const Layers = (() => {
     if (sp && st().mix_split !== sp.id && !(st().mix_split && L.info.job && L.info.job.state === "running")) {
       const first = !st().mix_split && BASE.every((n) => Math.abs(gainOf(n) - 1) < 0.001) && !S.proj.pieces.some((p) => p.mix && Object.keys(p.mix).length);
       st().mix_split = sp.id;                                // a finished split of this video is attached to the project by itself
-      if (first) {                                           // a good mix to start from, by itself: Voices 100 % and kept even, Music 100 %, Effects 80 %
-        st().mix_effects = 0.8;
+      if (first) {                                           // a good mix to start from, by itself: Voices 100 % and kept even, Music 50 %, Effects 80 %
+        st().mix_music = 0.5; st().mix_effects = 0.8;
         for (const p of S.proj.pieces) p.mix = Object.assign({}, p.mix || {}, { voices: { volume: 1, mute: false, even: 1 } });
-        if (typeof toast === "function") toast("Sound split. Start mix set by itself: Voices 100% (kept even), Music 100%, Effects 80%.");
+        if (typeof toast === "function") toast("Sound split. Start mix set by itself: Voices 100% (kept even), Music 50%, Effects 80%.");
       }
       scheduleSave();
     }
