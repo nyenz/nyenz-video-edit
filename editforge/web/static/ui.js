@@ -489,7 +489,7 @@ const Exports = {
     const busy = data.jobs.filter((j) => j.status === "running" || j.status === "queued");
     const rest = data.jobs.filter((j) => !busy.includes(j));
     const groups = [["Working now", busy], ["Finished videos", rest.filter((j) => j.group === "final" || !j.group)], ["Clips", rest.filter((j) => j.group === "clip")], ["Quick previews", rest.filter((j) => j.group === "preview")]];
-    this.shut = this.shut || new Set(["Quick previews"]);
+    this.shut = this.shut || new Set();
     for (const [title, list] of groups) {
       if (!list.length) continue;
       const shut = this.shut.has(title) && title !== "Working now";

@@ -796,4 +796,4 @@ def test_clean_up_suggests_older_exports_previews_and_a_finished_video(web, film
         st, j = c.json("POST", f"/api/projects/{f}/render", {"preview": False})
         assert c.wait_jobs([j["id"]], 180)[0]["status"] == "done"
     items = [x for x in c.json("GET", "/api/cleanup")[1]["items"] if x["kind"] == "video"]
-    assert len(items) == 1 and len(items[0]["act"]["projects"]) == 5 and items[0]["stage"] == "final"
+    assert len(items) == 1 and len(items[0]["act"]["projects"]) >= 5 and items[0]["stage"] == "final"

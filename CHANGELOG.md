@@ -9,7 +9,7 @@
   * older exports of the same project, leftover quick previews, and older clip files nobody uses.
   Nothing is removed until you press **Clear**; **Keep** stops a suggestion.
 * **Exports are grouped**: Working now, Finished videos, Clips and Quick previews, each with its own header (quick
-  previews start closed).
+  each one can be closed).
 
 ## 1.25.0
 * **4K export by default**: the export dialog has **Picture size**: 4K (the default), 1440p, 1080p or "As the video". With
