@@ -18,10 +18,10 @@ try {
 // ------------------------------------------------------------------ loading
 async function loadAll() {
   try {
-    const [a, b, c, d] = await Promise.all([api("/api/clipsets"), api("/api/projects"), api("/api/final"), api("/api/clips/library")]);
-    H.clipsets = a.clipsets; H.projects = b.projects; H.final = c.videos; H.library = d.clips;
+    const [a, b, c, d, e] = await Promise.all([api("/api/clipsets"), api("/api/projects"), api("/api/final"), api("/api/clips/library"), api("/api/cleanup")]);
+    H.clipsets = a.clipsets; H.projects = b.projects; H.final = c.videos; H.library = d.clips; H.tidy = e.items;
   } catch (e) { toast(errText(e), true); return; }
-  render();
+  render(); paintTidy();
 }
 const loadProjects = loadAll;                // older name, used by the actions below
 const stageOf = (p) => (p.stage === "final" ? "final" : "edit");
@@ -456,6 +456,59 @@ async function fromClip() {
 }
 
 // ------------------------------------------------------------------ storage
+// ------------------------------------------------------------------ Clean up: what is most likely not needed any more
+const KEEP = (() => { try { return new Set(JSON.parse(localStorage.getItem("ef.tidy.keep") || "[]")); } catch (e) { return new Set(); } })();
+const tidyList = () => (H.tidy || []).filter((x) => !KEEP.has(x.key));
+function paintTidy() {
+  const n = tidyList().length, c = $("tidyCount");
+  if (c) { c.textContent = String(n); c.hidden = !n; }
+  const b = $("tidyBtn"); if (b) b.classList.toggle("has", n > 0);
+}
+async function clearItem(x) {
+  const a = x.act;
+  if (a.type === "free") return api("/api/clipsets/" + a.id + "/free", { method: "POST", json: {} });
+  if (a.type === "job") return api("/api/jobs/" + a.id, { method: "DELETE" });
+  if (a.type === "video") {
+    for (const id of a.projects) await api("/api/projects/" + id + "/trash", { method: "POST", json: {} });
+    if (a.clip_job) await api("/api/jobs/" + a.clip_job, { method: "DELETE" });
+  }
+}
+const TIDY_WHAT = { movie: "Movie (clips made)", video: "Video done", old: "Older export", preview: "Quick preview", clip: "Older clip file" };
+function tidyPanel() {
+  if ($("tidyDrawer")) return;
+  const close = () => { scrim.remove(); drawer.remove(); };
+  const scrim = el("div", { class: "scrim", onclick: close });
+  const body = el("div", { class: "body" });
+  const drawer = el("aside", { class: "drawer", id: "tidyDrawer", "aria-label": "Clean up" },
+    el("div", { class: "side-h" }, el("h2", { text: "Clean up" }), btn("", { icon: "x", cls: "ghost", title: "Close", onclick: close })), body);
+  document.body.append(scrim, drawer);
+  const fill = () => {
+    body.replaceChildren();
+    const list = tidyList(), total = list.reduce((a, x) => a + (x.size || 0), 0);
+    body.append(el("p", { class: "hint", text: list.length ? "These are most likely not needed any more. Nothing is removed until you press Clear. Projects go to the Trash first; your finished videos always stay." : "Nothing to clean up. Well done." }));
+    if (list.length) body.append(el("div", { class: "box" }, el("div", { class: "stat" }, el("span", { class: "lbl", text: list.length + " things" }), el("b", { class: "num", text: "about " + fmtSize(total) + " free after" }))));
+    for (const [stage, title] of [["clips", "Stage 1 · Clips"], ["final", "Stage 2 and 3 · Edit and Final"]]) {
+      const mine = list.filter((x) => x.stage === stage); if (!mine.length) continue;
+      body.append(el("h3", { class: "tidy-h", text: title }));
+      for (const x of mine) {
+        const row = el("div", { class: "tidy-row" },
+          el("div", { class: "t" }, el("span", { class: "tidy-kind k-" + x.kind, text: TIDY_WHAT[x.kind] || x.kind }), el("b", { class: "ellip", text: x.title, title: x.title }), el("small", { text: x.why })),
+          el("span", { class: "num", text: x.size ? fmtSize(x.size) : "" }),
+          el("div", { class: "btns" },
+            btn("Keep", { cls: "sm ghost", title: "Keep it and stop suggesting it", onclick: () => { KEEP.add(x.key); try { localStorage.setItem("ef.tidy.keep", JSON.stringify([...KEEP].slice(-500))); } catch (e) { /* off */ } paintTidy(); fill(); } }),
+            btn("Clear", { cls: "sm", onclick: async () => {
+              const what = x.kind === "video" ? "Move its Edit and Final projects to the Trash" + (x.act.clip_job ? " and delete its clip file" : "") + "? The finished videos stay."
+                : x.kind === "movie" ? "Free up the movie? The made clips stay in Made clips." : "Delete this file? It cannot be brought back.";
+              if (!(await askYes("'" + x.title + "': " + what, "Clear", x.kind !== "video"))) return;
+              try { await clearItem(x); toast("Cleared '" + x.title + "'."); } catch (e) { toast(errText(e), true); }
+              await loadAll(); fill();
+            } })));
+        body.append(row);
+      }
+    }
+  };
+  fill();
+}
 async function storagePanel() {
   if ($("storageDrawer")) return;
   const close = () => { scrim.remove(); drawer.remove(); };
@@ -530,6 +583,7 @@ async function storagePanel() {
     loadAll();
   });
   $("storageBtn").addEventListener("click", storagePanel);
+  $("tidyBtn").addEventListener("click", tidyPanel);
   const params = new URLSearchParams(location.search);
   const msg = params.get("msg"), ph = params.get("phase");
   if (ph === "made") { H.phase = "clips"; H.sub = "made"; } else if (PHASES.some((p) => p[0] === ph)) H.phase = ph;

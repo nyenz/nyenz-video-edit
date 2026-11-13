@@ -979,3 +979,24 @@ label.swl.tight { padding: 0; gap: 8px; font-size: 12.5px; }
 .follow-tl { gap: 5px; color: var(--muted); transition: color .15s, background .15s, border-color .15s; }
 .follow-tl.on { color: var(--accent); background: var(--accent-soft); }
 .follow-tl:hover { color: var(--ink); }
+
+/* 1.26: Clean up list, grouped Exports */
+.home-link .count { margin-left: auto; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; display: inline-grid; place-items: center;
+  font-size: 11px; font-weight: 700; background: #ffd166; color: #2b2100; }
+.home-link .count[hidden] { display: none; }
+.tidy-h { margin: 16px 0 6px; font-size: 12px; font-weight: 650; color: var(--muted); letter-spacing: .02em; }
+.tidy-row { display: grid; grid-template-columns: 1fr auto; gap: 6px 10px; padding: 10px 12px; margin-bottom: 8px; border-radius: 10px;
+  background: var(--sunk); border: 1px solid var(--line-soft); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .04); animation: fadeUp .2s ease; }
+.tidy-row .t { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.tidy-row .t small { color: var(--muted); line-height: 1.35; }
+.tidy-row > .num { align-self: start; font-size: 12px; color: var(--ink-2); }
+.tidy-row .btns { grid-column: 1 / -1; justify-content: flex-end; gap: 6px; }
+.tidy-kind { align-self: flex-start; font-size: 10.5px; font-weight: 700; padding: 1px 7px; border-radius: 6px; background: #2c3140; color: var(--ink-2); }
+.tidy-kind.k-video { background: rgba(47, 143, 91, .25); color: #9be8b8; }
+.tidy-kind.k-movie { background: rgba(190, 120, 60, .25); color: #ffcf9e; }
+.tidy-kind.k-old, .tidy-kind.k-preview, .tidy-kind.k-clip { background: rgba(255, 209, 102, .15); color: #ffd166; }
+.ex-h { width: 100%; display: flex; align-items: center; gap: 8px; margin: 10px 0 6px; padding: 6px 4px; border: 0; border-bottom: 1px solid var(--line-soft);
+  background: transparent; color: var(--ink); font: inherit; font-size: 12.5px; cursor: pointer; text-align: left; }
+.ex-h:first-child { margin-top: 0; }
+.ex-h:hover { color: var(--accent); }
+.ex-h svg { color: var(--muted); }

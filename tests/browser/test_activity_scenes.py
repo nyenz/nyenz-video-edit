@@ -4,6 +4,7 @@ card), several projects at once from Home, and choosing, combining, moving and r
 from __future__ import annotations
 
 import threading
+import time
 
 import pytest
 
@@ -125,4 +126,33 @@ def test_choose_combine_move_and_remove_whole_scenes(live, page, movie_id):
     page.locator("#laneV .clipb").nth(0).click()
     assert page.evaluate("() => S.sel.size") == 1
     page.evaluate("() => localStorage.removeItem('ef.choose')")
+    assert page.errors == []
+
+
+def test_clean_up_list_and_grouped_exports(live, page, movie_id):
+    a = new_edit(live, movie_id, "Tidy A")
+    st, j = live.state.store, live.call("POST", f"/api/projects/{a}/render", {"preview": True})
+    end = time.time() + 120
+    while time.time() < end and live.call("GET", f"/api/jobs/{j['id']}")["status"] != "done":
+        time.sleep(0.5)
+    page.goto(f"{live.base}/?phase=edit")
+    page.wait_for_selector("#tidyCount:not([hidden])")
+    page.click("#tidyBtn")
+    page.wait_for_selector("#tidyDrawer .tidy-row")
+    row = page.locator("#tidyDrawer .tidy-row", has_text="Quick preview").first
+    assert "only made to check" in row.inner_text()
+    n = page.locator("#tidyDrawer .tidy-row").count()
+    row.locator("button:has-text('Keep')").click()                # kept: not suggested again
+    assert page.locator("#tidyDrawer .tidy-row").count() == n - 1
+    page.evaluate("() => localStorage.removeItem('ef.tidy.keep')")
+    page.reload()
+    page.click("#tidyBtn")
+    page.locator("#tidyDrawer .tidy-row", has_text="Quick preview").first.locator("button:has-text('Clear')").click()
+    page.click(".dialog button:has-text('Clear')")
+    page.wait_for_selector(".toast:has-text('Cleared')")
+    assert live.state.store.get(j["id"]) is None
+    page.keyboard.press("Escape")
+    page.goto(f"{live.base}/?phase=edit")
+    page.evaluate("() => Exports.show()")
+    page.wait_for_selector("#exportsDrawer")
     assert page.errors == []

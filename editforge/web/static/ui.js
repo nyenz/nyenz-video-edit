@@ -485,7 +485,19 @@ const Exports = {
     this.sig = sig;
     const body = $("exportsBody"); body.replaceChildren();
     if (!data.jobs.length) body.append(el("p", { class: "hint", text: "Nothing yet. Videos you make appear here." }));
-    for (const j of data.jobs) body.append(this.card(j));
+    // grouped, so finished videos, clips and quick previews never mix
+    const busy = data.jobs.filter((j) => j.status === "running" || j.status === "queued");
+    const rest = data.jobs.filter((j) => !busy.includes(j));
+    const groups = [["Working now", busy], ["Finished videos", rest.filter((j) => j.group === "final" || !j.group)], ["Clips", rest.filter((j) => j.group === "clip")], ["Quick previews", rest.filter((j) => j.group === "preview")]];
+    this.shut = this.shut || new Set(["Quick previews"]);
+    for (const [title, list] of groups) {
+      if (!list.length) continue;
+      const shut = this.shut.has(title) && title !== "Working now";
+      body.append(el("button", { type: "button", class: "ex-h" + (shut ? " shut" : ""), "aria-expanded": String(!shut),
+        onclick: () => { if (this.shut.has(title)) this.shut.delete(title); else this.shut.add(title); this.refresh(true); } },
+        el("b", { text: title }), el("span", { class: "note num", text: String(list.length) }), el("span", { class: "grow" }), icon(shut ? "chevr" : "chev", "s")));
+      if (!shut) for (const j of list) body.append(this.card(j));
+    }
   },
   card(j) {
     const pct = Math.round((j.progress || 0) * 100);

@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.26.0
+* **Clean up** (Home, left side, with a count): a list of what you most likely do not need any more, so storage stays free
+  and nothing is removed by mistake:
+  * a movie whose clips are all made (the clips stay in Made clips),
+  * a video whose Odd and Even are both exported (its Edit and Final projects go to the Trash, and its clip file can go;
+    the finished videos always stay),
+  * older exports of the same project, leftover quick previews, and older clip files nobody uses.
+  Nothing is removed until you press **Clear**; **Keep** stops a suggestion.
+* **Exports are grouped**: Working now, Finished videos, Clips and Quick previews, each with its own header (quick
+  previews start closed).
+
 ## 1.25.0
 * **4K export by default**: the export dialog has **Picture size**: 4K (the default), 1440p, 1080p or "As the video". With
   4K + Best quality YouTube streams your video at its highest quality, also to people watching in 1080p. Clips in stage 1

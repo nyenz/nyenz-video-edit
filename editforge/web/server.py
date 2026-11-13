@@ -1281,6 +1281,84 @@ class AppState:
                         "loudness": res.get("loudness") if isinstance(res.get("loudness"), dict) else None})
         return out
 
+    def cleanup(self) -> List[Dict[str, Any]]:
+        """Things that are most likely not needed any more, so storage stays free and nothing is deleted by mistake:
+        a movie whose clips are all made, a video whose Odd and Even are both exported (its projects and its clip),
+        older exports of the same project, and leftover quick previews. Nothing here is deleted by itself."""
+        out: List[Dict[str, Any]] = []
+        projs = [d for d in self.all_projects() if not d.get("trashed")]
+        by_id = {d["id"]: d for d in projs}
+
+        def root_of(d: Dict[str, Any]) -> Dict[str, Any]:
+            seen = set()
+            while d.get("parent") in by_id and d["id"] not in seen:
+                seen.add(d["id"])
+                d = by_id[d["parent"]]
+            return d
+
+        def fsize(path: str) -> int:
+            try:
+                return Path(path).stat().st_size
+            except OSError:
+                return 0
+
+        # stage 1: every clip made, the movie still kept
+        for cs in self.list_clipsets():
+            if cs["trashed"] or cs["freed"] or not cs["clips"] or cs["made"] < cs["clips"]:
+                continue
+            out.append({"key": "movie:" + cs["id"], "stage": "clips", "kind": "movie", "title": cs["name"],
+                        "why": f"All {cs['clips']} clips are made. The movie can go: the clips stay in Made clips.",
+                        "size": cs["size"], "act": {"type": "free", "id": cs["id"]}})
+        # finished exports per project (newest first)
+        exports: Dict[str, List[Dict[str, Any]]] = {}
+        previews = []
+        for job in self.store.list(5000):
+            opts = job.get("options") if isinstance(job.get("options"), dict) else {}
+            if job.get("status") != "done" or not job.get("output_path") or opts.get("clipset"):
+                continue
+            if opts.get("preview"):
+                previews.append(job)
+            elif opts.get("kind") == "project":
+                exports.setdefault(str(opts.get("project_id") or ""), []).append(job)
+        for v in exports.values():
+            v.sort(key=lambda j: float(j.get("updated") or j.get("created") or 0), reverse=True)
+        # stage 3: a video whose Odd and Even are both exported
+        folders: Dict[str, List[Dict[str, Any]]] = {}
+        for d in projs:
+            folders.setdefault(root_of(d)["id"], []).append(d)
+        clips = {c["file"]: c for c in self.clip_library()}
+        finished_roots = set()
+        for rid, group in folders.items():
+            finals = {d.get("version"): d for d in group if d.get("stage") == "final" and d.get("version") in ("odd", "even")}
+            if not all(v in finals and exports.get(finals[v]["id"]) for v in ("odd", "even")):
+                continue
+            finished_roots.add(rid)
+            root = by_id.get(rid) or group[0]
+            src = str(root.get("source") or "")
+            clip = clips.get(src)
+            out.append({"key": "video:" + rid, "stage": "final", "kind": "video", "title": str(root.get("name") or "Video"),
+                        "why": f"Odd and Even are both exported. Its {len(group)} Edit and Final projects can go to the Trash; "
+                               "the finished videos stay." + (" Its clip can go too." if clip else ""),
+                        "size": clip["size"] if clip else 0,
+                        "act": {"type": "video", "projects": [d["id"] for d in group], "clip_job": clip["job"] if clip else ""}})
+        # older exports of the same project, and leftover quick previews
+        for pid, v in exports.items():
+            for j in v[1:]:
+                name = str((by_id.get(pid) or {}).get("name") or Path(j["output_path"]).stem)
+                out.append({"key": "old:" + j["id"], "stage": "final", "kind": "old", "title": name,
+                            "why": "An older export: the same project was exported again later.",
+                            "size": fsize(j["output_path"]), "act": {"type": "job", "id": j["id"]}})
+        for j in previews:
+            out.append({"key": "pre:" + j["id"], "stage": "final", "kind": "preview", "title": Path(j["output_path"]).name,
+                        "why": "A quick preview, only made to check things.", "size": fsize(j["output_path"]), "act": {"type": "job", "id": j["id"]}})
+        # made clips nobody needs any more: an older file of a clip, not used anywhere
+        for c in clips.values():
+            if not c["current"] and not c["in_use"]:
+                out.append({"key": "clip:" + c["job"], "stage": "clips", "kind": "clip", "title": c["name"],
+                            "why": "An older file of a clip that was made again, not used by any project.",
+                            "size": c["size"], "act": {"type": "job", "id": c["job"]}})
+        return out
+
     def fork_project(self, pid: str, step: int) -> Dict[str, Any]:
         """A new project that starts again from one step (keeps the first pattern cut for another video)."""
         proj = self.load_project(pid)
@@ -1642,6 +1720,7 @@ class Handler(BaseHTTPRequestHandler):
                     opts = job.pop("options", None) or {}
                     job["kind"] = opts.get("kind") or "script"
                     job["preview"] = bool(opts.get("preview"))
+                    job["group"] = "preview" if job["preview"] else "clip" if opts.get("clipset") else "final"   # Exports: grouped
                     job.pop("script", None)          # can be large, and the page does not need it
                     job.pop("plan", None)
                 self._json({"jobs": jobs})
@@ -1748,6 +1827,10 @@ class Handler(BaseHTTPRequestHandler):
                 if self._guard() is None:
                     return
                 self._json({"videos": self.state.final_videos()})
+            elif path == "/api/cleanup":
+                if self._guard() is None:
+                    return
+                self._json({"items": self.state.cleanup()})
             elif path == "/api/storage":
                 if self._guard() is None:
                     return
