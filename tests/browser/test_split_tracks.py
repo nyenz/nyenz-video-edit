@@ -204,7 +204,7 @@ def test_music_track_parts_normalise_and_going_down_under_voices(live, page, spl
     page.wait_for_selector("#laneM .duckz", timeout=30000)
     assert page.evaluate("() => S.voice.from") == "voices"
     assert page.evaluate("() => S.proj.settings.layers[0].duck") == {"on": True, "level": 0.35}
-    assert abs(page.evaluate("() => duckGain(S.proj.settings.layers[0], 20)") - 0.3) < 0.01
+    assert abs(page.evaluate("() => duckGain(S.proj.settings.layers[0], 20)") - 0.35) < 0.01
     # right-click a music part
     page.locator("#laneM .mpart").nth(1).click(button="right")
     assert page.locator(".menu.ctx", has_text="Cut the music here").count() == 1

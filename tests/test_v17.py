@@ -268,7 +268,7 @@ def _detail(rows, y0, y1):
 def _render(c, fid, frame, tmp=None):
     _, v = c.json("POST", "/api/projects", {"source": fid, "interval": 0})
     proj = v["project"]
-    proj["settings"] = dict(proj["settings"], frame=frame)
+    proj["settings"] = dict(proj["settings"], frame=frame, export_size="source")
     _, saved = c.json("PUT", "/api/projects/" + proj["id"], proj)
     status, job = c.json("POST", f"/api/projects/{proj['id']}/render", {"preview": False})
     assert status in (200, 201), job
