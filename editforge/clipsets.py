@@ -130,7 +130,7 @@ def clip_project(clipset: Dict[str, Any], clip: Dict[str, Any], duration: float)
     pieces = [{"start": p["start"], "end": p["end"], "speed": clip["speed"], "volume": clip["volume"], "mute": clip["mute"],
                "color": clip["color"]} for p in clip["parts"]]
     return project_mod.clean_project({"name": clip["name"], "source": clipset["source"], "pieces": pieces,
-                                      "settings": dict(clip["settings"])}, duration)
+                                      "settings": dict(clip["settings"], export_size="source")}, duration)   # clips keep the movie's own size
 
 
 # ------------------------------------------------------------------------------------------------ scenes

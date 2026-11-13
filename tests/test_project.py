@@ -13,7 +13,7 @@ from helpers import audio_level, color_at, count_frames, stream_info
 
 
 def project(pieces, **settings):
-    return clean_project({"name": "t", "source": "x", "pieces": pieces, "settings": dict({"quality": "high"}, **settings)}, 1e9)
+    return clean_project({"name": "t", "source": "x", "pieces": pieces, "settings": dict({"quality": "high", "export_size": "source"}, **settings)}, 1e9)
 
 
 def make(proj, src, out, **kw):

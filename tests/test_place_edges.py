@@ -54,6 +54,7 @@ def test_each_section_can_have_its_own_position(web, tmp_path):
     assert len(proj["pieces"]) == 2
     # the whole video: half size in the middle, black around. The second section only: moved to the right.
     proj["settings"]["frame"] = {"ratio": "16:9", "bg": "black", "scale": 0.5}
+    proj["settings"]["export_size"] = "source"
     proj["pieces"][1]["place"] = {"x": 0.5, "y": 0, "scale": 0.5, "rotate": 0, "junk": 5}
     saved, out = render(c, proj)
     assert saved["pieces"][1]["place"] == {"x": 0.5, "y": 0.0, "scale": 0.5, "rotate": 0.0} and "place" not in saved["pieces"][0]
@@ -75,6 +76,7 @@ def test_soft_edges_of_the_video_layer_without_a_mask(web, tmp_path):
     fid = c.upload(white_video(tmp_path, 1))
     proj = c.json("POST", "/api/projects", {"source": fid, "interval": 0})[1]["project"]
     proj["settings"]["frame"] = {"ratio": "16:9", "bg": "black", "scale": 0.5, "edge": 0}
+    proj["settings"]["export_size"] = "source"
     _, hard = render(c, proj)
     proj["settings"]["frame"]["edge"] = 60
     saved, soft = render(c, proj)
@@ -87,6 +89,7 @@ def test_soft_edges_of_the_video_layer_without_a_mask(web, tmp_path):
     assert steps(h) > 3 * steps(s)
     # soft edges alone count as a frame change (it is kept)
     proj["settings"]["frame"] = {"ratio": "original", "edge": 30, "scale": 0.8}
+    proj["settings"]["export_size"] = "source"
     saved, _ = render(c, proj)
     assert saved["settings"]["frame"]["edge"] == 30
 

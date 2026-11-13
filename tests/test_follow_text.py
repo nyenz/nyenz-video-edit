@@ -27,7 +27,7 @@ needs_cv = pytest.mark.skipif(not F.object_tracking_available(), reason="the Ope
 
 
 def project(pieces, texts=None, **settings):
-    return clean_project({"name": "t", "source": "x", "pieces": pieces, "texts": texts or [], "settings": dict({"quality": "high"}, **settings)}, 1e9)
+    return clean_project({"name": "t", "source": "x", "pieces": pieces, "texts": texts or [], "settings": dict({"quality": "high", "export_size": "source"}, **settings)}, 1e9)
 
 
 def make(proj, src, out, **kw):

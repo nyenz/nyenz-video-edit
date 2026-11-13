@@ -909,7 +909,7 @@ function paintMeter() {
 // ---- the music tracks you added (Final): cut them into parts like the video, change each part on its own, normalise,
 // and let the music go down gradually while people talk (and back up after). The export does exactly the same.
 S.msel = null;                                       // { i: music track, ks: Set of part numbers }
-const DUCK_DOWN = 0.35, DUCK_UP = 0.8, DUCK_LEVEL = 0.3;
+const DUCK_DOWN = 0.35, DUCK_UP = 0.8, DUCK_LEVEL = 0.35;
 function mparts(x) { return x.parts && x.parts.length ? x.parts : [{ end: null, volume: 1, mute: false }]; }
 /** The parts of a music track as they lie on the timeline: { k, a, b, q }. */
 function mspans(x) {
@@ -1030,7 +1030,7 @@ async function autoSongLevel(file) {
     if (i < 0) return;
     setLayer(i, { volume: vol }); scheduleSave();
     renderMusicLayers(); renderTimeline(); renderInspector(); if (S.playing) musicPlay();
-    toast("Song set to " + Math.round(vol * 100) + "% by itself (from how loud it is). It goes down while people talk.");
+    toast("Song set to " + Math.round(vol * 100) + "% by itself (from how loud it is). It goes down to 35% while people talk and fades in and out over 3 s.");
   } catch (e) { /* the 20 % start stays */ }
 }
 function setLayer(i, patch) { S.proj.settings.layers = layers().map((y, j) => (j === i ? Object.assign({}, y, patch) : y)); }
@@ -2374,14 +2374,18 @@ function startDrawBox() {
 // ================================================================== export
 function exportDialog() {
   if (!kept().length) { toast("The timeline is empty: put a piece back first.", true); return; }
-  let quality = S.proj.settings.quality || "best";
+  let quality = S.proj.settings.quality || "best", esize = S.proj.settings.export_size || "4k";
   const close = () => { scrim.remove(); dlg.remove(); };
   const scrim = el("div", { class: "scrim", onclick: close });
-  const sh = S.proj.settings.shape || "original";
-  const size = sh.startsWith("vertical") ? "1080×1920" : sh.startsWith("square") ? "1080×1080" : S.info.width + "×" + S.info.height;
+  const sh = S.proj.settings.shape || "original", fr = S.proj.settings.frame;
+  const RAT = { "16:9": 16 / 9, "4:3": 4 / 3, "2.35:1": 2.35, "2:1": 2, "1.85:1": 1.85, "9:16": 9 / 16, "3:4": 3 / 4, "1:1": 1, "4:5": 4 / 5, "5.8in": 9 / 19.5 };
+  const aspect = fr ? (RAT[fr.ratio] || S.info.width / Math.max(1, S.info.height)) : sh.startsWith("vertical") ? 9 / 16 : sh.startsWith("square") ? 1 : S.info.width / Math.max(1, S.info.height);
+  const sizeOf = (v) => { const L = { "4k": 3840, "1440": 2560, "1080": 1920 }[v] || Math.max(S.info.width, S.info.height); const w = aspect >= 1 ? L : L * aspect, h = aspect >= 1 ? L / aspect : L; return Math.round(w / 2) * 2 + "×" + Math.round(h / 2) * 2; };
+  const sizeTxt = el("span", { class: "num", text: sizeOf(esize) });
   const go = async (preview) => {
     try {
       if (quality !== S.proj.settings.quality) { S.proj.settings.quality = quality; }
+      S.proj.settings.export_size = esize;
       await saveNow();
       await api("/api/projects/" + S.id + "/render", { method: "POST", json: { preview } });
       close(); toast(preview ? "Making a quick preview" : "Exporting your video"); Exports.show();
@@ -2392,10 +2396,11 @@ function exportDialog() {
     el("div", { class: "pad" },
       el("div", { class: "box" },
         el("div", { class: "stat" }, el("span", { class: "lbl", text: "Length" }), el("b", { text: fmtTime(finalTotal()) })),
-        el("div", { class: "stat" }, el("span", { class: "lbl", text: "Size" }), el("span", { class: "num", text: size })),
+        el("div", { class: "stat" }, el("span", { class: "lbl", text: "Size" }), sizeTxt),
         el("div", { class: "stat" }, el("span", { class: "lbl", text: "Pieces" }), el("span", { class: "num", text: String(kept().length) }))),
+      el("div", { class: "field" }, el("span", { text: "Picture size" }), segmented([["4k", "4K"], ["1440", "1440p"], ["1080", "1080p"], ["source", "As the video"]], esize, (v) => { esize = v; sizeTxt.textContent = sizeOf(v); })),
       el("div", { class: "field" }, el("span", { text: "Quality" }), segmented([["best", "Best"], ["high", "High"], ["small", "Smaller file"]], quality, (v) => { quality = v; })),
-      el("p", { class: "hint", text: "The export is made from your original video, exact to the frame. A quick preview is small and fast, to check everything first." }),
+      el("p", { class: "hint", text: "4K + Best gives the sharpest result on YouTube (it streams 4K uploads at a higher quality, also to 1080p viewers). The file is big and takes longer." }),
       el("div", { class: "btns" }, btn("Quick preview", { icon: "eye", onclick: () => go(true) }), el("span", { class: "grow" }), btn("Export", { icon: "export", cls: "primary big", onclick: () => go(false) }))));
   document.body.append(scrim, dlg);
 }
@@ -2664,7 +2669,7 @@ function wire() {
   $("musicAdd").addEventListener("click", () => addFileThen("audio", "musicProg", (d) => {
     if (d.has_video) { toast("That is a video. Choose a music file such as an MP3.", true); return; }
     if (layers().length >= 8) { toast("That is the most: 8 music layers.", true); return; }
-    change(() => { S.proj.settings.layers = layers().concat([{ file: d.id, volume: 0.2, mute: false, solo: false, auto: 1, duck: { on: true, level: 0.5 } }]); }, { keepVideo: true });
+    change(() => { S.proj.settings.layers = layers().concat([{ file: d.id, volume: 0.2, mute: false, solo: false, auto: 1, duck: { on: true, level: 0.35 }, fade_in: 3, fade_out: 3 }]); }, { keepVideo: true });
     renderMusicLayers(); if (S.playing) musicPlay();
     autoSongLevel(d.id);
   }));
