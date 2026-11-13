@@ -165,3 +165,31 @@ def test_buttons_never_wait_behind_timeline_pictures(live, page, movie_id):
     assert took < 1500, took
     assert page.evaluate("() => window.__most") <= 3
     assert page.errors == []
+
+
+def test_the_timeline_follows_the_red_line_while_playing_and_follow_can_be_switched_off(live, page, movie_id):
+    open_edit(live, page, movie_id, "Follow")
+    wait_ready(page)
+    page.evaluate("() => { const z = document.getElementById('zoom'); z.value = '100'; z.dispatchEvent(new Event('input')); }")
+    page.wait_for_timeout(200)
+    sc = "document.getElementById('tlScroll')"
+    assert page.evaluate(f"() => {sc}.scrollWidth > {sc}.clientWidth * 2")
+    assert "on" in page.get_attribute("#bFollow", "class")
+    # playing, the red line runs past the right edge: the timeline turns a page and the line is in view again
+    page.evaluate(f"() => {{ {sc}.scrollLeft = 0; S.playing = true; S.t = timeAt({sc}.clientWidth + 120); renderPlayhead(); }}")
+    left = page.evaluate(f"() => {sc}.scrollLeft")
+    x = page.evaluate("() => px(S.t)")
+    w = page.evaluate(f"() => {sc}.clientWidth")
+    assert left > 0 and left < x < left + w
+    # off: the timeline stays where it is
+    page.evaluate("() => { S.playing = false; }")
+    page.click("#bFollow")
+    assert "on" not in page.get_attribute("#bFollow", "class")
+    page.evaluate(f"() => {{ {sc}.scrollLeft = 0; S.playing = true; S.t = timeAt({sc}.clientWidth + 300); renderPlayhead(); S.playing = false; }}")
+    assert page.evaluate(f"() => {sc}.scrollLeft") == 0
+    # remembered next time
+    page.reload()
+    wait_ready(page)
+    assert "on" not in page.get_attribute("#bFollow", "class")
+    page.click("#bFollow")
+    assert page.errors == []
