@@ -774,3 +774,26 @@ def test_separate_again_works_on_effects_parts(web, film):
     out_part, in_part = slice(int(44100 * 4.0), int(44100 * 5.0)), slice(int(44100 * 1.6), int(44100 * 2.4))
     A = level(fx[out_part], 3000)
     assert A > 0.02 and level(found[in_part], 3000) / A > 0.3 and level(found[out_part], 3000) / A < 0.05
+
+
+# ---------------------------------------------------------------- 1.26: Clean up suggestions, grouped exports
+def test_clean_up_suggests_older_exports_previews_and_a_finished_video(web, film):
+    c, state = web
+    pid = film["proj"]["id"]
+    a = export(c, film, {}, preview=False)
+    b = export(c, film, {}, preview=False)
+    pv = export(c, film, {}, preview=True)
+    items = {x["key"]: x for x in c.json("GET", "/api/cleanup")[1]["items"]}
+    assert "old:" + a["id"] in items and "old:" + b["id"] not in items          # the older export, never the newest
+    assert "pre:" + pv["id"] in items and items["pre:" + pv["id"]]["size"] > 0
+    jobs = {j["id"]: j for j in c.json("GET", "/api/jobs")[1]["jobs"]}
+    assert jobs[b["id"]]["group"] == "final" and jobs[pv["id"]]["group"] == "preview"
+    # a video whose Odd and Even are both exported
+    st, r = c.json("POST", f"/api/projects/{pid}/sections", {"action": "versions"})
+    assert st == 200, r
+    for v in r["versions"]:
+        f = c.json("POST", f"/api/projects/{v['id']}/to-final", {})[1]["project"]["id"]
+        st, j = c.json("POST", f"/api/projects/{f}/render", {"preview": False})
+        assert c.wait_jobs([j["id"]], 180)[0]["status"] == "done"
+    items = [x for x in c.json("GET", "/api/cleanup")[1]["items"] if x["kind"] == "video"]
+    assert len(items) == 1 and len(items[0]["act"]["projects"]) >= 5 and items[0]["stage"] == "final"
