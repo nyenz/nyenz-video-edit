@@ -41,13 +41,17 @@ LAYERS = ("voices", "music", "effects")
 LAYER_TITLES = {"voices": "Voices", "music": "Music", "effects": "Effects"}
 #: a 4th layer that only a project's cleaned-up copy has (Separate again): what was pulled out of the chosen parts
 FOUND = "found"
+#: what Separate again found, sorted again into its own tracks: voices / music / effects that were hiding in other parts
+FOUND_LAYERS = tuple("found_" + k for k in LAYERS)
+EXTRA = (FOUND,) + FOUND_LAYERS
 
 
 def layer_files(d: Path) -> Dict[str, str]:
     """The layer files of a split folder: the three layers, plus 'found' when Separate again made one."""
     out = {k: str(d / (k + ".flac")) for k in LAYERS}
-    if (d / (FOUND + ".flac")).is_file():
-        out[FOUND] = str(d / (FOUND + ".flac"))
+    for k in EXTRA:
+        if (d / (k + ".flac")).is_file():
+            out[k] = str(d / (k + ".flac"))
     return out
 
 SAMPLE_RATE = 44100

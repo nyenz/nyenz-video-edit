@@ -73,14 +73,14 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     # sound clean-up
     "noise": "off", "vocals": "keep", "voice_boost": False, "compress": False, "bass": 0.0, "treble": 0.0,
     # the three sound layers (voices / music / effects) of a split video: which split to use, and how loud each layer is
-    "mix_split": "", "mix_voices": 1.0, "mix_music": 1.0, "mix_effects": 1.0, "mix_found": 1.0,
+    "mix_split": "", "mix_voices": 1.0, "mix_music": 1.0, "mix_effects": 1.0, "mix_found": 1.0, "mix_found_voices": 1.0, "mix_found_music": 1.0, "mix_found_effects": 1.0,
     # extra music layers: [{"file": id, "volume": 0..2, "mute": bool, "solo": bool}], and which of the video's own layers are muted / soloed
     "layers": [], "mute": [], "solo": [],
     # the frame: canvas shape, background layer, move / scale / turn, mask (see clean_frame)
     "frame": None,
 }
 MIX_LAYERS = ("voices", "music", "effects")
-STEM_KEYS = MIX_LAYERS + ("found",)              # 'found': what Separate again pulled out of chosen parts (its own track)
+STEM_KEYS = MIX_LAYERS + ("found", "found_voices", "found_music", "found_effects")   # what Separate again pulled out of chosen parts
 SOUND_KEYS = ("original",) + STEM_KEYS          # the video's own sound (as one piece), or its three layers once split
 MAX_LAYERS = 8
 #: the final mix of every video meets the YouTube standard: -14 LUFS, and no peak above -1 dB (true peak)
@@ -485,8 +485,9 @@ def voice_ranges(project: Dict[str, Any], src_path: str, media: Any = None, stem
         info = SplitStore(stems_home).resolve(sid)
         if info and info["id"].split("/")[0] == source_identity(src_path)["fp"]:
             rs = find_voice(info["files"]["voices"], info["start"])
-            if "found" in info["files"]:
-                rs = sorted(rs + find_voice(info["files"]["found"], info["start"]))
+            for k in ("found", "found_voices"):
+                if k in info["files"]:
+                    rs = sorted(rs + find_voice(info["files"][k], info["start"]))
             return rs
     if media is not None and not media.has_audio:
         return []
@@ -980,8 +981,9 @@ def _layer_mix(st: Dict[str, Any], live: List[Dict[str, Any]], src_path: str, pl
     if lo < info["start"] - 0.05 or hi > info["end"] + 0.05:
         raise ScriptError("Part of your video lies outside the part whose sound was split.",
                           "Open Sound and press 'Split again' so the whole part you use is covered.")
-    if "found" not in info["files"]:
-        gains.pop("found", None)
+    for k in STEM_KEYS:
+        if k not in info["files"]:
+            gains.pop(k, None)
     return {"id": info["id"], "start": info["start"], "end": info["end"], "files": info["files"], "gain": gains}
 
 

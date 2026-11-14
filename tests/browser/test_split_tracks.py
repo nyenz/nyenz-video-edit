@@ -231,12 +231,14 @@ def test_what_separate_again_found_is_its_own_track(live, page, split_movie):
     for name in ("voices", "music", "effects"):
         shutil.copyfile(base / (name + ".flac"), d / (name + ".flac"))
     run(["-f", "lavfi", "-i", "sine=frequency=700:duration=182", "-ar", "16000", "-c:a", "flac", str(d / "found.flac")])
+    run(["-f", "lavfi", "-i", "sine=frequency=900:duration=182", "-ar", "16000", "-c:a", "flac", str(d / "found_voices.flac")])
     (d / "split.json").write_text(json.dumps({"model": SP.MODEL_ID, "start": 0.0, "end": 182.0, "derived": True, "found_from": ["music"]}))
     pid = open_split(live, page, split_movie, "Found")
     page.wait_for_selector("#laneStems .lane.stem", timeout=30000)
     page.evaluate("(id) => { S.proj.settings.mix_split = id; Layers.refresh(); }", file_fingerprint(src) + "/" + d.name)
     page.wait_for_selector("#laneStems .lane.stem[data-layer=found]", timeout=30000)
-    assert page.eval_on_selector_all("#laneStems .stem-head span", "els => els.map(e => e.textContent)") == ["Voices", "Music", "Effects", "Found again (from Music)"]
+    assert page.eval_on_selector_all("#laneStems .stem-head span", "els => els.map(e => e.textContent)") == ["Voices", "Music", "Effects", "Found again (from Music)", "Voices found again"]
+    page.wait_for_selector("#laneStems .lane.stem[data-layer=found_voices]")
     page.wait_for_function("() => S.stemPeaks.found && S.stemPeaks.found.length > 1000", timeout=30000)
     page.click("#laneStems .stem-head[data-layer=found]")
     page.click("#right input[aria-label='Mute the chosen parts']")
@@ -245,6 +247,10 @@ def test_what_separate_again_found_is_its_own_track(live, page, split_movie):
     page.evaluate("() => saveNow()")
     saved = live.call("GET", f"/api/projects/{pid}")["project"]
     assert saved["pieces"][0]["mix"]["found"]["mute"] is True
+    page.click("#laneStems .stem-head[data-layer=found_voices]")              # the sorted found track: its own controls
+    page.click("#right input[aria-label='Mute the chosen parts']")
+    page.evaluate("() => saveNow()")
+    assert live.call("GET", f"/api/projects/{pid}")["project"]["pieces"][0]["mix"]["found_voices"]["mute"] is True
     assert page.errors == []
     shutil.rmtree(d, ignore_errors=True)
 

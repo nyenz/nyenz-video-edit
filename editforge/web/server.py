@@ -401,7 +401,7 @@ class AppState:
         b = min(base["end"], max(r[1] for r in rs) + 0.5)
         if self.splitter.status().get("state") in ("downloading", "running"):
             raise EditForgeError("The sound splitter is busy with another split.", "Wait until it is done (see Activity), then try again.")
-        st = self.splitter.start(base["files"][layer], a - base["start"], b - base["start"], "fast")
+        st = self.splitter.start(base["files"][layer], a - base["start"], b - base["start"], "best")   # the strongest setting
         job = {"state": "running", "progress": 0.0, "error": "", "layer": layer, "name": str(proj.get("name") or ""), "since": time.time()}
         with self._task_lock:
             if not hasattr(self, "resplits"):
@@ -473,29 +473,40 @@ class AppState:
             out["progress"] = round(0.9 * float(sp.get("progress") or 0), 3)
         return out
 
+    def _wait_split(self, st: Dict[str, Any], job: Dict[str, Any], p0: float, p1: float) -> Dict[str, Any]:
+        """Wait for the splitter (it does one thing at a time) and return the finished split."""
+        while True:
+            cur = self.splitter.status()
+            if cur.get("state") == "ready":
+                break
+            if cur.get("state") in ("failed", "idle"):
+                raise EditForgeError(cur.get("error") or "Separating again was stopped.", "Try again.")
+            job["progress"] = p0 + (p1 - p0) * float(cur.get("progress") or 0.0)
+            time.sleep(0.4)
+        got = self.splitter.store.resolve(str(cur.get("id") or st.get("id") or ""))
+        if not got:
+            raise EditForgeError("The new separation was not found.", "Try again.")
+        return got
+
     def _resplit_run(self, pid: str, sid: str, base: Dict[str, Any], layer: str, rs: List[List[float]], a: float, move_found: bool,
                      job: Dict[str, Any], st: Dict[str, Any]) -> None:
+        """Two passes with the strongest setting: the chosen parts are split, then their clean part is split once more,
+        so what hides in them is not missed. The clean part stays on the chosen track; everything found goes to its own
+        'found again' track by kind (voices / music / effects), added to what an earlier Separate again found."""
         import subprocess
         from ..splitter import FOUND, LAYERS, MODEL_ID
         try:
-            while True:                                         # wait for the splitter (it does one thing at a time)
-                cur = self.splitter.status()
-                if cur.get("state") == "ready":
-                    break
-                if cur.get("state") in ("failed", "idle"):
-                    raise EditForgeError(cur.get("error") or "Separating again was stopped.", "Try again.")
-                time.sleep(0.4)
-            again = self.splitter.store.resolve(str(cur.get("id") or st.get("id") or ""))
-            if not again:
-                raise EditForgeError("The new separation was not found.", "Try again.")
-            off = again["start"]                                # stem time where the new split begins
+            p1 = self._wait_split(st, job, 0.0, 0.5)
+            off1 = p1["start"]                                  # stem time where pass 1 begins
+            st2 = self.splitter.start(p1["files"][layer], 0.0, 0.0, "best")
+            p2 = self._wait_split(st2, job, 0.5, 0.95)
+            off2 = off1 + p2["start"]                           # stem time where pass 2 begins
             S0 = base["start"]
             inside = "+".join(f"between(t,{r[0] - S0:.4f},{r[1] - S0:.4f})" for r in rs)
             stamp = time.strftime("%Y%m%d%H%M%S")
             d = Path(base["dir"]).parent / (Path(base["dir"]).name.split("~")[0] + "~" + stamp)
             d.mkdir(parents=True, exist_ok=True)
             norm = ":normalize=0" if get_tools().amix_normalize else ""
-            delay = int(round(off * 1000))
 
             def run(fg: str, inputs: List[str], out: Path) -> None:
                 cmd = [get_tools().ffmpeg, "-nostdin", "-v", "error", "-y"]
@@ -506,26 +517,36 @@ class AppState:
                 if r.returncode != 0:
                     raise EditForgeError("The cleaned sound could not be made.", (r.stderr or "")[-200:])
 
-            fix = "" if norm else ",volume=2"
+            def mix(parts: List[tuple], keep: Optional[str], out: Path, add: bool = False) -> None:
+                """Inside the chosen parts: the sum of parts [(file, delay s)]. Outside them: keep (or silence). With add,
+                keep is also heard inside (what was found there before stays)."""
+                ins = [keep or base["files"][layer]] + [f for f, _ in parts]
+                first = ("anull" if add else f"volume=volume=0:enable='{inside}'") if keep else "volume=0"
+                fg = f"[0:a]{first}[o];"
+                labels = []
+                for i, (_, dl) in enumerate(parts, start=1):
+                    fg += f"[{i}:a]adelay={int(round(dl * 1000))}:all=1,volume=volume=0:enable='not({inside})'[n{i}];"
+                    labels.append(f"[n{i}]")
+                fg += f"[o]{''.join(labels)}amix=inputs={len(parts) + 1}:duration=first:dropout_transition=0{norm}{'' if norm else f',volume={len(parts) + 1}'}[z]"
+                run(fg, ins, out)
+
             for k in LAYERS:
-                out = d / (k + ".flac")
                 if k != layer:                                  # the other tracks stay exactly as they were
-                    shutil.copyfile(base["files"][k], out)
+                    shutil.copyfile(base["files"][k], d / (k + ".flac"))
+            # the chosen parts: only the clean part of the second pass; everywhere else the track as it was
+            mix([(p2["files"][layer], off2)], base["files"][layer], d / (layer + ".flac"))
+            if base["files"].get(FOUND):                        # an older combined 'found again' track stays as it was
+                shutil.copyfile(base["files"][FOUND], d / (FOUND + ".flac"))
+            for k in LAYERS:                                    # what both passes found, by kind
+                key = "found_" + k
+                had = base["files"].get(key)
+                if k == layer:
+                    if had:
+                        shutil.copyfile(had, d / (key + ".flac"))
                     continue
-                # the chosen parts: only the clean part of the new split; everywhere else the track as it was
-                run(f"[0:a]volume=volume=0:enable='{inside}'[o];[1:a]adelay={delay}:all=1,volume=volume=0:enable='not({inside})'[n];"
-                    f"[o][n]amix=inputs=2:duration=first:dropout_transition=0{norm}{fix}[z]", [base["files"][k], again["files"][layer]], out)
-            # the 'found' track: what was pulled out of the chosen parts (the new split's other layers), added to what an
-            # earlier Separate again found. Silent everywhere else.
-            others = [k for k in LAYERS if k != layer]
-            had = base["files"].get(FOUND)
-            ins = [had or base["files"][layer], again["files"][others[0]], again["files"][others[1]]]
-            fg = (f"[0:a]{'anull' if had else 'volume=0'}[o];"
-                  f"[1:a][2:a]amix=inputs=2:duration=longest:dropout_transition=0{norm}{fix},adelay={delay}:all=1,"
-                  f"volume=volume=0:enable='not({inside})'[n];[o][n]amix=inputs=2:duration=first:dropout_transition=0{norm}{fix}[z]")
-            run(fg, ins, d / (FOUND + ".flac"))
+                mix([(p1["files"][k], off1), (p2["files"][k], off2)], had, d / (key + ".flac"), add=True)
             found_from = sorted(set(base.get("found_from") or []) | {layer})
-            atomic_write_json(d / "split.json", {"model": MODEL_ID, "start": base["start"], "end": base["end"], "seconds": 0, "mode": "fast",
+            atomic_write_json(d / "split.json", {"model": MODEL_ID, "start": base["start"], "end": base["end"], "seconds": 0, "mode": "best",
                                                  "when": int(time.time()), "version": __version__, "derived": True, "from": sid,
                                                  "quality": None, "found_from": found_from})
             new_id = sid.split("/")[0] + "/" + d.name

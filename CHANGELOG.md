@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.27.0
+* **Fixed: "Found again" was not in the exported video.** Every split track is in the export now, also what Separate
+  again found.
+* **Separate again is much stronger**: it uses the best setting and goes over the chosen parts twice, so less is missed.
+* **What it finds is sorted**: voices go to **Voices found again**, music to **Music found again**, effects to **Effects
+  found again**, each its own track with loudness, mute, lock, Even out and Go down. So voices hiding in Effects (or in
+  Music) end up as voices. Works on Voices, Music and Effects parts.
+
 ## 1.26.0
 * **Clean up** (Home, left side, with a count): a list of what you most likely do not need any more, so storage stays free
   and nothing is removed by mistake:
