@@ -71,7 +71,7 @@ def test_the_mix_check_shows_the_measured_loudness_and_a_live_meter(live, page, 
     page.wait_for_function("() => fetch('/api/jobs', { headers: { 'X-EditForge-Token': TOKEN } }).then(r => r.json()).then(d => d.jobs.length === 0)", timeout=30000)   # no leftover file
     page.evaluate("() => quickPreview()")                                    # a preview you ask for stays, with its measured loudness
     page.wait_for_selector("#exportsDrawer .job .facts:has-text('LUFS')", timeout=240000)
-    text = page.inner_text("#exportsDrawer .job")
+    text = page.locator("#exportsDrawer .job:has(.facts:has-text('LUFS'))").first.inner_text()
     assert "meets the YouTube standard" in text, text
     page.click("#exportsDrawer .job >> text=Watch")
     page.wait_for_selector("#exportsDrawer .lmeter")

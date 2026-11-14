@@ -452,7 +452,7 @@ def test_each_piece_can_have_its_own_layer_loudness(web, film):
 def test_locks_groups_and_group_marks_are_kept():
     s = P.clean_settings({"locks": {"music": True, "voices": 0, "junk": True},
                           "sound_groups": [{"id": "g1abc", "name": "Vocals in music", "locked": True}, {"id": "../x", "name": "bad"}]})
-    assert s["locks"] == {"video": False, "sound": False, "voices": False, "music": True, "effects": False, "found": False}
+    assert s["locks"] == {"video": False, "sound": False, "voices": False, "music": True, "effects": False, "found": False, "found_voices": False, "found_music": False, "found_effects": False}
     assert s["sound_groups"] == [{"id": "g1abc", "name": "Vocals in music", "locked": True}]
     mix = P.clean_piece_mix({"music": {"volume": 1, "mute": False, "group": "g1abc"}, "voices": {"volume": 1, "group": "bad id"}})
     assert mix == {"music": {"volume": 1.0, "mute": False, "group": "g1abc"}}
