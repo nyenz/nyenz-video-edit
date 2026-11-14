@@ -131,7 +131,9 @@ class ItemBuilder:
         self.guard = 0.25 / self.src_fps
         # the video's sound can come from its three layers (voices / music / effects) instead of the original track
         self.mix = tl.audio.mix if (tl.audio.mix and media.has_audio) else None
-        self.layers = [n for n in ("voices", "music", "effects") if float(self.mix["gain"].get(n, 1.0)) > 0.001] if self.mix else []
+        # every track of the split that is heard, also what Separate again found (it was left out of the export before)
+        order = ("voices", "music", "effects", "found", "found_voices", "found_music", "found_effects")
+        self.layers = [n for n in order if n in self.mix["files"] and float(self.mix["gain"].get(n, 1.0)) > 0.001] if self.mix else []
         #: how many FFmpeg inputs one item uses: the source, plus one per layer that is heard
         self.stride = 1 + len(self.layers)
 

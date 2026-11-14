@@ -146,6 +146,7 @@ def test_clean_up_list_and_grouped_exports(live, page, movie_id):
     assert page.locator("#tidyDrawer .tidy-row").count() == n - 1
     page.evaluate("() => localStorage.removeItem('ef.tidy.keep')")
     page.reload()
+    page.wait_for_selector("#tidyCount:not([hidden])")
     page.click("#tidyBtn")
     page.locator("#tidyDrawer .tidy-row", has_text="Quick preview").first.locator("button:has-text('Clear')").click()
     page.click(".dialog button:has-text('Clear')")

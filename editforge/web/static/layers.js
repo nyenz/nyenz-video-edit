@@ -4,12 +4,12 @@
 const Layers = (() => {
   const BASE = ["voices", "music", "effects"];
   const NAMES = BASE.slice();                      // + "found" once Separate again pulled something out of chosen parts
-  const TITLE = { voices: "Voices", music: "Music", effects: "Effects", found: "Found again" };
-  const WHAT = { voices: "People talking", music: "Songs and score", effects: "Gunshots, fights, cars, steps", found: "What Separate again pulled out" };
-  const ICON = { voices: "face", music: "music", effects: "sparkles", found: "search" };
+  const TITLE = { voices: "Voices", music: "Music", effects: "Effects", found: "Found again", found_voices: "Voices found again", found_music: "Music found again", found_effects: "Effects found again" };
+  const WHAT = { voices: "People talking", music: "Songs and score", effects: "Gunshots, fights, cars, steps", found: "What Separate again pulled out", found_voices: "Voices hiding in other parts", found_music: "Music hiding in other parts", found_effects: "Effects hiding in other parts" };
+  const ICON = { voices: "face", music: "music", effects: "sparkles", found: "search", found_voices: "face", found_music: "music", found_effects: "sparkles" };
   /** The tracks of the attached split: the three, plus 'found' when it has one. */
   function setNames(sp) {
-    const want = BASE.concat(sp && (sp.layers || []).includes("found") ? ["found"] : []);
+    const want = BASE.concat(["found", "found_voices", "found_music", "found_effects"].filter((k) => sp && (sp.layers || []).includes(k)));
     if (want.join() === NAMES.join()) return false;
     NAMES.splice(0, NAMES.length, ...want);
     const from = (sp && sp.found_from) || [];

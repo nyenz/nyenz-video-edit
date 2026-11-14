@@ -45,17 +45,17 @@ function kept() { return cur().filter((p) => !p.off); }
 function locked() { return S.viewStep !== null || !!S.waiting || trackLocked("video"); }
 /** A locked track (like CapCut): its sections cannot be trimmed, moved, split, sped up or removed (video), or made louder,
  *  quieter or muted (sound). Positions on the picture can still be changed. */
-const STEM_LOCKS = ["voices", "music", "effects", "found"];
+const STEM_LOCKS = ["voices", "music", "effects", "found", "found_voices", "found_music", "found_effects"];
 function trackLocked(k) {
   const l = S.proj && S.proj.settings && S.proj.settings.locks;
   if (!l) return false;
   return !!l[k] || (STEM_LOCKS.includes(k) && !!l.sound);   // the sound lock covers the split tracks too
 }
 function toggleLock(k) {
-  const l = Object.assign({ video: false, sound: false, voices: false, music: false, effects: false, found: false }, S.proj.settings.locks || {});
+  const l = Object.assign({ video: false, sound: false, voices: false, music: false, effects: false, found: false, found_voices: false, found_music: false, found_effects: false }, S.proj.settings.locks || {});
   if (STEM_LOCKS.includes(k) && l.sound) { toast("The whole sound is locked. Unlock it at the Sound track first.", true); return; }
   l[k] = !l[k]; S.proj.settings.locks = l; scheduleSave();
-  const what = { video: "Video track ", sound: "Sound track ", voices: "Voices track ", music: "Music track ", effects: "Effects track ", found: "Found again track " }[k];
+  const what = { video: "Video track ", sound: "Sound track " }[k] || ((Layers.TITLE[k] || k) + " track ");
   toast(what + (l[k] ? "locked: it cannot be changed by mistake." : "unlocked."));
   refreshAll({ keepVideo: true });
 }
@@ -1252,7 +1252,7 @@ function renderStemLanes() {
     }
   }
   const sc = $("tlScroll"), left = sc.scrollLeft, w = sc.clientWidth, H = 32, dpr = Math.min(2, window.devicePixelRatio || 1), R = S.peakRate || 50;
-  const colour = { voices: "#5ab8ff", music: "#c08cff", effects: "#ffb35a", found: "#7ee081" };
+  const colour = { voices: "#5ab8ff", music: "#c08cff", effects: "#ffb35a", found: "#7ee081", found_voices: "#8fd0ff", found_music: "#d6b4ff", found_effects: "#ffcf8f" };
   for (const lane of box.querySelectorAll(".lane.stem")) {
     const n = lane.dataset.layer, cv = lane.querySelector("canvas"), P = S.stemPeaks[n];
     const whole = kept().length && kept().every((p) => aselHas(p, n));
@@ -1357,7 +1357,7 @@ function stemMenu(e) {
     "-",
     ["Same loudness", "sliders", () => normaliseParts(false), { off: lk }],
     ["Same loudness, keep balance", "sliders", () => normaliseParts(true), { off: lk }],
-    aselLayers().length === 1 && aselLayers()[0] !== "found" ? ["Separate these parts again", "layers", () => separateAgain(), { off: lk }] : null,
+    aselLayers().length === 1 && !aselLayers()[0].startsWith("found") ? ["Separate these parts again", "layers", () => separateAgain(), { off: lk }] : null,
     ["Even out (gentle)", "pulse", () => stemChange((c) => { c.even = 1; }), { off: lk }],
     ["Even out (strong)", "pulse", () => stemChange((c) => { c.even = 2; }), { off: lk }],
     list.some(({ p, n: k }) => p.mix && p.mix[k] && p.mix[k].even) ? ["Stop evening out", "x", () => stemChange((c) => { c.even = 0; }), { off: lk }] : null,
@@ -1460,7 +1460,7 @@ async function separateAgain() {
   const n = layers[0], locked = list.find(({ p, n: k }) => partLocked(p, k));
   if (locked) { toast(partLocked(locked.p, locked.n), true); return; }
   const move = await askYes("Separate the " + list.length + " chosen " + Layers.TITLE[n] + " part" + (list.length > 1 ? "s" : "") + " again? " +
-    "The app splits just these parts once more. What does not belong on " + Layers.TITLE[n] + " (for example singing left in the music) is taken out of them and put on a new track, 'Found again', under the others. " +
+    "The app splits just these parts twice more, with its strongest setting. What does not belong on " + Layers.TITLE[n] + " (for example singing left in the music) is taken out and sorted onto its own tracks under the others: Voices found again, Music found again, Effects found again. " +
     "There you can hear it, turn it up or down, mute it or lock it. Ctrl + Z goes back to the sound before.", "Separate again");
   if (!move) return;
   try {
@@ -1484,7 +1484,7 @@ function followResplit(r) {
     const before = S.resplitUndo || snapshot();
     S.proj.settings.mix_split = r.id; S.undo.push(before); S.redo = [];
     S.stemFor = null; Layers.refresh();
-    toast("Done. What was taken out is on the new 'Found again' track (under Effects). Ctrl + Z goes back to the sound before.");
+    toast("Done. What was taken out is sorted onto the 'found again' tracks under Effects (voices, music, effects). Ctrl + Z goes back to the sound before.");
   } else if (r.state === "failed") toast(r.error || "Separating again failed.", true);
   if (n) n.textContent = "";
 }
@@ -1519,14 +1519,14 @@ function renderStemInspector(R) {
     evenField(same(list.map(({ p, n }) => (p.mix && p.mix[n] && p.mix[n].even) || 0)), (v) => stemChange((c) => { c.even = v; }), lk),
     fadeFields(same(list.map(({ p, n }) => (p.mix && p.mix[n] && p.mix[n].fin) || 0)), same(list.map(({ p, n }) => (p.mix && p.mix[n] && p.mix[n].fout) || 0)),
       (k, v) => stemChange((c) => { c[k] = v; }), lk),
-    layersIn.length === 1 && layersIn[0] !== "found" ? el("div", { class: "btns" }, btn("Separate again", { icon: "layers", title: "Split just these parts once more (for example voices left in the music)", onclick: () => separateAgain() }), el("span", { class: "note", id: "resplitNote" })) : null,
+    layersIn.length === 1 && !layersIn[0].startsWith("found") ? el("div", { class: "btns" }, btn("Separate again", { icon: "layers", title: "Split just these parts once more (for example voices left in the music)", onclick: () => separateAgain() }), el("span", { class: "note", id: "resplitNote" })) : null,
     oneGroup ? el("div", { class: "grp-now" }, dotFor(oneGroup.id), el("span", { text: "Group: " + oneGroup.name }),
       btn(oneGroup.locked ? "Unlock" : "Lock", { icon: oneGroup.locked ? "unlock" : "lock", cls: "sm ghost", onclick: () => groupEdit(oneGroup.id, "lock") }))
       : btn("Group these parts", { icon: "combine", cls: "ghost wide", title: "Give the chosen parts a name, to choose, lock and change them together later", onclick: () => makeGroup() }),
     lockedN ? el("p", { class: "hint warn", text: lockedN + " of these parts " + (lockedN === 1 ? "is" : "are") + " locked (track or group): they stay as they are." }) : null,
     el("p", { class: "hint", text: "Click parts on the sound tracks (Ctrl + click for more, Shift + click for all in between), or a track's name for the whole track. Ctrl + click a second track's name to choose two tracks together. Cuts are shared with the video sections." }));
   R.append(pad);
-  if (layersIn.length === 1 && layersIn[0] !== "found") R.append(stemDuckBox(layersIn[0], trackLocked(layersIn[0])));
+  if (layersIn.length === 1 && !layersIn[0].startsWith("found")) R.append(stemDuckBox(layersIn[0], trackLocked(layersIn[0])));
   const gb = groupsBox(); if (gb) R.append(gb);
   paintRange(vol);
 }
