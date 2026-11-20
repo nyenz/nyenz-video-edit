@@ -1,6 +1,6 @@
 # Makes the vision model files once and puts them on a release ("vision-model-1"), so the app (and setup) can download them:
-# * transnetv2.onnx: TransNetV2 (Soucek & Lokoc, MIT licence), the neural shot-change finder, converted from its published
-#   TensorFlow weights to ONNX and checked against TensorFlow on the same frames.
+# * transnetv2.onnx: TransNetV2 (Soucek & Lokoc, MIT licence), the neural shot-change finder: its published TensorFlow weights,
+#   moved into the authors' PyTorch copy, exported to ONNX (100-frame window) and checked against TensorFlow on the same frames.
 # * vittrack.onnx: VitTrack from the OpenCV model zoo (Apache 2.0), the neural object tracker used by cv2.TrackerVit.
 # Run it by hand (Actions > Vision models > Run workflow). It only adds files; nothing in the app changes by running it.
 name: Vision models
@@ -23,7 +23,9 @@ jobs:
         with:
           python-version: "3.10"
       - name: Tools
-        run: python -m pip install "tensorflow-cpu==2.15.*" "tf2onnx==1.16.1" "onnx==1.15.0" "onnxruntime==1.17.3" "numpy<2" "protobuf<4"
+        run: |
+          python -m pip install "tensorflow-cpu==2.15.*" "onnx==1.15.0" "onnxruntime==1.17.3" "numpy<2" "protobuf<4"
+          python -m pip install "torch==2.2.2" --index-url https://download.pytorch.org/whl/cpu
       - name: Download
         run: |
           B=https://media.githubusercontent.com/media/soCzech/TransNetV2/master/inference/transnetv2-weights
@@ -32,37 +34,74 @@ jobs:
           curl -fsSL -o tn/variables/variables.data-00000-of-00001 "$B/variables/variables.data-00000-of-00001"
           curl -fsSL -o tn/variables/variables.index "$B/variables/variables.index"
           curl -fsSL -o vittrack.onnx https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/object_tracking_vittrack/object_tracking_vittrack_2023sep.onnx
-          ls -la tn tn/variables vittrack.onnx
-      - name: Look at the model
-        run: saved_model_cli show --dir tn --all | head -60
+          git clone -q --depth 1 https://github.com/soCzech/TransNetV2.git src
+          ls -la tn tn/variables vittrack.onnx src/inference-pytorch
+      # The TensorFlow graph cannot be turned into ONNX directly (its colour histogram uses a 2-D segment sum that ONNX lacks), so
+      # the authors' own PyTorch copy of the network is filled with the TensorFlow weights (their convert_weights.py) and that is
+      # exported. The histogram is rewritten with plain maths (same numbers), and the window is fixed at 100 frames, as the app uses it.
       - name: Convert to ONNX
+        working-directory: src/inference-pytorch
         run: |
-          python - <<'EOF'
-          import numpy as np, tensorflow as tf, tf2onnx, onnx
-          m = tf.saved_model.load("tn")
-          # the model takes [batch, frames, 27, 48, 3] float32 (0..255) and gives two outputs per frame
-          spec = (tf.TensorSpec([1, None, 27, 48, 3], tf.float32, name="frames"),)
-          @tf.function(input_signature=spec)
-          def run(frames):
-              single, many = m(frames)
-              return {"single": tf.sigmoid(single), "many": tf.sigmoid(many["many_hot"])}
-          model, _ = tf2onnx.convert.from_function(run, input_signature=spec, opset=17, output_path="transnetv2.onnx")
-          print("inputs", [i.name for i in model.graph.input], "outputs", [o.name for o in model.graph.output])
-          # the same answers as TensorFlow?
-          import onnxruntime as ort
+          python - <<'PY'
+          import numpy as np, tensorflow as tf, torch, torch.nn.functional as F
+          import transnetv2_pytorch as T
+          from convert_weights import convert_weights
+
+          def hist(frames):                              # frames: float 0..255, [B, T, 27, 48, 3]
+              f = torch.floor(frames / 32.0)
+              b = f[..., 0] * 64 + f[..., 1] * 8 + f[..., 2]
+              n = frames.shape[0] * frames.shape[1]
+              b = b.reshape(n, -1).long() + (torch.arange(n) * 512).view(-1, 1)
+              h = torch.zeros(n * 512).scatter_add(0, b.reshape(-1), torch.ones(b.numel()))
+              return F.normalize(h.view(frames.shape[0], frames.shape[1], 512), p=2, dim=2)
+          T.ColorHistograms.compute_color_histograms = staticmethod(hist)
+
+          tm, tfm = convert_weights("../../tn")
+          tm.eval()
+
+          class Run(torch.nn.Module):
+              def __init__(self, m):
+                  super().__init__()
+                  self.m = m
+              def forward(self, frames):
+                  m = self.m
+                  x = frames.permute(0, 4, 1, 2, 3) / 255.0
+                  feats = []
+                  for block in m.SDDCNN:
+                      x = block(x)
+                      feats.append(x)
+                  x = torch.mean(x, dim=[3, 4]).permute(0, 2, 1)
+                  x = torch.cat([m.frame_sim_layer(feats), x], 2)
+                  x = torch.cat([m.color_hist_layer(frames), x], 2)
+                  x = F.relu(m.fc1(x))
+                  return torch.sigmoid(m.cls_layer1(x)), torch.sigmoid(m.cls_layer2(x))
+
+          net = Run(tm).eval()
           rng = np.random.default_rng(1)
-          x = rng.integers(0, 255, (1, 100, 27, 48, 3)).astype(np.float32)
-          x[:, 50:] = x[:, 50:] * 0.3            # a hard change half way
-          want = run(tf.constant(x))
-          s = ort.InferenceSession("transnetv2.onnx", providers=["CPUExecutionProvider"])
-          got = s.run(None, {s.get_inputs()[0].name: x})
-          names = [o.name for o in s.get_outputs()]
-          for name, g in zip(names, got):
-              w = want[name].numpy()
-              print(name, g.shape, float(np.abs(g - w).max()))
-              assert np.abs(g - w).max() < 1e-3
-          print("same as TensorFlow: ok")
-          EOF
+          tests = []
+          for k in range(4):
+              x = rng.integers(0, 256, (1, 100, 27, 48, 3)).astype(np.float32)
+              if k:                                      # a hard change, and plain colour blocks, as real video has
+                  x[:, 30 * k:] = rng.integers(0, 256, (1, 1, 1, 1, 3)).astype(np.float32)
+              tests.append(x)
+          with torch.no_grad():
+              torch.onnx.export(net, torch.from_numpy(tests[0]), "../../transnetv2.onnx", input_names=["frames"],
+                                output_names=["single", "many"], opset_version=17)
+          import onnxruntime as ort
+          s = ort.InferenceSession("../../transnetv2.onnx", providers=["CPUExecutionProvider"])
+          worst = 0.0
+          for x in tests:
+              ts, tmn = tfm(tf.constant(x))
+              want = [tf.sigmoid(ts).numpy(), tf.sigmoid(tmn["many_hot"]).numpy()]
+              got = s.run(None, {"frames": x})
+              for g, w in zip(got, want):
+                  d = float(np.abs(g.reshape(-1) - w.reshape(-1)).max())
+                  worst = max(worst, d)
+                  print(g.shape, w.shape, "biggest difference", d)
+          assert worst < 5e-3, worst
+          print("same as TensorFlow: ok", worst)
+          PY
+          cd ../..
           ls -la transnetv2.onnx
           sha256sum transnetv2.onnx vittrack.onnx
       - name: Release
