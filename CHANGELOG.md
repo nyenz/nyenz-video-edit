@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.29.0
+* **A neural scene finder**: TransNetV2, a network trained only to find where one shot ends and the next begins (hard
+  cuts, dissolves and fades). It looks at every frame of the video and works together with the old finder: each checks
+  the other, so more real scene changes are found and fewer false ones (a flash, a hand in front of the lens, a dip to
+  black, a quick move). Hard cuts still land on their exact frame.
+* It reads the video only once (the same pass as before) and runs while the video is read.
+* **Find scene changes in this section** uses it too, with a lower bar, so softer changes inside a section are found.
+* Videos you already opened are looked at again once, with the new finder.
+* The model (31 MB) is downloaded once by setup or the update. Until it is there, the old finder is used.
+
 ## 1.28.0
 * **Zoom in 10 times further**: all the way in, every frame of the video is its own exact picture on the timeline, and
   the ruler shows every frame (with its number). Cut on the exact frame you want (S).

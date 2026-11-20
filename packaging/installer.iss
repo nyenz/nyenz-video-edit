@@ -1,4 +1,4 @@
-; Inno Setup recipe for NyenzEdit-Setup.exe. Build with:  iscc /DMyVersion=1.28.0 packaging\installer.iss
+; Inno Setup recipe for NyenzEdit-Setup.exe. Build with:  iscc /DMyVersion=1.29.0 packaging\installer.iss
 ; It installs for the current user only, so Windows does not ask for an administrator password.
 ; The AppId never changes: a new version installs over the old one (also over the versions called EditForge).
 #ifndef MyVersion
@@ -105,7 +105,7 @@ end;
 
 procedure InitializeWizard();
 begin
-  ModelPage := CreateDownloadPage('Getting the AI models', 'Sound splitting and captions need these. They are downloaded once now, so nothing is downloaded later.', @OnModelProgress);
+  ModelPage := CreateDownloadPage('Getting the AI models', 'Sound splitting, captions and scene finding need these. They are downloaded once now, so nothing is downloaded later.', @OnModelProgress);
   ModelPage.ShowBaseNameInsteadOfUrl := True;
 end;
 

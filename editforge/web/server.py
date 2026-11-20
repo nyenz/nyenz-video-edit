@@ -189,7 +189,8 @@ class AppState:
         for d in (self.projects, self.thumbs, self.clipsets):
             d.mkdir(parents=True, exist_ok=True)
         self._task_lock = threading.RLock()            # one change at a time to a project's background task
-        self.scenes = clip_mod.SceneFinder(self.home / "scenes", self.fingerprint, read_from=self._quick_copy, on_done=self._scenes_done)
+        self.scenes = clip_mod.SceneFinder(self.home / "scenes", self.fingerprint, read_from=self._quick_copy, on_done=self._scenes_done,
+                                            home=self.home)
         self.recipes_file = self.home / "recipes.json"
         self._fp_cache: Dict[Tuple[str, int, int], str] = {}
         self._thumb_slots = threading.Semaphore(3)
@@ -427,6 +428,11 @@ class AppState:
         if feats is None:
             return {"state": "ready", "cuts": [t for t in st["scenes"] if start + 0.1 < t < end - 0.1]}
         found = shots.find_cuts(feats, sens, start + 0.1, end - 0.1)
+        probs, rate = self.scenes.chances(src)
+        if probs is not None:                    # the network's own chances, with a lower bar: softer changes count too
+            from ..analysis import transnet
+            bar = max(0.08, transnet.THRESHOLD / max(1.0, sens) ** 2)
+            found = [c for c in transnet.combine(found, probs, rate, bar, feats) if start + 0.1 < c.t < end - 0.1]
         out = []
         for c in found:
             t = shots.refine_cut(src, c.t, radius=0.35) if c.kind == "cut" else c.t

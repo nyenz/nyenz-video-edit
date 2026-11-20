@@ -135,6 +135,16 @@ def clip_project(clipset: Dict[str, Any], clip: Dict[str, Any], duration: float)
 
 # ------------------------------------------------------------------------------------------------ scenes
 SCENE_VERSION = 2          # raise it when the scene finder gets better: older saved results are then found again
+NET_VERSION = 3            # results made with the shot-change network (transnet.py); once the network is in place, older results are found again
+
+
+def _net_model(home: Optional[Path]) -> Optional[Path]:
+    """The shot-change network's file when it can be used, else None."""
+    try:
+        from .analysis import transnet
+        return transnet.model_file(home) if transnet.available(home) else None
+    except Exception:  # noqa: BLE001 - never stops the scene finder
+        return None
 
 
 class SceneFinder:
@@ -150,8 +160,9 @@ class SceneFinder:
     MIN_SCENE = 0.6
 
     def __init__(self, folder: Path, fingerprint: Callable[[str], str], *, read_from: Optional[Callable[[str, float], Optional[str]]] = None,
-                 on_done: Optional[Callable[[str], None]] = None, slots: Optional[int] = None):
+                 on_done: Optional[Callable[[str], None]] = None, slots: Optional[int] = None, home: Optional[Path] = None):
         self.folder = Path(folder)
+        self.home = home                         # where the models folder is (None: the usual place)
         self.folder.mkdir(parents=True, exist_ok=True)
         self.fingerprint = fingerprint
         self.read_from = read_from               # a smaller copy of the same video, quicker to read (None: the video itself)
@@ -168,7 +179,7 @@ class SceneFinder:
         f = self._file(src)
         try:
             data = json.loads(f.read_text(encoding="utf-8"))
-            if int(data.get("v") or 1) >= SCENE_VERSION:
+            if int(data.get("v") or 1) >= self.version():
                 return {"state": "ready", "progress": 1.0, "scenes": data["scenes"], "kinds": data.get("kinds") or [], "error": ""}
         except (OSError, ValueError, KeyError, TypeError):
             pass
@@ -180,6 +191,21 @@ class SceneFinder:
                 out["place"] = 1 + [k for _, k in waiting].index(str(f))
         out["scenes"] = []
         return out
+
+    def version(self) -> int:
+        """Saved results older than this are found again."""
+        return NET_VERSION if _net_model(self.home) else SCENE_VERSION
+
+    def chances(self, src: str) -> Tuple[Any, float]:
+        """The network's chance of a change at every frame, and that frame rate ((None, 0) when it was not used)."""
+        try:
+            import numpy as np
+            z = np.load(str(self._file(src).with_suffix(".npz")))
+            if "net" in z.files:
+                return z["net"].astype(np.float32), float(z["net_rate"])
+        except Exception:  # noqa: BLE001 - no file
+            pass
+        return None, 0.0
 
     def jobs(self) -> List[Dict[str, Any]]:
         """Every video being looked at or waiting (for the Activity list)."""
@@ -248,21 +274,44 @@ class SceneFinder:
                         quick = self.read_from(src, duration)
                     except Exception:  # noqa: BLE001 - then the video itself
                         quick = None
+                model = _net_model(self.home)
+                net: List[Any] = []
+
+                def read(where: Optional[str]) -> Tuple[Any, Any]:
+                    net.clear()
+                    stream = None
+                    if model is not None:
+                        from .analysis import transnet
+                        stream = transnet.Streamer(model)
+                        net.append(stream)
+                    try:
+                        return shots.extract_all(src, duration, read_from=where, cancel=cancel, on_big=stream.push if stream else None,
+                                                 progress=lambda t: prog(0.97 * t / max(duration, 0.1)))
+                    except BaseException:
+                        if stream is not None:
+                            stream.close()
+                        raise
                 try:
-                    feats, fine = shots.extract_all(src, duration, read_from=quick, cancel=cancel,
-                                                    progress=lambda t: prog(0.97 * t / max(duration, 0.1)))
+                    feats, fine = read(quick)
                 except Cancelled:
                     raise
                 except Exception:                         # noqa: BLE001 - the smaller copy could not be read: the video itself
                     if not quick:
                         raise
-                    feats, fine = shots.extract_all(src, duration, cancel=cancel, progress=lambda t: prog(0.97 * t / max(duration, 0.1)))
-                cuts = shots.refine_fine(shots.find_cuts(feats), fine)
+                    feats, fine = read(None)
+                found = shots.find_cuts(feats)
                 import numpy as np
+                extra: Dict[str, Any] = {}
+                if net:
+                    from .analysis import transnet
+                    probs = net[0].finish()
+                    found = transnet.combine(found, probs, fine.rate, feats=feats)
+                    extra = {"net": probs.astype(np.float16), "net_rate": fine.rate}
+                cuts = shots.refine_fine(found, fine)
                 tmp = f.with_suffix(".tmp.npz")
-                np.savez_compressed(str(tmp), fps=feats.fps, thumbs=feats.thumbs, hist=feats.hist)
+                np.savez_compressed(str(tmp), fps=feats.fps, thumbs=feats.thumbs, hist=feats.hist, **extra)
                 tmp.replace(f.with_suffix(".npz"))
-                atomic_write_json(f, {"v": SCENE_VERSION, "scenes": [round(float(c.t), 4) for c in cuts], "kinds": [c.kind for c in cuts],
+                atomic_write_json(f, {"v": NET_VERSION if net else SCENE_VERSION, "scenes": [round(float(c.t), 4) for c in cuts], "kinds": [c.kind for c in cuts],
                                       "duration": duration, "when": time.time()})
             else:
                 from .analysis.scenes import detect_scene_scores, scenes_from_scores

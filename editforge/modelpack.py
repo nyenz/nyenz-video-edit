@@ -5,7 +5,7 @@ the part of the installer that downloads them). Every file has a size and a SHA-
 
 * **Sound splitting** (Voices, Music, Effects): one 76 MB file.
 * **Captions** (Whisper base): four files, about 148 MB.
-* The **scene finder** needs no model file (it looks at the pictures itself).
+* **Scene changes** (TransNetV2, MIT licence): one 31 MB file. Without it the scene finder still works with its own picture checks.
 """
 
 from __future__ import annotations
@@ -32,6 +32,8 @@ FILES: List[Dict[str, object]] = [
      "size": 2203239, "sha256": "fb7b63191e9bb045082c79fd742a3106a12c99513ab30df4a0d47fa6cb6fd0ab"},
     {"model": "captions", "dir": WHISPER_DIR, "name": "vocabulary.txt", "url": RELEASES + "caption-model-1/whisper-base-vocabulary.txt",
      "size": 459861, "sha256": "34ce3fe1c5041027b3f8d42912270993f986dbc4bb34cf27f951e34a1e453913"},
+    {"model": "scenes", "dir": "", "name": "transnetv2.onnx", "url": RELEASES + "vision-model-1/transnetv2.onnx",
+     "size": 31261595, "sha256": "d7605e22428d583ec8d8b0c58085d124c57681f04f3d4faf4d76a8c53ef495b5"},
 ]
 
 
