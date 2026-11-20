@@ -27,6 +27,7 @@ from ..core.ffmpeg import get_tools
 
 FPS = 12.0                    # frames looked at per second
 W, H = 32, 18                 # size of the tiny frame
+BW, BH = 48, 27               # size of the frame the shot-change network looks at (transnet.py)
 TW, TH = 16, 9                # size of the picture fingerprint kept for every frame
 BINS = 4                      # colour bins per channel (4 x 4 x 4 = 64)
 
@@ -69,10 +70,10 @@ class Features:
 
 # ------------------------------------------------------------------------------------------------ reading frames
 def _tiny_frames(args: List[str], count_hint: int, cancel: Optional[threading.Event],
-                 progress: Optional[Callable[[float], None]] = None):
-    """Run FFmpeg and yield (n x 32x18x3 uint8) blocks of tiny frames."""
+                 progress: Optional[Callable[[float], None]] = None, w: int = W, h: int = H):
+    """Run FFmpeg and yield (n x h x w x 3 uint8) blocks of tiny frames (32 x 18 unless told otherwise)."""
     import numpy as np
-    size = W * H * 3
+    size = w * h * 3
     proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
     assert proc.stdout is not None
     done = 0
@@ -91,7 +92,7 @@ def _tiny_frames(args: List[str], count_hint: int, cancel: Optional[threading.Ev
             done += n
             if progress:
                 progress(done)
-            yield np.frombuffer(buf, dtype=np.uint8).reshape(n, H, W, 3)
+            yield np.frombuffer(buf, dtype=np.uint8).reshape(n, h, w, 3)
     finally:
         try:
             proc.kill()
@@ -156,24 +157,35 @@ class Fine:
 
 
 def extract_all(path: str, duration: float, *, read_from: Optional[str] = None, fps: float = FPS,
-                cancel: Optional[threading.Event] = None, progress: Optional[Callable[[float], None]] = None) -> Tuple[Features, Fine]:
+                cancel: Optional[threading.Event] = None, progress: Optional[Callable[[float], None]] = None,
+                on_big: Optional[Callable[[Any], None]] = None) -> Tuple[Features, Fine]:
     """One pass over the video: every frame is looked at (for the exact frame of cuts), and 12 frames a second are kept
     as picture fingerprints (for finding the scenes). read_from: a smaller copy of the same video to read instead
-    (much quicker; it has the same frames at the same times)."""
+    (much quicker; it has the same frames at the same times). on_big: also given every frame at 48 x 27 (blocks of
+    (n, 27, 48, 3) uint8), from the same reading, for the shot-change network (``transnet``)."""
     import numpy as np
     if not available():
         raise FeatureUnavailable("Finding scenes needs the 'numpy' add-on.", "Install it with:  pip install numpy")
     src = read_from or path
     rate = _native_rate(src)
+    if on_big:                       # both sizes in one picture: the 48 x 27 frame on top, the 32 x 18 frame under it
+        vf = (f"fps={rate:.6f},split=2[a][b];[a]scale={BW}:{BH},format=rgb24[x];"
+              f"[b]scale={W}:{H}:flags=area,format=rgb24,pad={BW}:{H}:0:0[y];[x][y]vstack")
+    else:
+        vf = f"fps={rate:.6f},scale={W}:{H}:flags=area,format=rgb24"
     args = [get_tools().ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-hwaccel", "auto", "-i", src, "-map", "0:v:0", "-an",
-            "-vf", f"fps={rate:.6f},scale={W}:{H}:flags=area,format=rgb24", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
+            "-vf", vf, "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
+    dims = (BW, BH + H) if on_big else (W, H)
     thumbs: List[Any] = []
     hists: List[Any] = []
     jumps: List[Any] = []
     prev = None
     j0 = 0                                   # native index of the first frame of this block
     m = 0                                    # next 12-a-second frame to keep
-    for block in _tiny_frames(args, int(duration * rate), cancel, (lambda n: progress(n / rate)) if progress else None):
+    for block in _tiny_frames(args, int(duration * rate), cancel, (lambda n: progress(n / rate)) if progress else None, *dims):
+        if on_big:
+            on_big(block[:, :BH])
+            block = np.ascontiguousarray(block[:, BH:, :W])
         n = block.shape[0]
         t_all, h_all = _summarise(block)                   # every frame (the same measure the exact-frame look used)
         if prev is not None:
