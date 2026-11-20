@@ -331,7 +331,7 @@ function tick() {
     } else { dress(v, nx.p); v.currentTime = nx.p.start; }
     badge(nx.p); prepNext(nx);
   }
-  Layers.follow(active(), V.seg.p); musicGains(); paintMeter();
+  Layers.follow(active(), V.seg.p); musicGains(); musicFollow(); paintMeter();
   if (!Layers.on() && V.seg.p) { const vv = active(), pp = V.seg.p; vv.volume = clamp(pp.volume * partShapeGain(pp, "original", vv.currentTime), 0, 1); }
   renderPlayhead(); renderOverlay();
   if (S.followPlay) scrollToPlayhead();
@@ -371,14 +371,23 @@ function musicPlay() {
     if (!heard(x)) continue;
     const m = musicPlayer(x.file); on.add(x.file);
     setMusicGain(m, musicLevel(x, S.t)); m.muted = S.mutedAll;
-    if (m.duration) m.currentTime = (S.t + (+x.start || 0)) % m.duration;
+    const st = songTime(x, m, S.t); if (st !== null) m.currentTime = st;
     const pr = m.play(); if (pr && pr.catch) pr.catch(() => {});
   }
   for (const [f, m] of MUSIC) if (!on.has(f)) m.pause();
 }
 function musicPause() { for (const m of MUSIC.values()) m.pause(); }
 function musicMute() { for (const m of MUSIC.values()) m.muted = S.mutedAll; }
-function musicSync() { for (const m of MUSIC.values()) if (m.duration) m.currentTime = S.t % m.duration; }
+function musicSync() { if (!S.proj || !MUSIC.size) return; for (const x of layers()) { const m = MUSIC.get(x.file), st = m && songTime(x, m, S.t); if (st !== null && st !== undefined) m.currentTime = st; } }
+/** While playing: a moved part (or a bit taken out of the song) makes the song jump; follow it. */
+function musicFollow() {
+  if (!S.playing) return;
+  for (const x of layers()) {
+    if (!heard(x)) continue;
+    const m = MUSIC.get(x.file), st = m && songTime(x, m, S.t);
+    if (st !== null && st !== undefined && Math.abs(m.currentTime - st) > 0.25 && Math.abs(m.currentTime - st) < m.duration - 0.25) m.currentTime = st;
+  }
+}
 // words on the picture, drawn over the viewer
 function renderOverlay() {
   const box = $("over"); box.replaceChildren();
@@ -621,11 +630,11 @@ function renderTimeline() {
       const chosen = S.msel && S.msel.i === i && S.msel.ks.has(r.k);
       const g = r.q.mute ? 0 : x.volume * r.q.volume;
       const d = el("div", { class: "lane-item music mpart" + (heard(x) ? "" : " off") + (r.q.mute ? " muted" : "") + (chosen ? " sel" : ""), "data-k": String(r.k), ondblclick: () => openPanel("sound") },
-        icon(r.q.mute ? "mute" : "music", "s"), el("span", { text: (r.k === 0 || chosen ? name + " · " : "") + (r.q.mute ? "muted" : Math.round(g * 100) + "%") +
+        icon(r.q.mute ? "mute" : "music", "s"), el("span", { text: (r.k === 0 || chosen ? name + " · " : "") + (r.q.mute ? "gap (silent)" : Math.round(g * 100) + "%") +
           ((r.q.even === undefined ? x.auto : r.q.even) ? " · " + ((r.q.even === undefined ? x.auto : r.q.even) === 2 ? "evened strong" : "evened") : "") + (r.q.fin || r.q.fout ? " · fades" : "") }));
       d.style.left = px(r.a) + "px"; d.style.width = Math.max(6, px(r.b) - px(r.a) - 2) + "px"; row.append(d);
     }
-    if (x.duck && x.duck.on) for (const [a, b] of S.duckBy[x.duck.under || "voices"] || []) {
+    for (const k of Object.keys(duckOf(x.duck, null, "voices"))) for (const [a, b] of S.duckBy[k] || []) {
       const z = el("i", { class: "duckz" }); z.style.left = px(a) + "px"; z.style.width = Math.max(2, px(b) - px(a)) + "px"; row.append(z);
     }
     lm.append(row);
@@ -950,31 +959,49 @@ const DUCK_DOWN = 0.35, DUCK_UP = 0.8, DUCK_LEVEL = 0.35;
 function mparts(x) { return x.parts && x.parts.length ? x.parts : [{ end: null, volume: 1, mute: false }]; }
 /** The parts of a music track as they lie on the timeline: { k, a, b, q }. */
 function mspans(x) {
-  const T = rawTotal(), out = []; let a = 0;
-  mparts(x).forEach((q, k) => { const b = q.end === null || q.end === undefined ? T : Math.min(T, q.end); if (b > a + 1e-6) out.push({ k, a, b, q }); a = Math.max(a, b); });
+  const T = rawTotal(), out = []; let a = 0, src = +x.start || 0;
+  mparts(x).forEach((q, k) => {
+    const b = q.end === null || q.end === undefined ? T : Math.min(T, q.end);
+    if (q.from !== undefined && q.from !== null) src = +q.from;          // a part that was moved keeps its own bit of the song
+    if (b > a + 1e-6) out.push({ k, a, b, q, src });
+    src += Math.max(0, b - a); a = Math.max(a, b);
+  });
   return out;
 }
+/** Where in the song file a music track is at timeline time t (null: a gap / deleted part). */
+function songAt(x, t) { for (const r of mspans(x)) if (t >= r.a && t < r.b) return r.q.mute ? null : r.src + (t - r.a); return null; }
+function songTime(x, m, t) { const v = songAt(x, t); return v === null || !m.duration ? null : v % m.duration; }
 function partGain(x, t) { for (const r of mspans(x)) if (t >= r.a && t < r.b) return r.q.mute ? 0 : +r.q.volume; return 1; }
-function duckGain(x, t) {
-  if (!x.duck || !x.duck.on) return 1;
-  const low = x.duck.level === undefined ? DUCK_LEVEL : +x.duck.level;
-  for (const [a, b] of (S.duckBy || {})[x.duck.under || "voices"] || []) {
+/** How low something goes under each track: { voices: 0.3, effects: 0.1 } (empty: it does not go down). Older projects
+ *  saved one track and one level ({ level, under }); they read as the same. */
+function duckOf(dk, own, def) {
+  if (!dk || !dk.on) return {};
+  if (dk.by) { const out = {}; for (const k of Object.keys(UNDER)) if (k !== own && dk.by[k] !== undefined && dk.by[k] !== null) out[k] = +dk.by[k]; return out; }
+  const u = dk.under || def; return u === own ? {} : { [u]: dk.level === undefined ? DUCK_LEVEL : +dk.level };
+}
+/** Gain at time t under stretches [[a, b], ...] (already widened): down to low, gradually. */
+function spanGain(spans, low, t) {
+  for (const [a, b] of spans || []) {
     if (t < a) break;
     if (t <= b) return 1 - (1 - low) * clamp(Math.min((t - a) / DUCK_DOWN, (b - t) / DUCK_UP), 0, 1);
   }
   return 1;
 }
+function duckGain(x, t) {
+  let g = 1;
+  for (const [k, low] of Object.entries(duckOf(x.duck, null, "voices"))) g = Math.min(g, spanGain((S.duckBy || {})[k], low, t));
+  return g;
+}
 const UNDER = { voices: "Voices", music: "Music", effects: "Effects" };
 /** A split track that goes down while another one is heard: its live gain at source time t. */
 function stemDuckGain(n, t) {
-  const dk = (S.proj.settings.ducks || {})[n]; if (!dk || !dk.on) return 1;
-  const act = (S.acts || {})[dk.under]; if (!act) return 1;
-  if (!act.spans) act.spans = joinSpans(act.ranges.map(([a, b]) => [a, b]), 1e9);
-  for (const [a, b] of act.spans) {
-    if (t < a) break;
-    if (t <= b) return 1 - (1 - dk.level) * clamp(Math.min((t - a) / DUCK_DOWN, (b - t) / DUCK_UP), 0, 1);
+  let g = 1;
+  for (const [k, low] of Object.entries(duckOf((S.proj.settings.ducks || {})[n], n, n === "voices" ? "music" : "voices"))) {
+    const act = (S.acts || {})[k]; if (!act) continue;
+    if (!act.spans) act.spans = joinSpans(act.ranges.map(([a, b]) => [a, b]), 1e9);
+    g = Math.min(g, spanGain(act.spans, low, t));
   }
-  return 1;
+  return g;
 }
 /** A little before each stretch to a little after it; close ones joined (the same rule as the export). */
 function joinSpans(list, T) {
@@ -985,31 +1012,57 @@ function joinSpans(list, T) {
   }
   return sp;
 }
-/** Set (or switch off) the going down of a whole split track. */
-async function setStemDuck(n, patch) {
+/** Set (or switch off) the going down of a whole split track. by: { voices: 0.3, ... } (empty: off). */
+async function setStemDuck(n, by) {
   if (trackLocked(n)) { lockedNote(n); renderInspector(); return; }
-  const cur = Object.assign({ on: false, level: DUCK_LEVEL, under: n === "voices" ? "music" : "voices" }, (S.proj.settings.ducks || {})[n] || {}, patch);
-  change(() => { const d = Object.assign({}, S.proj.settings.ducks || {}); if (cur.on) d[n] = cur; else delete d[n]; S.proj.settings.ducks = d; }, { keepVideo: true });
-  if (cur.on) { const v = await loadVoices(false, cur.under); if (v && !v.ranges.length) toast("Nothing was found on the " + UNDER[cur.under] + " track, so " + Layers.TITLE[n] + " stays as it is.", true); }
+  const on = Object.keys(by).length > 0;
+  change(() => { const d = Object.assign({}, S.proj.settings.ducks || {}); if (on) d[n] = { on: true, by }; else delete d[n]; S.proj.settings.ducks = d; }, { keepVideo: true });
+  await loadUnder(by, Layers.TITLE[n]);
   Layers.apply(); renderInspector();
+}
+/** Find when each of these tracks is heard (once), and say so when one of them has nothing. */
+async function loadUnder(by, what) {
+  for (const k of Object.keys(by)) {
+    const v = await loadVoices(false, k);
+    if (v && !v.ranges.length) toast("Nothing was found on the " + UNDER[k] + " track, so " + what + " does not go down under it.", true);
+  }
+}
+/** The 'go down while other tracks are heard' box: one switch for it all, then each track on its own with its own level
+ *  (for example 30 % under voices and 10 % under effects at the same time). */
+function duckEditor(title, own, def, by, lk, onset, hint) {
+  const on = Object.keys(by).length > 0;
+  const sw = el("input", { type: "checkbox", class: "sw", "aria-label": title }); sw.checked = on; sw.disabled = lk;
+  sw.addEventListener("change", () => onset(sw.checked ? { [def]: DUCK_LEVEL } : {}));
+  const rows = Object.keys(UNDER).filter((k) => k !== own).map((k) => {
+    const has = by[k] !== undefined, lv = has ? by[k] : DUCK_LEVEL;
+    const ck = el("input", { type: "checkbox", class: "sw sm", "aria-label": "Go down under " + UNDER[k] }); ck.checked = has; ck.disabled = lk;
+    ck.addEventListener("change", () => {
+      if (ck.checked && k !== "voices" && !stemsOn()) { toast("Split the sound first (Sound panel): then it can go down under " + UNDER[k] + ".", true); ck.checked = false; return; }
+      const nb = Object.assign({}, by); if (ck.checked) nb[k] = lv; else delete nb[k]; onset(nb);
+    });
+    const val = el("b", { class: "num", text: Math.round(lv * 100) + "%" });
+    const r = el("input", { type: "range", class: "rng", min: "0", max: "80", step: "1", value: String(Math.round(lv * 100)), "aria-label": "Loudness under " + UNDER[k] });
+    r.disabled = lk || !has;
+    r.addEventListener("input", () => { val.textContent = r.value + "%"; paintRange(r); });
+    r.addEventListener("change", () => onset(Object.assign({}, by, { [k]: r.value / 100 })));
+    setTimeout(() => paintRange(r), 0);
+    const act = (S.acts || {})[k];
+    const note = !has ? "" : !act ? "listening…" : act.ranges.length + " stretch" + (act.ranges.length === 1 ? "" : "es");
+    return el("div", { class: "duck-row" + (has ? " on" : ""), "data-under": k },
+      el("label", { class: "swl" }, el("span", {}, "Under ", el("b", { text: UNDER[k] }), " ", el("small", { class: "note", text: note })), ck),
+      el("div", { class: "field" }, el("span", {}, "Loudness then ", val), r));
+  });
+  return el("div", { class: "pad duck-box" },
+    el("label", { class: "swl" }, el("span", {}, el("b", { text: title })), sw),
+    on ? el("div", { class: "duck-rows" }, ...rows) : null,
+    el("p", { class: "hint", text: hint }));
 }
 /** The 'Go down while ... is heard' box of a split track. */
 function stemDuckBox(n, lk) {
-  const dk = Object.assign({ on: false, level: DUCK_LEVEL, under: n === "voices" ? "music" : "voices" }, (S.proj.settings.ducks || {})[n] || {});
-  const sw = el("input", { type: "checkbox", class: "sw", "aria-label": "Go down while another track is heard" }); sw.checked = !!dk.on; sw.disabled = lk;
-  sw.addEventListener("change", () => setStemDuck(n, { on: sw.checked }));
-  const seg = segmented(Object.keys(UNDER).filter((k) => k !== n).map((k) => [k, UNDER[k]]), dk.under, (v) => setStemDuck(n, { on: true, under: v }));
-  if (lk) for (const b of seg.children) b.disabled = true;
-  const val = el("b", { class: "num", text: Math.round(dk.level * 100) + "%" });
-  const r = el("input", { type: "range", class: "rng", min: "0", max: "80", step: "1", value: String(Math.round(dk.level * 100)), "aria-label": "Loudness while the other track is heard" });
-  r.disabled = lk || !dk.on;
-  r.addEventListener("input", () => { val.textContent = r.value + "%"; paintRange(r); });
-  r.addEventListener("change", () => setStemDuck(n, { on: true, level: r.value / 100 }));
-  setTimeout(() => paintRange(r), 0);
-  return el("div", { class: "pad duck-box" },
-    el("label", { class: "swl" }, el("span", {}, el("b", { text: "Whole " + Layers.TITLE[n].split(" (")[0] + " track: go down while" })), sw),
-    el("div", { class: "field" }, el("span", { text: "…this is heard" }), seg),
-    el("div", { class: "field" }, el("span", {}, "Loudness then ", val), r));
+  const def = n === "voices" ? "music" : "voices", by = duckOf((S.proj.settings.ducks || {})[n], n, def);
+  for (const k of Object.keys(by)) if (!(S.acts || {})[k]) loadVoices(false, k);
+  return duckEditor("Whole " + Layers.TITLE[n].split(" (")[0] + " track: go down while others are heard", n, def, by, lk, (nb) => setStemDuck(n, nb),
+    "Each track you switch on has its own level. Where two are heard at once, the lower level counts.");
 }
 /** When someone talks (finished-video time), from the voices the app found in the source. */
 function voiceOut(of) {
@@ -1031,7 +1084,8 @@ function voiceOut(of) {
   }
   return sp;
 }
-function ducking() { return layers().some((x) => x.duck && x.duck.on); }
+function ducksOn(x) { return Object.keys(duckOf(x.duck, null, "voices")).length > 0; }
+function ducking() { return layers().some((x) => Object.keys(duckOf(x.duck, null, "voices")).length > 0); }
 /** When a track is heard in the source (voices by default; music / effects need the split). */
 async function loadVoices(force, of) {
   of = of || "voices";
@@ -1052,8 +1106,8 @@ async function loadVoices(force, of) {
 /** Which tracks something goes down under right now (songs and split tracks). */
 function duckNeeds() {
   const need = new Set();
-  for (const x of layers()) if (x.duck && x.duck.on) need.add(x.duck.under || "voices");
-  for (const dk of Object.values(S.proj.settings.ducks || {})) if (dk && dk.on) need.add(dk.under);
+  for (const x of layers()) for (const k of Object.keys(duckOf(x.duck, null, "voices"))) need.add(k);
+  for (const [n, dk] of Object.entries(S.proj.settings.ducks || {})) for (const k of Object.keys(duckOf(dk, n, n === "voices" ? "music" : "voices"))) need.add(k);
   return need;
 }
 /** A song you add starts as a soft bed under the video: about 20 %, set from how loud the song itself really is
@@ -1092,7 +1146,7 @@ function cutMusic(i, t) {
   const why = musicLocked(i); if (why) { toast(why, true); return; }
   const r = mspans(x).find((q) => t > q.a + 0.05 && t < q.b - 0.05);
   if (!r) { toast("Too close to the edge of a part to cut here."); return; }
-  change(() => { const ps = clone(mparts(x)); ps.splice(r.k, 0, Object.assign({}, ps[r.k], { end: +t.toFixed(3) })); setLayer(i, { parts: ps }); }, { keepVideo: true });
+  change(() => { const ps = clone(mparts(x)); ps.splice(r.k, 0, Object.assign({}, ps[r.k], { end: +t.toFixed(3) })); delete ps[r.k + 1].from; if (ps[r.k].from === undefined && r.q.from !== undefined) ps[r.k].from = r.q.from; setLayer(i, { parts: ps }); }, { keepVideo: true });
   S.msel = { i, ks: new Set([r.k + 1]) };
   refreshAll({ keepVideo: true });
 }
@@ -1124,15 +1178,15 @@ async function normaliseMusic(together) {
   musicChange((c, k) => { if (gains.has(k)) { c.volume = +gains.get(k).toFixed(3); c.mute = false; } });
   toast("Same loudness for " + gains.size + " music part" + (gains.size > 1 ? "s" : "") + (together ? ", balance kept." : "."));
 }
-async function setDuck(i, on, level, under) {
+/** How low a song goes under each track: by = { voices: 0.3, effects: 0.1 } (empty: it does not go down). */
+async function setDuck(i, by) {
   const x = layers()[i]; if (!x) return;
   const why = musicLocked(i); if (why) { toast(why, true); renderInspector(); return; }
-  const cur = Object.assign({ on: false, level: DUCK_LEVEL }, x.duck || {});
-  const next = { on: on === undefined ? cur.on : on, level: level === undefined ? cur.level : level };
-  const u = under || cur.under; if (u && u !== "voices") next.under = u;
-  change(() => { setLayer(i, { duck: next }); }, { keepVideo: true });
-  if (next.on) { const v = await loadVoices(false, next.under || "voices"); if (v && !v.ranges.length) toast("Nothing was found on the " + UNDER[next.under || "voices"] + " track, so the music stays as it is.", true); }
+  const on = Object.keys(by).length > 0;
+  change(() => { setLayer(i, { duck: on ? { on: true, by } : { on: false } }); }, { keepVideo: true });
+  await loadUnder(by, "the music");
   if (S.playing) musicPlay();
+  renderInspector();
 }
 function onMusicDown(e) {
   const row = e.target.closest(".mrow"), part = e.target.closest(".mpart"); if (!row || !part) return false;
@@ -1144,16 +1198,113 @@ function onMusicDown(e) {
   else S.msel.ks = new Set([k]);
   S.mAnchor = k;
   const sc = $("tlScroll"), rect = sc.getBoundingClientRect();
-  seek(clamp(timeAt(e.clientX - rect.left + sc.scrollLeft), 0, Math.max(0, rawTotal() - 0.01)));
+  const x = layers()[i], spans = mspans(x), r = spans.find((q) => q.k === k), pr = part.getBoundingClientRect();
+  const edge = !r || e.shiftKey || add ? null : e.clientX - pr.left <= 6 && r.a > 0.001 ? "left" : pr.right - e.clientX <= 6 && r.b < rawTotal() - 0.001 ? "right" : null;
+  if (!edge) seek(clamp(timeAt(e.clientX - rect.left + sc.scrollLeft), 0, Math.max(0, rawTotal() - 0.01)));
   refreshAll({ keepVideo: true });
+  if (r && !e.shiftKey && !add && !musicLocked(i)) musicDrag(e, i, r, edge);
   return true;
+}
+/** Drag a music part: from its middle it moves (its sound goes with it, like CapCut; what it lands on is covered, and
+ *  where it was becomes a gap); from an edge, the cut between it and its neighbour moves. */
+function musicDrag(e, i, r, edge) {
+  const x0 = e.clientX, T = rawTotal();
+  let d = 0, live = false;
+  const node = () => document.querySelector('.mrow[data-i="' + i + '"] .mpart[data-k="' + r.k + '"]');
+  const move = (ev) => {
+    d = (ev.clientX - x0) / S.pps;
+    if (!live && Math.abs(ev.clientX - x0) < 4) return;
+    live = true; document.body.classList.add("dragging");
+    const n = node(); if (!n) return;
+    if (edge === "left") { const a = clamp(r.a + d, 0.05, r.b - 0.05); n.style.left = px(a) + "px"; n.style.width = Math.max(6, px(r.b) - px(a) - 2) + "px"; }
+    else if (edge === "right") { const b = clamp(r.b + d, r.a + 0.05, T - 0.05); n.style.width = Math.max(6, px(b) - px(r.a) - 2) + "px"; }
+    else { const len = r.b - r.a; const a = clamp(r.a + d, 0, Math.max(0, T - Math.min(len, T) )); n.style.left = px(a) + "px"; n.classList.add("moving"); }
+  };
+  const up = () => {
+    window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
+    document.body.classList.remove("dragging");
+    if (!live || Math.abs(d) < 0.01) return;
+    if (edge) moveMusicCut(i, edge === "left" ? r.k - 1 : r.k, (edge === "left" ? r.a : r.b) + d);
+    else moveMusicPart(i, r.k, d);
+  };
+  window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+}
+/** The parts as clips on the timeline, each with its own place in the song: [{ a, b, src, q }]. */
+function musicClips(x) { return mspans(x).map((r) => ({ a: r.a, b: r.b, src: r.src, q: Object.assign({}, r.q) })); }
+/** Clips back to parts. A part only says where it plays from in the song when it does not simply follow on from the
+ *  part before it (so "Song starts at" still moves a song that was only cut). Gaps next to each other become one. */
+function clipsToParts(clips, skip) {
+  const T = rawTotal(), out = [];
+  let a = 0, src = +skip || 0;
+  for (const c of clips.filter((c) => c.b - c.a > 0.02).sort((u, v) => u.a - v.a)) {
+    const last = out[out.length - 1];
+    if (last && last.mute && c.q.mute && last._b >= c.a - 1e-6) { last._b = c.b; src += c.b - a; a = c.b; continue; }
+    const q = Object.assign({}, c.q); delete q.from;
+    if (Math.abs(c.src - src) > 0.001) q.from = +c.src.toFixed(3);
+    q._b = c.b; out.push(q); src = c.src + (c.b - c.a); a = c.b;
+  }
+  out.forEach((q, j) => { q.end = j === out.length - 1 || q._b >= T - 0.001 ? null : +q._b.toFixed(3); delete q._b; });
+  return out;
+}
+const GAP = { volume: 1, mute: true };
+function moveMusicPart(i, k, d) {
+  const x = layers()[i], why = musicLocked(i); if (!x) return; if (why) { toast(why, true); return; }
+  const T = rawTotal(), clips = musicClips(x), j = mspans(x).findIndex((r) => r.k === k);
+  if (j < 0) return;
+  const c = clips[j], last = j === clips.length - 1, len = c.b - c.a;
+  const na = clamp(c.a + d, 0, last ? T - 0.1 : T - len), nb = last ? T : Math.min(T, na + len);
+  const rest = [];
+  clips.forEach((o, n) => {
+    if (n === j) { rest.push({ a: o.a, b: o.b, src: o.src, q: Object.assign({}, GAP) }); return; }
+    rest.push(o);
+  });
+  const out = [];
+  for (const o of rest) {                                  // what the moved part lands on is covered (cut away)
+    if (o.b <= na || o.a >= nb) { out.push(o); continue; }
+    if (o.a < na) out.push({ a: o.a, b: na, src: o.src, q: o.q });
+    if (o.b > nb) out.push({ a: nb, b: o.b, src: o.src + (nb - o.a), q: o.q });
+  }
+  out.push({ a: na, b: nb, src: c.src, q: c.q });
+  change(() => setLayer(i, { parts: clipsToParts(out, x.start) }), { keepVideo: true });
+  const nk = mspans(layers()[i]).findIndex((r) => Math.abs(r.a - na) < 0.002);
+  S.msel = { i, ks: new Set(nk >= 0 ? [mspans(layers()[i])[nk].k] : []) };
+  refreshAll({ keepVideo: true }); if (S.playing) musicPlay(); else musicSync();
+  toast("Music part moved by " + (d > 0 ? "+" : "−") + Math.abs(d).toFixed(2) + " s. Ctrl + Z to undo.");
+}
+/** Move the cut between part k and the next one to time t; both keep their sound where it was (the next part starts later or earlier in the song). */
+function moveMusicCut(i, k, t) {
+  const x = layers()[i], why = musicLocked(i); if (!x) return; if (why) { toast(why, true); return; }
+  const sp = mspans(x), j = sp.findIndex((r) => r.k === k); if (j < 0 || j >= sp.length - 1) return;
+  const clips = musicClips(x), L = clips[j], R = clips[j + 1];
+  t = clamp(t, L.a + 0.05, R.b - 0.05);
+  R.src += t - R.a; R.a = t; L.b = t;
+  change(() => setLayer(i, { parts: clipsToParts(clips, x.start) }), { keepVideo: true });
+  refreshAll({ keepVideo: true }); if (S.playing) musicPlay(); else musicSync();
+}
+/** Take the chosen parts out of the song and close the gap: what comes after moves earlier (like deleting in CapCut). */
+function deleteMusicParts(close) {
+  const i = S.msel && S.msel.i, x = layers()[i]; if (!x) return;
+  const why = musicLocked(i); if (why) { toast(why, true); return; }
+  const ks = S.msel.ks; if (!ks.size) return;
+  if (!close) { musicChange((c) => { c.mute = true; }); refreshAll({ keepVideo: true }); return; }
+  const T = rawTotal(), sp = mspans(x), out = []; let shift = 0;
+  sp.forEach((r) => {
+    const gone = ks.has(r.k) && r.b < T - 0.001;           // (the last part is only emptied: nothing comes after it)
+    if (gone) { shift += r.b - r.a; return; }
+    out.push({ a: r.a - shift, b: r.b >= T - 0.001 ? T : r.b - shift, src: r.src, q: Object.assign({}, r.q, ks.has(r.k) ? GAP : {}) });
+  });
+  change(() => setLayer(i, { parts: clipsToParts(out, x.start) }), { keepVideo: true });
+  S.msel = { i, ks: new Set() };
+  refreshAll({ keepVideo: true }); if (S.playing) musicPlay(); else musicSync();
+  toast("Taken out of the song; what came after moved up. Ctrl + Z to undo.");
 }
 function musicMenuItems(i, t) {
   const x = layers()[i], lk = !!musicLocked(i), list = mselList(), n = list.length, allMuted = n && list.every((q) => q.q.mute);
   const set = (patch) => { change(() => setLayer(i, patch), { keepVideo: true }); renderMusicLayers(); if (S.playing) musicPlay(); };
   return [
     ["Cut the music here", "split", () => cutMusic(i, t), { key: "S", off: lk }],
-    n ? [allMuted ? "Turn these parts on" : "Mute these parts", allMuted ? "vol" : "mute", () => musicChange((c) => { c.mute = !allMuted; }), { key: "Del", off: lk }] : null,
+    n ? ["Delete and close the gap", "trash", () => deleteMusicParts(true), { key: "Shift+Del", off: lk }] : null,
+    n ? [allMuted ? "Turn these parts on" : "Delete, leave a gap (mute)", allMuted ? "vol" : "mute", () => musicChange((c) => { c.mute = !allMuted; }), { key: "Del", off: lk }] : null,
     n ? ["Same loudness", "sliders", () => normaliseMusic(false), { off: lk }] : null,
     n > 1 ? ["Same loudness, keep balance", "sliders", () => normaliseMusic(true), { off: lk }] : null,
     n > 1 ? ["Join these parts", "combine", () => joinMusicParts(), { off: lk }] : null,
@@ -1162,12 +1313,32 @@ function musicMenuItems(i, t) {
     n ? ["Gentle fade in and out (1 s)", "sliders", () => musicChange((c) => { c.fin = 1; c.fout = 1; }), { off: lk }] : null,
     n ? ["Full loudness again", "restore", () => musicChange((c) => { c.volume = 1; c.mute = false; }), { off: lk }] : null,
     "-",
-    [x.duck && x.duck.on ? "Stop going down under voices" : "Go down under voices", "vol", () => setDuck(i, !(x.duck && x.duck.on)), { off: lk }],
+    [ducksOn(x) ? "Stop going down under other tracks" : "Go down under voices", "vol", () => setDuck(i, ducksOn(x) ? {} : { voices: DUCK_LEVEL }), { off: lk }],
     [x.mute ? "Turn this music on" : "Mute this music", x.mute ? "vol" : "mute", () => set({ mute: !x.mute })],
     [x.solo ? "Stop solo" : "Hear only this (solo)", "target", () => set({ solo: !x.solo })],
     [x.locked ? "Unlock this music" : "Lock this music", x.locked ? "unlock" : "lock", () => set({ locked: !x.locked })],
     "-", ["Remove this music", "trash", () => { change(() => { S.proj.settings.layers = layers().filter((_, k) => k !== i); }, { keepVideo: true }); S.msel = null; renderMusicLayers(); musicPlay(); if (!S.playing) musicPause(); }, { danger: true, off: lk }],
   ].filter(Boolean);
+}
+/** One part: which bit of the song it plays (type a time, or nudge it), without moving the part on the timeline. */
+function partFromField(x, i, r, lk) {
+  const m = MUSIC.get(x.file), D = m && m.duration;
+  const inp = el("input", { class: "input short", value: fmtTime(r.src, 2), "aria-label": "Where in the song this part plays from", inputmode: "decimal", title: "Minutes:seconds into the song, for example 1:05.5" });
+  const set = (v) => {
+    if (v === null || !isFinite(v) || v < 0) { toast("Type a time like 1:05 (minutes:seconds).", true); inp.value = fmtTime(r.src, 2); return; }
+    if (D) v = Math.min(v, Math.max(0, D - 0.05));
+    const why = musicLocked(i); if (why) { toast(why, true); return; }
+    const clips = musicClips(x), j = mspans(x).findIndex((q) => q.k === r.k); if (j < 0) return;
+    clips[j].src = v;
+    change(() => setLayer(i, { parts: clipsToParts(clips, x.start) }), { keepVideo: true });
+    refreshAll({ keepVideo: true }); if (S.playing) musicPlay(); else musicSync();
+  };
+  const parse = (v) => { const p = String(v).trim().split(":").map(Number); if (p.some((n) => !isFinite(n))) return null; return p.length === 2 ? p[0] * 60 + p[1] : p.length === 1 ? p[0] : null; };
+  inp.addEventListener("change", () => { const v = parse(inp.value); setTimeout(() => set(v), 0); });
+  inp.disabled = !!lk;
+  const nudge = (s) => btn((s > 0 ? "+" : "−") + Math.abs(s) + " s", { cls: "sm ghost", title: "Play a bit " + (s > 0 ? "later" : "earlier") + " in the song", onclick: () => { if (!lk) set(Math.max(0, r.src + s)); } });
+  return el("div", { class: "field song-start" }, el("span", {}, "This part plays the song from ", el("small", { class: "note", text: D ? "of " + fmtTime(D, 0) : "" })),
+    el("div", { class: "row" }, inp, nudge(-1), nudge(1)));
 }
 /** Where in the song it starts: type a time (1:23), or take it from where the song is playing now. */
 function songStartField(x, setTrack, lk) {
@@ -1197,30 +1368,21 @@ function renderMusicInspector(R) {
   const mute = el("input", { type: "checkbox", class: "sw", "aria-label": "Mute the chosen parts" });
   mute.checked = mutes.length === 1 && mutes[0]; mute.indeterminate = mutes.length > 1; mute.disabled = lk;
   mute.addEventListener("change", () => musicChange((c) => { c.mute = mute.checked; }));
-  const duck = Object.assign({ on: false, level: DUCK_LEVEL }, x.duck || {});
-  const dsw = el("input", { type: "checkbox", class: "sw", "aria-label": "Go down while people talk" }); dsw.checked = !!duck.on; dsw.disabled = lk;
-  dsw.addEventListener("change", () => setDuck(i, dsw.checked));
-  const dval = el("b", { class: "num", text: Math.round(duck.level * 100) + "%" });
-  const dr = el("input", { type: "range", class: "rng", min: "0", max: "80", step: "1", value: String(Math.round(duck.level * 100)), "aria-label": "Music loudness while people talk" });
-  dr.disabled = lk || !duck.on;
-  dr.addEventListener("input", () => { dval.textContent = dr.value + "%"; paintRange(dr); });
-  dr.addEventListener("change", () => setDuck(i, true, dr.value / 100));
-  setTimeout(() => paintRange(dr), 0);
-  const under = duck.under || "voices", act = (S.acts || {})[under];
-  const useg = segmented(Object.keys(UNDER).map((k) => [k, UNDER[k]]), under, (v) => {
-    if (v !== "voices" && !stemsOn()) { toast("Split the sound first (Sound panel): then the music can go down under " + UNDER[v] + ".", true); renderInspector(); return; }
-    setDuck(i, true, undefined, v);
-  });
-  if (lk) for (const b of useg.children) b.disabled = true;
-  const vNote = !duck.on ? "The music goes down gradually while that track is heard, and comes back up after." : !act ? "Listening…"
-    : act.from === "voices" || under !== "voices" ? act.ranges.length + " stretches found on the split " + UNDER[under] + " track. They show as dips on the music."
-      : act.ranges.length + " stretches of talking, guessed from the plain sound. Split the sound for a much better result.";
+  const dby = duckOf(x.duck, null, "voices");
+  const dfrom = (S.acts || {}).voices;
+  const dhint = !Object.keys(dby).length ? "The music goes down gradually while the tracks you choose are heard, and comes back up after. Each track has its own level."
+    : dby.voices !== undefined && dfrom && dfrom.from !== "voices" && !stemsOn() ? "Talking is guessed from the plain sound. Split the sound for a much better result."
+      : "They show as dips on the music. Where two are heard at once, the lower level counts.";
   R.append(el("div", { class: "pad" },
     list.length ? rng("Chosen parts", vols.length === 1 ? vols[0] : null, (v) => musicChange((c) => { c.volume = v; c.mute = false; }), "Loudness of the chosen music parts") : null,
     list.length ? el("label", { class: "swl" }, el("span", { text: "Mute the chosen parts" }), mute) : null,
     list.length ? el("div", { class: "btns" },
       btn("Same loudness", { icon: "sliders", title: "Each chosen part as a whole goes up or down, so they all sound equally loud (up to 200%). Inside a part nothing changes: for that use Even out.", onclick: () => normaliseMusic(false) }),
       btn("Keep balance", { icon: "sliders", cls: "ghost", title: "The chosen parts go up or down together by the same amount, so their balance stays", onclick: () => normaliseMusic(true) })) : null,
+    list.length ? el("div", { class: "btns" },
+      btn("Delete, close gap", { icon: "trash", cls: "ghost", title: "Take the chosen parts out of the song; what comes after moves up (Shift + Delete)", onclick: () => deleteMusicParts(true) }),
+      btn("Leave a gap", { icon: "mute", cls: "ghost", title: "Silence the chosen parts and keep everything where it is (Delete)", onclick: () => deleteMusicParts(false) })) : null,
+    list.length === 1 && !list[0].q.mute ? partFromField(x, i, list[0], lk) : null,
     el("div", { class: "btns" },
       btn("Cut here", { icon: "split", title: "Cut the music at the playhead (S). The video is not cut.", onclick: () => cutMusic(i, S.t) }),
       list.length > 1 ? btn("Join", { icon: "combine", cls: "ghost", title: "Make the chosen parts one part again", onclick: joinMusicParts }) : btn("Full loudness", { icon: "restore", cls: "ghost", onclick: () => musicChange((c) => { c.volume = 1; c.mute = false; }) })),
@@ -1237,16 +1399,12 @@ function renderMusicInspector(R) {
     songStartField(x, setTrack, lk),
     fadeFields(x.fade_in === undefined ? 0.5 : x.fade_in, x.fade_out === undefined ? 1.5 : x.fade_out, (k, v) => setTrack(k === "fin" ? { fade_in: v } : { fade_out: v }), lk,
       ["Song fades in", "Song fades out"])));
-  R.append(el("div", { class: "pad duck-box" },
-    el("label", { class: "swl" }, el("span", {}, el("b", { text: "Go down while people talk" })), dsw),
-    el("div", { class: "field" }, el("span", { text: "Go down under" }), useg),
-    el("div", { class: "field" }, el("span", {}, "Music loudness then ", dval), dr),
-    el("p", { class: "hint", text: vNote })));
+  R.append(duckEditor("Go down while other tracks are heard", null, "voices", dby, lk, (nb) => setDuck(i, nb), dhint));
   R.append(el("div", { class: "pad" },
     btn(x.locked ? "Unlock this music" : "Lock this music", { icon: x.locked ? "unlock" : "lock", cls: "ghost wide", onclick: () => { change(() => setLayer(i, { locked: !x.locked }), { any: true }); } }),
-    el("p", { class: "hint", text: "Click a part on the music track (Ctrl + click for more, Shift + click for all in between). S cuts the music at the playhead, Delete mutes the chosen parts. " +
+    el("p", { class: "hint", text: "Click a part on the music track (Ctrl + click for more, Shift + click for all in between). S cuts the music at the playhead. Drag a part to move it (its sound goes with it), or drag its edge to move the cut. Delete leaves a gap; Shift + Delete takes the part out of the song and closes the gap. " +
       "The export is made ready for YouTube by itself: the whole mix is set to -14 LUFS with peaks under -1 dB." })));
-  if (duck.on && !act) loadVoices(false, under);
+  for (const k of Object.keys(dby)) if (!(S.acts || {})[k]) loadVoices(false, k);
 }
 
 // ---- the split sound on the timeline (Final): one track each for voices, music and effects (like CapCut). Every part of a
@@ -2903,7 +3061,7 @@ function wire() {
   $("musicAdd").addEventListener("click", () => addFileThen("audio", "musicProg", (d) => {
     if (d.has_video) { toast("That is a video. Choose a music file such as an MP3.", true); return; }
     if (layers().length >= 8) { toast("That is the most: 8 music layers.", true); return; }
-    change(() => { S.proj.settings.layers = layers().concat([{ file: d.id, volume: 0.2, mute: false, solo: false, auto: 1, duck: { on: true, level: 0.35 }, fade_in: 3, fade_out: 3 }]); }, { keepVideo: true });
+    change(() => { S.proj.settings.layers = layers().concat([{ file: d.id, volume: 0.2, mute: false, solo: false, auto: 1, duck: { on: true, by: { voices: 0.35 } }, fade_in: 3, fade_out: 3 }]); }, { keepVideo: true });
     renderMusicLayers(); if (S.playing) musicPlay();
     autoSongLevel(d.id);
   }));
@@ -3000,7 +3158,7 @@ function wire() {
     else if (k.toLowerCase() === "p" && !mod && !e.altKey) { e.preventDefault(); startPreview(); }
     else if (k.toLowerCase() === "q" && !mod && !e.altKey) { e.preventDefault(); cutSide("before"); }
     else if (k.toLowerCase() === "w" && !mod && !e.altKey) { e.preventDefault(); cutSide("after"); }
-    else if ((k === "Delete" || k === "Backspace") && S.msel && S.msel.ks.size) { e.preventDefault(); musicChange((c) => { c.mute = true; }); }
+    else if ((k === "Delete" || k === "Backspace") && S.msel && S.msel.ks.size) { e.preventDefault(); deleteMusicParts(e.shiftKey); }
     else if ((k === "Delete" || k === "Backspace") && aselList().length) { e.preventDefault(); stemChange((c) => { c.mute = true; }); }
     else if (k === "Delete" || k === "Backspace") { e.preventDefault(); removeSelected(); }
     else if (k === "Escape") { S.sel.clear(); S.asel = new Map(); S.msel = null; refreshAll({ keepVideo: true }); }

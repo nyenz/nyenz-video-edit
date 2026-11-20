@@ -894,10 +894,26 @@ body.previewing .frame-ov, body.previewing #badge { display: none !important; }
 .lane-item.mpart svg { pointer-events: none; flex: none; }
 .lane-item.mpart:hover { border-color: #8a74d0; }
 .lane-item.mpart.sel { background: #4b3a78; border-color: var(--accent); color: #fff; box-shadow: 0 0 0 2px var(--accent-soft); z-index: 2; }
+.lane-item.mpart { cursor: grab; position: absolute; }
+.lane-item.mpart::before, .lane-item.mpart::after { content: ""; position: absolute; top: 0; bottom: 0; width: 6px; cursor: col-resize; }
+.lane-item.mpart::before { left: 0; }
+.lane-item.mpart::after { right: 0; }
+.lane-item.mpart.sel::before, .lane-item.mpart.sel::after { background: linear-gradient(90deg, rgba(255, 255, 255, .28), transparent); }
+.lane-item.mpart.sel::after { background: linear-gradient(270deg, rgba(255, 255, 255, .28), transparent); }
+.lane-item.mpart.moving { cursor: grabbing; z-index: 5; box-shadow: 0 6px 18px rgba(0, 0, 0, .45), 0 0 0 2px var(--accent-soft); opacity: .92; }
+body.dragging, body.dragging * { cursor: grabbing !important; user-select: none; }
 .lane-item.mpart.muted { background: repeating-linear-gradient(135deg, #2a2440 0 6px, #241f37 6px 12px); color: #9a92b8; }
 .mrow .duckz { position: absolute; bottom: 1px; height: 7px; border-radius: 4px 4px 0 0; background: linear-gradient(180deg, rgba(90, 184, 255, .2), rgba(90, 184, 255, .55)); pointer-events: none; z-index: 3; }
 .mrow.track-locked .lane-item.mpart { cursor: not-allowed; filter: saturate(.6); }
 .duck-box { border-top: 1px solid var(--line-soft); }
+input.sw.sm { width: 28px; height: 16px; }
+input.sw.sm::after { top: 2px; left: 2px; width: 12px; height: 12px; }
+input.sw.sm:checked::after { transform: translateX(12px); }
+.duck-rows { display: grid; gap: 6px; margin: 8px 0 4px; }
+.duck-row { padding: 8px 10px; border-radius: 10px; background: rgba(255, 255, 255, .025); border: 1px solid var(--line-soft); transition: background .15s, border-color .15s; }
+.duck-row.on { background: rgba(255, 255, 255, .05); border-color: var(--line); }
+.duck-row .field { margin: 6px 0 0; }
+.duck-row:not(.on) .field { display: none; }
 .vsteps { display: inline-flex; gap: 3px; margin-top: 3px; }
 .vsteps i { font-style: normal; width: 16px; height: 16px; border-radius: 5px; display: inline-grid; place-items: center; font-size: 10px; font-weight: 700;
   border: 1px solid var(--line-soft); color: var(--muted); background: var(--sunk); }

@@ -90,6 +90,7 @@ def test_choose_combine_move_and_remove_whole_scenes(live, page, movie_id):
     live.call("POST", f"/api/projects/{pid}/scenes", {})
     page.goto(f"{live.base}/edit?p={pid}"); wait_ready(page)
     page.wait_for_function("() => sceneList().length === 9", timeout=60000)
+    page.wait_for_selector("#chooseSeg:not([hidden])", timeout=10000)        # (the bar is drawn just after the scenes are in)
     assert page.is_visible("#chooseSeg") and page.is_visible("#bCombine")
     assert page.inner_text("#laneV .clipb.sc-first .scene-tag") == "Scene 1"
     page.evaluate("() => fitZoom()")

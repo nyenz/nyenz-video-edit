@@ -191,6 +191,7 @@ class MusicSpec:
     line: int = 0
     extra: str = ""               # more FFmpeg filters after the loudness (the parts' loudness, going down under voices)
     skip: float = 0.0             # where in the file the music starts (seconds)
+    extra_after: str = ""         # more filters after the music is put in its place (finished-video time: t = 0 at the video's start)
 
 
 @dataclass
