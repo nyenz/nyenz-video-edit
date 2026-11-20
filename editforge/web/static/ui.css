@@ -309,7 +309,10 @@ h3 { font-size: 13px; font-weight: 600; color: var(--ink); margin: 0; }
 a.btn, a.btn:hover { text-decoration: none; }
 .mini { display: flex; flex-direction: column; background: #000; border-radius: var(--r-s); overflow: hidden; margin-top: 8px; }
 .mini video { width: 100%; max-height: 60vh; background: #000; display: block; cursor: pointer; }
-.mini:fullscreen video { max-height: none; flex: 1; }
+.mini:fullscreen { width: 100vw; height: 100vh; margin: 0; border-radius: 0; }
+.mini:fullscreen video { max-height: none; flex: 1 1 auto; min-height: 0; height: auto; object-fit: contain; }
+.mini:fullscreen .mini-bar { flex: none; padding: 8px 14px; }
+.mini:fullscreen > :not(video) { flex: none; }
 .mini-bar { display: flex; align-items: center; gap: 6px; padding: 4px 6px; background: var(--panel); }
 .mini-bar .rng { flex: 1; min-width: 40px; }
 .mini-bar .note { white-space: nowrap; font-size: 12px; }
@@ -969,6 +972,12 @@ input.sw.sm:checked::after { transform: translateX(12px); }
 .vnext.good { color: #7ee081; }
 
 /* 1.23: the level meter next to the play buttons */
+.solo-chip { display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 6px 0 10px; border-radius: 8px; border: 1px solid rgba(245, 185, 66, .45);
+  background: rgba(245, 185, 66, .12); color: #f5d9a0; font: inherit; font-size: 12px; cursor: pointer; max-width: 320px; transition: background .15s; }
+.solo-chip[hidden] { display: none; }
+.solo-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.solo-chip b { flex: none; padding: 3px 8px; border-radius: 6px; background: rgba(245, 185, 66, .22); color: #fff; font-weight: 600; }
+.solo-chip:hover { background: rgba(245, 185, 66, .2); }
 .lmeter-live { display: flex; align-items: center; gap: 8px; padding: 0 10px; height: 30px; border-radius: 8px; background: var(--sunk); border: 1px solid var(--line-soft);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .04); }
 .lmeter-live[hidden] { display: none; }
@@ -1026,3 +1035,50 @@ label.swl.tight { padding: 0; gap: 8px; font-size: 12.5px; }
   background: #ffd166; box-shadow: 0 0 0 1.5px rgba(0, 0, 0, .45); cursor: pointer; z-index: 3; transition: transform .12s, background .12s; }
 .ruler .scut:hover { transform: rotate(45deg) scale(1.05); background: #ffe199; }
 .track-box { border-top: 1px solid var(--line-soft); }
+
+.loud-row { display: flex; gap: 10px; align-items: center; margin: 8px 0 0; }
+.loud-row .hint { margin: 0; flex: 1; }
+
+/* the player's controls never run out of their panel: on a narrow panel the level meter and the Solo note get smaller */
+.transport { min-width: 0; container-type: inline-size; }
+.transport .tc { min-width: 0; white-space: nowrap; }
+.transport .tr-right { flex-shrink: 1; min-width: 0; }
+.lmeter-live { min-width: 0; flex-shrink: 1; }
+.lm-bar { flex: 1 1 130px; min-width: 40px; width: auto; max-width: 130px; }
+.lm-word { display: inline-block; min-width: 52px; }          /* the words change while playing: the controls next to them never jump */
+@container (max-width: 700px) {
+  .lm-label, .solo-chip span { display: none; }
+  .lm-bar { max-width: 70px; }
+}
+@container (max-width: 560px) {
+  .lm-word { display: none; }
+}
+
+/* the top bar never wraps words onto two lines; on a narrow window the version pill only shows its number */
+.brand, .brand span, .update-pill, .update-pill span { white-space: nowrap; }
+@media (max-width: 1400px) { .update-pill.quiet span { font-size: 0; } .update-pill.quiet span::after { content: attr(data-v); font-size: 12.5px; } }
+
+/* a narrow window: the top bar keeps every button, with the words of the less used ones hidden (their tips still say what they are) */
+@media (max-width: 1240px) {
+  .top { gap: 10px; }
+  .top .brand span, .top .act-label, .top > .btn.ghost:not(.back-btn) > span:not(.count), .top .nav a > span:not(.n) { display: none; }
+  .top .lenpill > span:first-of-type { display: none; }
+}
+@media (max-width: 1100px) {
+  .top .update-pill.quiet { display: none; }
+  .top .btn > span:not(.count) { display: none; }
+}
+
+/* Clips page on a narrow window: the controls under the picture keep to one line, with words hidden where needed */
+main.view { container-type: inline-size; }
+.markbar { min-width: 0; }
+.markbar .btn, .transport .btn { flex-shrink: 0; }
+@container (max-width: 760px) {
+  .markbar .btn:not(.primary) > span, .markbar .mlen .lbl, .suite.clips .tr-right > .note, .suite.clips .tr-right .btn > span { display: none; }
+  .markbar .tin { width: 64px; }
+}
+@container (max-width: 560px) {
+  .markbar .btn.primary > span { display: none; }
+}
+.grid2 > .btn { min-width: 0; }
+.grid2 > .btn > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
