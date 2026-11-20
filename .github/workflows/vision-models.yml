@@ -7,6 +7,9 @@ name: Vision models
 
 on:
   workflow_dispatch:
+  push:                          # also when this file changes on main (so it can be started by a merge)
+    branches: [main]
+    paths: [".github/workflows/vision-models.yml"]
 
 permissions:
   contents: write
