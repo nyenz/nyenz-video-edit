@@ -530,12 +530,20 @@ def test_music_parts_and_ducking_are_cleaned_and_turned_into_filters():
                                        "duck": {"on": 1, "level": 9}, "locked": 1}, {"file": "u/x/b.mp3", "parts": [{"end": None}], "duck": {"on": 0}}]})
     a, b = st["layers"]
     assert a["parts"] == [{"end": 2.0, "volume": 2.0, "mute": False}, {"end": 4.0, "volume": 1.0, "mute": True}, {"end": None, "volume": 0.5, "mute": False}]
-    assert a["duck"] == {"on": True, "level": 1.0} and a["locked"] is True
+    assert a["duck"] == {"on": True, "by": {"voices": 1.0}} and a["locked"] is True     # an older project's one level reads the same
     assert "parts" not in b and "duck" not in b and "locked" not in b                       # nothing changed: nothing kept
     assert P.music_parts_spans(a["parts"], 5.0) == [(0.0, 2.0, 2.0), (2.0, 4.0, 0.0), (4.0, 5.0, 0.5)]
     assert P.duck_spans([(1.0, 1.5), (1.9, 2.5), (8.0, 9.0)], 10.0) == [(0.65, 3.3), (7.65, 9.8)]
-    f = P.music_envelope(a["parts"], {"on": True, "level": 0.3}, [(1.0, 2.0)], 5.0)
-    assert f.count("volume=") == 4 and "between(t,0.650,2.800)" in f and "1-0.7000*" in f
+    f = P.music_envelope(a["parts"], {"on": True, "by": {"voices": 0.3}}, {"voices": [(1.0, 2.0)]}, 5.0)
+    assert f.count("volume=") == 4 and "pow(10," in f and "-10.46" in f                      # 30 % is -10.46 dB
+    # going down under two tracks at once, each to its own level; where both are heard the lower one counts
+    c = P.duck_curve({"voices": 0.3, "effects": 0.1}, {"voices": [(1.0, 3.0)], "effects": [(2.0, 6.0)]})
+    from editforge.analysis.evenout import at
+    assert abs(at(c, 1.5) - (-10.46)) < 0.05 and abs(at(c, 2.6) - (-20.0)) < 0.05 and abs(at(c, 5.0) - (-20.0)) < 0.05 and at(c, 8.0) == 0.0
+    st2 = P.clean_settings({"layers": [{"file": "u/x/a.mp3", "duck": {"on": True, "by": {"voices": 0.3, "effects": 0.1, "nonsense": 1}}}],
+                            "ducks": {"music": {"on": True, "by": {"voices": 0.2, "music": 0.5}}, "effects": {"on": True, "level": 0.4}}})
+    assert st2["layers"][0]["duck"] == {"on": True, "by": {"voices": 0.3, "effects": 0.1}}
+    assert st2["ducks"] == {"music": {"on": True, "by": {"voices": 0.2}}, "effects": {"on": True, "by": {"voices": 0.4}}}
 
     class Seg:                                        # a 2 s piece of the source from 10 s, played at double speed, starting at 1 s
         kind, mute, reverse, speed, src_start_f, src_len_f, out_start = "clip", False, False, 2.0, 250, 50, 25
@@ -604,7 +612,7 @@ def test_even_out_takes_loud_moments_down_and_quiet_ones_up_and_leaves_the_rest(
     t = np.arange(0, 40, 1 / sr)
     amp = np.where((t > 10) & (t < 15), 0.8, np.where((t > 22) & (t < 28), 0.05, np.where(t > 34, 0.0, 0.2)))
     x = amp * np.sin(2 * np.pi * 440 * t)
-    for s, lo in ((1, -9.0), (2, -14.0)):
+    for s, lo in ((1, -18.0), (2, -30.0)):
         g = E.gains(x, sr, s)
         at = lambda sec: g[int(sec / E.HOP)]
         assert lo <= at(12.5) < -3.0                    # loud: down
@@ -684,9 +692,9 @@ def test_going_down_settings_song_start_and_caption_height_are_cleaned():
     st = P.clean_settings({"ducks": {"music": {"on": 1, "level": 0.4}, "voices": {"on": 1}, "effects": {"on": 0}, "x": {"on": 1}},
                            "layers": [{"file": "u/x/a.mp3", "start": 75.5, "duck": {"on": 1, "under": "effects"}}, {"file": "u/x/b.mp3", "duck": {"on": 1, "under": "nope"}}],
                            "caption_height": 140})
-    assert st["ducks"] == {"music": {"on": True, "level": 0.4, "under": "voices"}, "voices": {"on": True, "level": 0.35, "under": "music"}}
-    assert st["layers"][0]["start"] == 75.5 and st["layers"][0]["duck"]["under"] == "effects"
-    assert "under" not in st["layers"][1]["duck"] and "start" not in st["layers"][1]
+    assert st["ducks"] == {"music": {"on": True, "by": {"voices": 0.4}}, "voices": {"on": True, "by": {"music": 0.35}}}
+    assert st["layers"][0]["start"] == 75.5 and st["layers"][0]["duck"]["by"] == {"effects": 0.35}
+    assert st["layers"][1]["duck"]["by"] == {"voices": 0.35} and "start" not in st["layers"][1]
     assert st["caption_height"] == 90.0 and "caption_height" not in P.clean_settings({})
     pts = P.duck_points([[2.0, 2.6]], 0.3)
     assert pts[0] == [1.65, 0.0] and abs(pts[-1][0] - 3.4) < 1e-6 and abs(pts[1][1] + 10.46) < 0.1
@@ -807,3 +815,40 @@ def test_clean_up_suggests_older_exports_previews_and_a_finished_video(web, film
         assert c.wait_jobs([j["id"]], 180)[0]["status"] == "done"
     items = [x for x in c.json("GET", "/api/cleanup")[1]["items"] if x["kind"] == "video"]
     assert len(items) == 1 and len(items[0]["act"]["projects"]) >= 5 and items[0]["stage"] == "final"
+
+
+def test_song_parts_can_be_moved_and_taken_out_and_play_their_own_bit_of_the_song(web, film, tmp_path):
+    """A song of two halves (0-5 s: 700 Hz, 5-10 s: 1500 Hz). Its second part (from 3 s) is set to play the song from 6 s,
+    so 1500 Hz is heard from 3 s; the first part (0-3 s) plays the song from 0 s (700 Hz)."""
+    c, state = web
+    song = tmp_path / "halves.wav"
+    run(["-f", "lavfi", "-i", "sine=frequency=700:duration=5", "-f", "lavfi", "-i", "sine=frequency=1500:duration=5",
+         "-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1,volume=0.3", str(song)])
+    mid = c.upload(song)
+    parts = [{"end": 3.0}, {"end": None, "from": 6.0}]
+    assert P.song_pieces(P.clean_music_parts(parts), 0.0, 6.0) == [(0.0, 3.0, 0.0), (3.0, 6.0, 6.0)]
+    assert P.song_pieces(P.clean_music_parts([{"end": 3.0}, {"end": None, "volume": 0.5}]), 1.0, 6.0) == [(0.0, 6.0, 1.0)]   # only cut: one stretch
+    assert P.song_pieces(P.clean_music_parts([{"end": 2.0, "mute": True}, {"end": None, "from": 4.0}]), 0.0, 6.0) == [(2.0, 6.0, 4.0)]
+    job = export(c, film, {"original_sound": False, "layers": [{"file": mid, "volume": 1.0, "parts": parts, "fade_in": 0, "fade_out": 0}]})
+    assert job["status"] == "done", job
+    y = decode(job["output_path"])
+    lv = lambda a, b, hz: level(y[int(44100 * a): int(44100 * b)], hz)
+    assert lv(1.0, 2.5, 700) > 5 * lv(1.0, 2.5, 1500)        # first part: the start of the song
+    assert lv(3.5, 5.5, 1500) > 5 * lv(3.5, 5.5, 700)        # second part: from 6 s into the song
+
+
+def test_strong_even_out_brings_everything_close_and_catches_a_sudden_burst():
+    import numpy as np
+    from editforge.analysis import evenout as E
+    sr = 8000
+    t = np.arange(0, 40, 1 / sr)
+    amp = np.where((t > 10) & (t < 15), 0.8, np.where((t > 22) & (t < 28), 0.05, 0.2))
+    amp[(t > 18) & (t < 18.15)] = 0.9                       # a gunshot
+    x = amp * np.sin(2 * np.pi * 440 * t)
+    g = E.gains(x, sr, 2)
+    y = x * np.repeat(10 ** (g / 20), int(sr * E.HOP))[: len(x)]
+    db = lambda a, b: 10 * np.log10(np.mean(y[int(a * sr): int(b * sr)] ** 2))
+    normal = db(3, 8)
+    assert abs(db(11, 14) - normal) < 1.5                   # 12 dB too loud before: now within 1.5 dB
+    assert abs(db(23, 27) - normal) < 2.5                   # 12 dB too quiet before
+    assert db(18.0, 18.15) - normal < 5.0                   # the shot: 13 dB over before

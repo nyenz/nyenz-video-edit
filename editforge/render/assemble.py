@@ -38,6 +38,8 @@ def music_chain(m: MusicSpec, total_s: float, sr: int, layout: str) -> Optional[
     if m.start_s > 0:
         ms = int(round(m.start_s * 1000))
         parts.append(f"adelay={ms}" if layout == "mono" else f"adelay={ms}|{ms}")
+    if m.extra_after:
+        parts.append(m.extra_after)
     return ",".join(parts)
 
 

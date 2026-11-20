@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.31.0
+* **Go down under several tracks at once, each with its own level**: a song (or a split track) can now go down under
+  Voices, Music and Effects together, for example to 30 % while people talk and to 10 % under effects. Each track has its
+  own switch and slider; where two are heard at once, the lower level counts. Older projects keep what they had.
+* **Edit the song on its track, like CapCut**:
+  * drag a part to move it (its sound goes with it; where it was becomes a silent gap; what it lands on is covered);
+  * drag the edge of a part to move the cut (both parts keep their sound in place);
+  * **Shift + Delete** (or *Delete, close gap*) takes parts out of the song and moves the rest up; **Delete** leaves a gap;
+  * *This part plays the song from*: choose which bit of the song a part plays, without moving it.
+* **Even out / Auto level is much stronger**, everywhere it is used (song Auto level, Even out on parts and on split
+  tracks): Strong now brings every moment to the usual level, quickly; Gentle does most of the way. Sudden loud bursts
+  (shots, shouts, doors) are caught within a tenth of a second. Silence and hiss are still never pulled up.
+
 ## 1.30.0
 * **Overall loudness** (Export, just before the final video or the Quick preview): seven steps for how loud the whole
   video is. It starts in the middle (**Standard**, the YouTube standard, -14 LUFS); **-1 / -2 / -3** are each 1.5 dB

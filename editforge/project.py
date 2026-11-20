@@ -264,6 +264,25 @@ def clean_texts(raw: Any) -> List[Dict[str, Any]]:
     return out
 
 
+def clean_duck(raw: Any, own: Optional[str], default_under: str) -> Optional[Dict[str, Any]]:
+    """Going down while other tracks are heard: {"on": True, "by": {"voices": 0.3, "effects": 0.1}} - how loud it stays
+    under each of them, each on its own (where two are heard at once the lower one counts). Older projects had one track
+    and one level ({"level", "under"}): those are read as the same thing. None: it does not go down."""
+    if not isinstance(raw, dict) or not raw.get("on"):
+        return None
+    by: Dict[str, float] = {}
+    rb = raw.get("by")
+    if isinstance(rb, dict):
+        for k in MIX_LAYERS:
+            if k != own and rb.get(k) is not None:
+                by[k] = round(_num(rb.get(k), DUCK_LEVEL, 0.0, 1.0), 3)
+    else:
+        under = raw.get("under") if raw.get("under") in MIX_LAYERS else default_under
+        if under != own:
+            by[under] = round(_num(raw.get("level"), DUCK_LEVEL, 0.0, 1.0), 3)
+    return {"on": True, "by": by} if by else None
+
+
 def final_loudness(settings: Dict[str, Any]) -> Dict[str, float]:
     """The loudness the finished video is set to: the standard, moved by the chosen Overall loudness step."""
     step = int(settings.get("loudness_step") or 0)
@@ -316,11 +335,9 @@ def clean_settings(raw: Any) -> Dict[str, Any]:
             parts = clean_music_parts(x.get("parts"))
             if parts:
                 y["parts"] = parts
-            dk = x.get("duck") if isinstance(x.get("duck"), dict) else {}
-            if dk.get("on"):
-                y["duck"] = {"on": True, "level": round(_num(dk.get("level"), DUCK_LEVEL, 0.0, 1.0), 3)}
-                if dk.get("under") in ("music", "effects"):
-                    y["duck"]["under"] = dk["under"]      # what it goes down under (voices when not said)
+            dk = clean_duck(x.get("duck"), None, "voices")
+            if dk:
+                y["duck"] = dk                            # how low it goes under each track (voices, music, effects)
             skip = round(_num(x.get("start"), 0.0, 0.0, 36000.0), 2)
             if skip >= 0.05:
                 y["start"] = skip                         # where in the song it starts (seconds into the file)
@@ -346,10 +363,9 @@ def clean_settings(raw: Any) -> Dict[str, Any]:
     ducks: Dict[str, Dict[str, Any]] = {}                 # split tracks that go down while another one is heard
     rd = raw.get("ducks") if isinstance(raw.get("ducks"), dict) else {}
     for layer in STEM_KEYS:
-        dk = rd.get(layer) if isinstance(rd.get(layer), dict) else {}
-        under = dk.get("under") if dk.get("under") in MIX_LAYERS else ("voices" if layer != "voices" else "music")
-        if dk.get("on") and under != layer:
-            ducks[layer] = {"on": True, "level": round(_num(dk.get("level"), DUCK_LEVEL, 0.0, 1.0), 3), "under": under}
+        dk = clean_duck(rd.get(layer), layer, "voices" if layer != "voices" else "music")
+        if dk:
+            ducks[layer] = dk
     s["ducks"] = ducks
     fr = clean_frame(raw.get("frame")) if isinstance(raw.get("frame"), dict) else None
     s["frame"] = fr if frame_active(fr) else None
@@ -388,6 +404,8 @@ def clean_music_parts(raw: Any) -> Optional[List[Dict[str, Any]]]:
             part["even"] = 0                   # Even out switched off here, also when the track has Auto level
         if re.fullmatch(r"g[0-9a-z]{1,10}", str(x.get("group") or "")):
             part["group"] = str(x["group"])
+        if x.get("from") is not None and x.get("from") != "":
+            part["from"] = round(_num(x.get("from"), 0.0, 0.0, 360000.0), 3)   # where in the song this part plays from
         out.append(part)
         if e is None:
             break
@@ -397,6 +415,37 @@ def clean_music_parts(raw: Any) -> Optional[List[Dict[str, Any]]]:
     if all(abs(p["volume"] - 1.0) < 0.001 and not p["mute"] and len(p) == 3 for p in out) and len(out) <= 1:
         return None
     return out or None
+
+
+def music_runs(parts: Optional[List[Dict[str, Any]]], skip: float, total: float) -> List[tuple]:
+    """(start, end, song position at start, part) of every part, in finished-video time. A part plays on from the one
+    before it, unless it was moved or the song was cut out before it: then it has its own place in the song ('from')."""
+    out, a, src = [], 0.0, float(skip)
+    for p in parts or [{"end": None, "volume": 1.0, "mute": False}]:
+        b = total if p.get("end") is None else min(total, float(p["end"]))
+        if p.get("from") is not None:
+            src = float(p["from"])
+        if b > a:
+            out.append((a, b, src, p))
+        src += max(0.0, b - a)
+        a = max(a, b)
+        if a >= total:
+            break
+    return out
+
+
+def song_pieces(parts: Optional[List[Dict[str, Any]]], skip: float, total: float) -> List[tuple]:
+    """The stretches where the song plays on without a jump: (start, end, song position at start), muted parts left out.
+    One stretch for a song that was only cut (not moved): the song is then made exactly as before."""
+    out: List[List[float]] = []
+    for a, b, src, p in music_runs(parts, skip, total):
+        if p.get("mute"):
+            continue
+        if out and abs(out[-1][1] - a) < 1e-6 and abs(out[-1][2] + (out[-1][1] - out[-1][0]) - src) < 1e-3:
+            out[-1][1] = b
+        else:
+            out.append([a, b, src])
+    return [tuple(x) for x in out]
 
 
 def music_parts_spans(parts: Optional[List[Dict[str, Any]]], total: float) -> List[tuple]:
@@ -428,20 +477,39 @@ def duck_spans(voice: List[tuple], total: float) -> List[tuple]:
     return [(a, b) for a, b in out]
 
 
-def music_envelope(parts: Optional[List[Dict[str, Any]]], duck: Optional[Dict[str, Any]], voice: List[tuple], total: float) -> str:
-    """FFmpeg filters (after the track's own loudness) for the music parts' loudness and for going down under voices."""
+def duck_curve(by: Dict[str, float], heard: Dict[str, Sequence[Sequence[float]]]) -> List[List[float]]:
+    """Going down under several tracks at once, as one loudness curve [[seconds, dB], ...]: under each track to its own
+    level, gradually; where two are heard at the same time the lower level counts."""
+    from .analysis import evenout
+    curves = [duck_points(heard.get(k) or [], float(v)) for k, v in by.items()]
+    curves = [c for c in curves if c]
+    if len(curves) <= 1:
+        return curves[0] if curves else []
+    ts = sorted({round(float(t), 4) for c in curves for t, _ in c})
+    pts: List[List[float]] = []
+    for a, b in zip(ts, ts[1:] + [None]):
+        pts.append([a, min(evenout.at(c, a) for c in curves)])
+        if b is not None and b - a > 0.02:          # where two slopes cross in between, so the line stays exact
+            m = (a + b) / 2
+            v = min(evenout.at(c, m) for c in curves)
+            if abs(v - (pts[-1][1] + min(evenout.at(c, b) for c in curves)) / 2) > 0.2:
+                pts.append([round(m, 4), v])
+    return pts
+
+
+def music_envelope(parts: Optional[List[Dict[str, Any]]], duck: Optional[Dict[str, Any]], heard: Dict[str, Sequence[Sequence[float]]],
+                   total: float) -> str:
+    """FFmpeg filters (after the track's own loudness) for the music parts' loudness and for going down under other tracks.
+    heard: for each track (voices, music, effects), when it is heard in finished-video time."""
+    from .analysis import evenout
     chain = []
     for a, b, g in music_parts_spans(parts, total):
         # short slopes at the cuts (none at the very start or end), so a cut never clicks
         lo = f"(t-{a:.3f})/0.04" if a > 0.001 else "1"
         hi = f"({b:.3f}-t)/0.04" if b < total - 0.001 else "1"
         chain.append(f"volume='1+({g:.4f}-1)*clip(min({lo},{hi}),0,1)':eval=frame:enable='between(t,{a:.3f},{b:.3f})'")
-    if duck and duck.get("on") and voice:
-        low = float(duck.get("level", DUCK_LEVEL))
-        for a, b in duck_spans(voice, total):
-            # 1 at the edges, `low` inside; straight slopes of DUCK_DOWN / DUCK_UP seconds
-            env = f"clip(min((t-{a:.3f})/{DUCK_DOWN:g},({b:.3f}-t)/{DUCK_UP:g}),0,1)"
-            chain.append(f"volume='1-{1 - low:.4f}*{env}':eval=frame:enable='between(t,{a:.3f},{b:.3f})'")
+    if duck and duck.get("on") and duck.get("by"):
+        chain += evenout.filters(duck_curve(duck["by"], heard), 0.0, total)
     return ",".join(chain)
 
 
@@ -592,34 +660,26 @@ def music_shape(t: Dict[str, Any], total: float, cache: Optional[str]) -> str:
     """Filters (finished-video time) for a music track's Auto level / Even out and the gentle fades of its parts."""
     from .analysis import evenout
     chain: List[str] = []
-    parts = t.get("parts") or [{"end": None, "volume": 1.0, "mute": False}]
     auto = int(t.get("auto") or 0)
     dur = None
-    a = 0.0
-    for q in parts:
-        b = total if q.get("end") is None else min(total, float(q["end"]))
-        if b <= a:
-            continue
+    for a, b, src, q in music_runs(t.get("parts"), float(t.get("start") or 0.0), total):
         s = q.get("even", auto)
-        if s:
+        if s and not q.get("mute"):
             if dur is None:
                 dur = float(probe_media(t["path"]).duration or 0)
             if dur > 0.5:
                 env = evenout.envelope(t["path"], int(s), cache)
-                skip = float(t.get("start") or 0.0)                  # the song starts this far into its file
-                k = int((a + skip) // dur)
-                while k * dur - skip < b and env:
-                    lo, hi = max(a, k * dur - skip), min(b, (k + 1) * dur - skip)   # the song plays again from its start when it ends
-                    chain += evenout.filters(evenout.shifted(env, k * dur - skip), lo, hi)
+                k = int(src // dur)                                  # the song plays again from its start when it ends
+                while a - src + k * dur < b and env:
+                    zero = a - src + k * dur                         # where this round of the song starts on the timeline
+                    lo, hi = max(a, zero), min(b, zero + dur)
+                    chain += evenout.filters(evenout.shifted(env, zero), lo, hi)
                     k += 1
         fin, fout = float(q.get("fin") or 0), float(q.get("fout") or 0)
         if fin:
             chain.append(f"volume='clip((t-{a:.3f})/{fin:.3f},0,1)':eval=frame:enable='between(t,{a:.3f},{a + fin:.3f})'")
         if fout:
             chain.append(f"volume='clip(({b:.3f}-t)/{fout:.3f},0,1)':eval=frame:enable='between(t,{b - fout:.3f},{b:.3f})'")
-        a = b
-        if a >= total:
-            break
     return ",".join(chain)
 
 
@@ -1112,13 +1172,25 @@ def plan_project(project: Dict[str, Any], src_path: str, *, music_path: Optional
         fo = t.get("fade_out")
         m = MusicSpec(t["path"], float(t["volume"]), False, 0.0, None, True, 0.5 if fi is None else float(fi), 1.5 if fo is None else float(fo))
         m.skip = float(t.get("start") or 0.0)
-        duck = t.get("duck") if isinstance(t.get("duck"), dict) and t["duck"].get("on") else None
-        under = (duck or {}).get("under") or "voices"
-        if duck and under not in act_out:
-            act_out[under] = map_ranges(activity_ranges(project, src_path, under, media, stems_home, planner), planner.segs, float(planner.F))
+        duck = clean_duck(t.get("duck"), None, "voices")
+        for under in (duck or {}).get("by") or {}:
+            if under not in act_out:
+                act_out[under] = map_ranges(activity_ranges(project, src_path, under, media, stems_home, planner), planner.segs, float(planner.F))
         total_s = planner.total / float(planner.F)
-        m.extra = ",".join(x for x in (music_shape(t, total_s, cache), music_envelope(t.get("parts"), duck, act_out.get(under) or [], total_s)) if x)
-        audio.music.append(m)
+        m.extra = ",".join(x for x in (music_shape(t, total_s, cache), music_envelope(t.get("parts"), duck, act_out, total_s)) if x)
+        pieces = song_pieces(t.get("parts"), m.skip, total_s)
+        if len(pieces) == 1 and pieces[0][0] < 0.001 and abs(pieces[0][2] - m.skip) < 1e-3 and pieces[0][1] >= total_s - 0.001:
+            audio.music.append(m)                         # the song plays straight through (only cut): as before
+            continue
+        # moved parts, or bits of the song taken out: one stretch of the song for each, put in its place on the timeline;
+        # the loudness of the whole track (parts, going down, even out) then follows the timeline as usual
+        dur = float(probe_media(t["path"]).duration or 0) or 1e9
+        for j, (a, b, src) in enumerate(pieces):
+            q = MusicSpec(t["path"], m.volume, False, a, b, True, m.fade_in if a < 0.001 else 0.02,
+                          m.fade_out if b >= total_s - 0.001 else 0.02)
+            q.skip = src % dur
+            q.extra_after = m.extra
+            audio.music.append(q)
     if audio.music or (media.has_audio and not silent):
         audio.loudnorm = final_loudness(st)               # always last, on the whole mix (video sound + every music layer)
     if media.has_audio and not silent:
@@ -1135,9 +1207,13 @@ def plan_project(project: Dict[str, Any], src_path: str, *, music_path: Optional
     if media.has_audio and not silent:
         stem_ducks: Dict[str, List[List[float]]] = {}
         if audio.mix:
+            heard_src: Dict[str, List[List[float]]] = {}
             for name, dk in (st.get("ducks") or {}).items():
                 if name in audio.mix["files"]:
-                    stem_ducks[name] = duck_points(activity_ranges(project, src_path, dk["under"], media, stems_home, planner), float(dk["level"]))
+                    for under in dk["by"]:
+                        if under not in heard_src:
+                            heard_src[under] = activity_ranges(project, src_path, under, media, stems_home, planner)
+                    stem_ducks[name] = duck_curve(dk["by"], heard_src)
         attach_shapes([p for p, g in pairs if g], groups, src_path, audio.mix, cache, stem_ducks)
     audio.fade_in, audio.fade_out = float(st["fade_in"]), float(st["fade_out"])
     audio.fade_video = planner.has_video

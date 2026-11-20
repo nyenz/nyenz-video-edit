@@ -169,3 +169,48 @@ def test_overall_loudness_has_seven_steps_and_is_used_by_the_preview(live, page,
     page.evaluate("() => exportDialog()")                                 # (the Exports drawer is open now)
     assert page.locator(".dialog[aria-label=Export] .seg button.on:has-text('+2')").count() == 1           # remembered
     assert page.errors == []
+
+
+def test_song_goes_down_under_each_track_with_its_own_level(live, page, movie_id, music_id):
+    pid = open_final(live, page, movie_id, "Ducks")
+    page.evaluate("(id) => { S.proj.settings.layers = [{ file: id, volume: 0.5, mute: false, solo: false, duck: { on: true, by: { voices: 0.3, effects: 0.1 } } }]; scheduleSave(); loadFiles(); }", music_id)
+    page.wait_for_selector(".mrow .mpart")
+    page.click(".mrow .mpart")
+    rows = page.locator(".duck-box .duck-row")
+    page.wait_for_function("() => document.querySelectorAll('.duck-box .duck-row').length === 3")
+    assert rows.nth(0).get_attribute("data-under") == "voices" and "30%" in rows.nth(0).inner_text()
+    assert "on" in rows.nth(2).get_attribute("class") and "10%" in rows.nth(2).inner_text()
+    assert "on" not in rows.nth(1).get_attribute("class").split()                  # music: not chosen
+    rows.nth(0).locator("input.sw").click()                                         # voices off, effects stays
+    page.wait_for_function("() => { const d = S.proj.settings.layers[0].duck; return d.on && !('voices' in d.by) && d.by.effects === 0.1; }")
+    page.evaluate("() => saveNow()")
+    saved = live.call("GET", f"/api/projects/{pid}")["project"]["settings"]["layers"][0]["duck"]
+    assert saved == {"on": True, "by": {"effects": 0.1}}
+    assert page.errors == []
+
+
+def test_song_parts_can_be_dragged_and_taken_out(live, page, movie_id, music_id):
+    pid = open_final(live, page, movie_id, "Song parts")
+    page.evaluate("(id) => { S.proj.settings.layers = [{ file: id, volume: 0.5, mute: false, solo: false, parts: [{ end: 20, volume: 1, mute: false }, { end: 40, volume: 1, mute: false }, { end: null, volume: 1, mute: false }] }]; scheduleSave(); loadFiles(); }", music_id)
+    page.wait_for_function("() => document.querySelectorAll('.mrow .mpart').length === 3")
+    page.evaluate("() => { S.msel = { i: 0, ks: new Set([1]) }; moveMusicPart(0, 1, 5); }")          # part 2 (20-40 s) 5 s later
+    ps = page.evaluate("() => mspans(layers()[0]).map((r) => [+r.a.toFixed(2), +r.b.toFixed(2), +r.src.toFixed(2), !!r.q.mute])")
+    assert ps[:3] == [[0, 20, 0, False], [20, 25, 20, True], [25, 45, 20, False]]               # a gap where it was, its sound went with it
+    assert [ps[3][0], ps[3][2]] == [45, 45]                                                    # the rest is covered up to 45 s
+    page.evaluate("() => { S.msel = { i: 0, ks: new Set([1]) }; deleteMusicParts(true); }")     # take the gap out: the rest moves up
+    ps = page.evaluate("() => mspans(layers()[0]).map((r) => [+r.a.toFixed(2), +r.b.toFixed(2), +r.src.toFixed(2), !!r.q.mute])")
+    assert ps[:2] == [[0, 20, 0, False], [20, 40, 20, False]] and [ps[2][0], ps[2][2]] == [40, 45]
+    page.evaluate("() => moveMusicCut(0, 0, 15)")                                              # the cut at 20 s moves to 15 s
+    ps = page.evaluate("() => mspans(layers()[0]).map((r) => [+r.a.toFixed(2), +r.b.toFixed(2), +r.src.toFixed(2)])")
+    assert ps[0] == [0, 15, 0] and ps[1] == [15, 40, 15]
+    page.evaluate("() => saveNow()")
+    saved = live.call("GET", f"/api/projects/{pid}")["project"]["settings"]["layers"][0]["parts"]
+    assert saved[0]["end"] == 15.0 and "from" not in saved[0] and "from" not in saved[1]      # follows on: no jump saved
+    # a real drag with the mouse moves the last part
+    page.evaluate("() => { S.pps = 8; renderTimeline(); }")
+    box = page.locator('.mrow[data-i="0"] .mpart').nth(1).bounding_box()
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.mouse.down(); page.mouse.move(box["x"] + box["width"] / 2 + 40, box["y"] + box["height"] / 2, steps=5); page.mouse.up()
+    ps = page.evaluate("() => mspans(layers()[0]).map((r) => [+r.a.toFixed(1), +r.src.toFixed(1), !!r.q.mute])")
+    assert [20.0, 15.0, False] in ps and [15.0, 15.0, True] in ps                               # moved 5 s right, a gap before it
+    assert page.errors == []

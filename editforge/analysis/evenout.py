@@ -5,7 +5,7 @@ distorts the sound like a compressor can, because the loudness only changes grad
 moments that are already fine are left exactly as they are.
 
 envelope(path, strength) -> [[seconds, dB], ...]: the change of loudness over the file, simplified to few points.
-Strength 1 = gentle, 2 = strong. The result is kept on disk, so a long film is only listened to once.
+Strength 1 = gentle (most of the way to the usual level), 2 = strong (all the way, quickly). The result is kept on disk, so a long film is only listened to once.
 """
 
 from __future__ import annotations
@@ -20,9 +20,12 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 HOP = 0.1                      # seconds between loudness values
 STRENGTHS = {
-    # how far from the usual level is still fine (dB up / dB down), how much of the rest is taken away, and the limits
-    1: {"hi": 3.0, "lo": 6.0, "down": 0.6, "up": 0.5, "max_down": -9.0, "max_up": 6.0},
-    2: {"hi": 1.5, "lo": 3.0, "down": 0.85, "up": 0.75, "max_down": -14.0, "max_up": 10.0},
+    # win: how long a moment is measured (hops of 0.1 s); hi / lo: how far over / under the usual level is still fine (dB);
+    # down / up: how much of the rest is taken away; max_down / max_up: the limits; fast: a sudden loud burst (a shot, a
+    # shout, a door) is also taken down this far over the usual level (dB), within a tenth of a second; attack / glide:
+    # how many hops it starts going down before a loud moment, and how smoothly it changes (hops)
+    1: {"win": 10, "hi": 1.5, "lo": 2.5, "down": 0.8, "up": 0.75, "max_down": -18.0, "max_up": 12.0, "fast": 8.0, "attack": 4, "glide": 5},
+    2: {"win": 5, "hi": 0.5, "lo": 1.0, "down": 1.0, "up": 0.95, "max_down": -30.0, "max_up": 18.0, "fast": 4.0, "attack": 2, "glide": 3},
 }
 _LOCK = threading.Lock()
 _MEM: Dict[str, List[List[float]]] = {}
@@ -30,7 +33,7 @@ _MEM: Dict[str, List[List[float]]] = {}
 
 def _key(path: str, strength: int) -> str:
     st = os.stat(path)
-    return hashlib.sha1(f"{os.path.abspath(path)}|{st.st_size}|{int(st.st_mtime)}|{strength}|v1".encode()).hexdigest()[:24]
+    return hashlib.sha1(f"{os.path.abspath(path)}|{st.st_size}|{int(st.st_mtime)}|{strength}|v2".encode()).hexdigest()[:24]
 
 
 def _decode(path: str) -> Any:
@@ -55,7 +58,9 @@ def _moving(x: Any, n: int, how: str = "mean") -> Any:
 
 
 def gains(x: Any, sr: int, strength: int) -> Any:
-    """dB change for every HOP of the sound x (mono, -1..1)."""
+    """dB change for every HOP of the sound x (mono, -1..1): every moment is brought close to the usual level of the
+    sound (gentle: most of the way, strong: all the way), and sudden loud bursts are caught within a tenth of a second.
+    Silence (and the quiet hiss between words) is never pulled up."""
     import numpy as np
     p = STRENGTHS[2 if strength >= 2 else 1]
     step = int(sr * HOP)
@@ -64,10 +69,10 @@ def gains(x: Any, sr: int, strength: int) -> Any:
         return np.zeros(max(n, 0))
     frames = x[: n * step].reshape(n, step)
     power = np.mean(frames * frames, axis=1)
-    peak = _moving(np.max(np.abs(frames), axis=1), 9, "max")
-    short = 10 * np.log10(np.maximum(_moving(power, 30), 1e-12))         # loudness over about 3 s
+    now = 10 * np.log10(np.maximum(power, 1e-12))                          # each tenth of a second
+    short = 10 * np.log10(np.maximum(_moving(power, p["win"]), 1e-12))      # each moment (0.5 s strong, 1 s gentle)
     loud = float(np.percentile(short, 95))
-    silent = short < max(-60.0, loud - 40.0)
+    silent = short < max(-60.0, loud - 35.0)
     if np.all(silent):
         return np.zeros(n)
     ref = float(np.median(short[~silent]))                                  # the usual level of this sound
@@ -76,18 +81,26 @@ def gains(x: Any, sr: int, strength: int) -> Any:
     g[over] = -(short[over] - ref - p["hi"]) * p["down"]
     under = (short < ref - p["lo"]) & ~silent
     g[under] = (ref - p["lo"] - short[under]) * p["up"]
+    # quiet ends of words next to silence are lifted only as far as the moment around them, so hiss is not pulled up
+    g = np.where(g > 0, np.minimum(g, np.maximum(0.0, short - max(-60.0, loud - 35.0))), g)
+    # a sudden burst: down within a tenth of a second, as far as needed to stay near the usual level
+    burst = np.where(now > ref + p["fast"], -(now - ref - p["fast"]), 99.0)
+    g = np.minimum(g, burst)
     g = np.clip(g, p["max_down"], p["max_up"])
-    # never lift a moment so far that its peaks would clip
-    room = 20 * np.log10(0.97 / np.maximum(peak, 1e-6))
+    # the final limiter catches what is left, but never lift a moment so far that it would have to work hard
+    peak = _moving(np.max(np.abs(frames), axis=1), 5, "max")
+    room = 20 * np.log10(1.4 / np.maximum(peak, 1e-6))
     g = np.where(g > 0, np.minimum(g, np.maximum(room, 0.0)), g)
-    # gradual: go down a little before a loud moment, and glide between levels (about a second)
-    g = np.minimum(g, _moving(g, 7, "min"))
-    g = _moving(_moving(g, 9), 9)
+    # gradual: start going down a little before a loud moment, then glide (fast enough to follow, never jumpy)
+    g = np.minimum(g, _moving(g, 2 * p["attack"] + 1, "min"))
+    g = _moving(_moving(g, p["glide"]), p["glide"])
+    g = np.minimum(g, _moving(burst, 3, "min"))            # bursts stay caught after the smoothing
+    g = np.clip(g, p["max_down"], p["max_up"])
     g[np.abs(g) < 0.25] = 0.0
     return g
 
 
-def simplify(g: Sequence[float], hop: float = HOP, tol: float = 0.3) -> List[List[float]]:
+def simplify(g: Sequence[float], hop: float = HOP, tol: float = 0.4) -> List[List[float]]:
     """Few points that follow the changes closely enough (straight lines in between); 0 dB stretches become two points."""
     n = len(g)
     if n == 0 or all(abs(v) < 1e-9 for v in g):
