@@ -63,7 +63,9 @@ SHAPES: Dict[str, tuple] = {
     "square_blur": ("instagram_square", None, False, "blur"),
 }
 #: quality name -> (CRF, x264 preset). Lower CRF is better; "medium" squeezes more quality into each megabyte than "veryfast".
-QUALITIES: Dict[str, tuple] = {"best": (17, "medium"), "high": (20, "veryfast"), "small": (23, "veryfast")}
+QUALITIES: Dict[str, tuple] = {"best": (17, "medium"), "high": (20, "veryfast"), "small": (23, "veryfast"),
+                               # clips, made to be edited again: so fine that a second making cannot be told apart
+                               "master": (12, "faster")}
 #: the long side of the exported picture. 4K is the default: YouTube gives 4K uploads its best quality, also for viewers on 1080p.
 EXPORT_SIZES: Dict[str, Optional[int]] = {"4k": 3840, "1440": 2560, "1080": 1920, "source": None}
 DEFAULT_SETTINGS: Dict[str, Any] = {
@@ -1101,6 +1103,8 @@ def plan_project(project: Dict[str, Any], src_path: str, *, music_path: Optional
     out = resolve_output(media, preset=preset, fit=fit, quality=f"crf:{crf}", preview=preview, notes=notes)
     if not preview:
         out.x264_preset = x264
+        if out.has_audio and out.container in ("mp4", "mov", "mkv"):
+            out.audio_bitrate = "320k"          # the sound kept clean too (YouTube and others encode it again after)
     long_side = EXPORT_SIZES.get(st.get("export_size") or "4k")
     if frame and out.has_video:                                # the Frame panel: its own canvas, layers and mask
         out.width, out.height = frame_size(frame, media.width, media.height, preview, long_side)

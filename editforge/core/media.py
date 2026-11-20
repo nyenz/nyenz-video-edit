@@ -37,6 +37,9 @@ def snap_fps(value: Fraction) -> Fraction:
     return Fraction(round(float(value))).limit_denominator(1) if value >= 1 else Fraction(1)
 
 
+HDR_TRANSFERS = ("smpte2084", "arib-std-b67")
+
+
 @dataclass
 class MediaInfo:
     """Everything EditForge needs to know about one media file."""
@@ -55,6 +58,10 @@ class MediaInfo:
     vfr: bool = False
     video_codec: str = ""
     pix_fmt: str = ""
+    color_transfer: str = ""      # e.g. bt709, smpte2084 (HDR10), arib-std-b67 (HLG)
+    color_primaries: str = ""
+    color_space: str = ""
+    color_range: str = ""         # tv (limited) or pc (full)
     video_duration: float = 0.0
     nb_frames: Optional[int] = None
     audio_codec: str = ""
@@ -164,6 +171,10 @@ def probe_media(path: str) -> MediaInfo:
                 f"This video has a variable frame rate; EditForge converts it to a steady {float(info.fps):.3f} frames per second.")
         info.video_codec = str(v.get("codec_name", ""))
         info.pix_fmt = str(v.get("pix_fmt", ""))
+        info.color_transfer = str(v.get("color_transfer") or "")
+        info.color_primaries = str(v.get("color_primaries") or "")
+        info.color_space = str(v.get("color_space") or "")
+        info.color_range = str(v.get("color_range") or "")
         info.video_duration = v_dur or duration
         try:
             info.nb_frames = int(v["nb_frames"]) if v.get("nb_frames") else None

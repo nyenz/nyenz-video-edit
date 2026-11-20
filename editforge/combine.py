@@ -18,7 +18,7 @@ from .dsl.registry import XFADE
 MODES = ("sequence", "side", "stack", "corner", "blend")
 CORNERS = ("top_left", "top_right", "bottom_left", "bottom_right")
 SOUNDS = ("both", "a", "b", "none")
-QUALITY_CRF = {"best": 17, "high": 20, "small": 23}
+QUALITY_CRF = {"best": 14, "high": 18, "small": 23}     # (a combined video is usually edited again: best is kept very fine)
 MAX_SIDE = 3840
 
 

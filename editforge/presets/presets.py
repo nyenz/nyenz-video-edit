@@ -7,7 +7,7 @@ from fractions import Fraction
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..core.errors import ScriptError
-from ..core.media import MediaInfo, snap_fps
+from ..core.media import HDR_TRANSFERS, MediaInfo, snap_fps
 from ..core.model import OutputSpec
 from ..dsl.registry import norm, suggest
 
@@ -148,7 +148,28 @@ def resolve_output(media: MediaInfo, *, preset: str = "original", size: Optional
         channels = p.channels or 2
     return OutputSpec(preset=p.name, container=container, width=w, height=h, fps=out_fps, fit=chosen_fit, crf=crf,
                       x264_preset=p.x264_preset, audio_bitrate=p.audio_bitrate, sample_rate=p.sample_rate if p.channels else 48000,
-                      channels=channels, has_video=has_video, has_audio=True, faststart=True)
+                      channels=channels, has_video=has_video, has_audio=True, faststart=True,
+                      color=output_color(media), hdr=bool(getattr(media, "color_transfer", "") in HDR_TRANSFERS))
+
+
+SDR_TAGS = {"primaries": ("bt709", "bt470bg", "smpte170m", "bt2020"), "transfer": ("bt709", "smpte170m", "bt470bg", "gamma22", "gamma28", "iec61966-2-1"),
+            "space": ("bt709", "smpte170m", "bt470bg", "bt2020nc")}
+
+
+def output_color(media: Any) -> Dict[str, str]:
+    """The colour tags the finished file gets: those of the original (the picture values are kept as they are, so they
+    mean the same colours), or BT.709 for an HDR original (which is turned into normal colours). Range is always 'tv':
+    the finished picture is always limited range (yuv420p)."""
+    if not getattr(media, "has_video", False):
+        return {}
+    if getattr(media, "color_transfer", "") in HDR_TRANSFERS:
+        return {"primaries": "bt709", "transfer": "bt709", "space": "bt709", "range": "tv"}
+    out = {"range": "tv"}
+    for key, field_ in (("primaries", "color_primaries"), ("transfer", "color_transfer"), ("space", "color_space")):
+        v = str(getattr(media, field_, "") or "")
+        if v in SDR_TAGS[key]:
+            out[key] = v
+    return out
 
 
 def default_extension(spec: OutputSpec) -> str:

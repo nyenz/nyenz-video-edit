@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.33.0 — no quality lost on the way
+* **Clips are made almost lossless** (they are edited and made again later, so nothing is lost twice). A clip set to a
+  smaller file keeps that.
+* **Graphics-card encoding at its best settings** (NVIDIA, Intel, AMD, Apple): the slowest, finest settings and a finer
+  quality number, so it looks the same as the software encoder. If a card cannot do them, the software encoder is used.
+* **Colours kept**: the finished file says which colours it uses, the same as the original, so players and YouTube
+  show them the same.
+* **HDR videos (phones) are turned into normal colours** instead of looking grey and washed out.
+* **Sound at 320 kbps** in finished videos (was 192), and *Combine* keeps its best quality finer too.
+
 ## 1.32.0
 * **Solo is only for listening now**: a Solo left on never takes sound out of an export or a Quick preview any more (that
   is why a preview could have only the song). While Solo is on, the player shows **Solo on / Hear all**.

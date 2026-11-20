@@ -37,16 +37,30 @@ class EncoderInfo:
 
 
 def hardware_args(name: str, crf: int) -> List[str]:
-    """Quality options for each hardware encoder (quality is mapped from the CRF number)."""
+    """Quality options for each hardware encoder (quality is mapped from the CRF number). The graphics card is used for
+    speed, never at the cost of the picture: its slowest, best settings, and a quality number a step finer than the
+    software encoder's (graphics-card encoders need that to look the same)."""
+    q = max(0, crf - 1)
     if name == "h264_nvenc":
-        return ["-c:v", name, "-preset", "p4", "-rc", "vbr", "-cq", str(min(51, crf + 3)), "-b:v", "0", "-bf", "2"]
+        return ["-c:v", name, "-preset", "p7", "-tune", "hq", "-rc", "vbr", "-cq", str(min(51, q)), "-b:v", "0", "-bf", "3",
+                "-spatial-aq", "1", "-rc-lookahead", "32", "-profile:v", "high"]
     if name == "h264_qsv":
-        return ["-c:v", name, "-preset", "medium", "-global_quality", str(min(51, crf + 3))]
+        return ["-c:v", name, "-preset", "veryslow", "-global_quality", str(min(51, q)), "-look_ahead", "1", "-profile:v", "high"]
     if name == "h264_amf":
-        return ["-c:v", name, "-quality", "balanced", "-rc", "cqp", "-qp_i", str(crf + 2), "-qp_p", str(crf + 4), "-qp_b", str(crf + 6)]
+        return ["-c:v", name, "-quality", "quality", "-rc", "cqp", "-qp_i", str(q), "-qp_p", str(q + 1), "-qp_b", str(q + 2), "-profile:v", "high"]
     if name == "h264_videotoolbox":
-        return ["-c:v", name, "-q:v", str(max(20, min(90, 100 - 2 * crf))), "-allow_sw", "1"]
+        return ["-c:v", name, "-q:v", str(max(40, min(95, 108 - 2 * crf))), "-allow_sw", "1", "-profile:v", "high"]
     raise ValueError(name)
+
+
+def color_args(out: OutputSpec) -> List[str]:
+    """The colour tags of the finished picture (see OutputSpec.color), so players show the original's colours."""
+    c = out.color or {}
+    args: List[str] = []
+    for key, opt in (("primaries", "-color_primaries"), ("transfer", "-color_trc"), ("space", "-colorspace"), ("range", "-color_range")):
+        if c.get(key):
+            args += [opt, c[key]]
+    return args
 
 
 def software_args(out: OutputSpec, threads: int, gop: int) -> List[str]:
@@ -60,8 +74,8 @@ def video_encoder_args(name: str, out: OutputSpec, threads: int) -> List[str]:
     """Full encoder options for one piece."""
     gop = max(2, int(round(float(out.fps) * 2)))
     if name == SOFTWARE:
-        return software_args(out, threads, gop) + ["-pix_fmt", "yuv420p"]
-    return hardware_args(name, out.crf) + ["-g", str(gop), "-pix_fmt", "yuv420p"]
+        return software_args(out, threads, gop) + ["-pix_fmt", "yuv420p"] + color_args(out)
+    return hardware_args(name, out.crf) + ["-g", str(gop), "-pix_fmt", "yuv420p"] + color_args(out)
 
 
 def test_encoder(name: str, timeout: float = 20.0) -> "tuple[bool, str]":

@@ -24,6 +24,17 @@ SAFE_EXPR = re.compile(r"^[0-9A-Za-z_+\-*/(). %]*$")
 MARGIN_FRACTION = 0.05
 
 
+def hdr_to_sdr() -> str:
+    """HDR (HDR10 / HLG, as phones film) to normal BT.709 colours, with a gentle tone curve so bright parts keep their
+    detail. Needs FFmpeg's zscale (in the app's FFmpeg); without it the picture is only converted (it may look flatter)."""
+    from ..core.ffmpeg import get_tools
+    t = get_tools()
+    if t.has_filter("zscale") and t.has_filter("tonemap"):
+        return ("zscale=t=linear:npl=203,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,"
+                "zscale=t=bt709:m=bt709:r=tv,format=yuv420p")
+    return "format=yuv420p"
+
+
 @dataclass
 class Item:
     """A sub-range of one segment."""
@@ -572,6 +583,8 @@ class ItemBuilder:
         seg = it.seg
         cur = in_label
         cur = g.add(cur, "setpts=PTS-STARTPTS", "v0")
+        if getattr(self.tl.output, "hdr", False):
+            cur = g.add(cur, hdr_to_sdr(), "hd")         # an HDR original: into normal colours first, so nothing looks washed out
         if seg.kind == "freeze":
             cur = g.add(cur, f"trim=end_frame=1,loop=loop=-1:size=1:start=0,setpts=N/({self.Ff:.9f}*TB)", "fz")
             cur = g.add(cur, f"fps=fps={fps_str(self.F)},trim=end_frame={it.n},setpts=PTS-STARTPTS", "ft")
