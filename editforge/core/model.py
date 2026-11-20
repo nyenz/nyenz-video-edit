@@ -27,6 +27,11 @@ class OutputSpec:
     has_audio: bool = True
     faststart: bool = True
     gif_colors: int = 256
+    # colour of the finished picture, written into the file so players show the same colours as the original:
+    # {"primaries", "transfer", "space", "range"} (empty: not known, nothing written). hdr: the original is HDR and is
+    # turned into normal (SDR, BT.709) colours on the way, so it does not look grey and washed out.
+    color: Dict[str, str] = field(default_factory=dict)
+    hdr: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)

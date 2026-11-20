@@ -129,8 +129,10 @@ def clip_project(clipset: Dict[str, Any], clip: Dict[str, Any], duration: float)
     """The editor project that makes one clip: its parts in order, each with the clip's look and sound."""
     pieces = [{"start": p["start"], "end": p["end"], "speed": clip["speed"], "volume": clip["volume"], "mute": clip["mute"],
                "color": clip["color"]} for p in clip["parts"]]
-    return project_mod.clean_project({"name": clip["name"], "source": clipset["source"], "pieces": pieces,
-                                      "settings": dict(clip["settings"], export_size="source")}, duration)   # clips keep the movie's own size
+    st = dict(clip["settings"], export_size="source")                   # clips keep the movie's own size
+    if st.get("quality", "best") == "best":
+        st["quality"] = "master"           # a clip is edited and made again later: made almost lossless, nothing is lost twice
+    return project_mod.clean_project({"name": clip["name"], "source": clipset["source"], "pieces": pieces, "settings": st}, duration)
 
 
 # ------------------------------------------------------------------------------------------------ scenes
