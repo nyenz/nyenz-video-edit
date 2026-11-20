@@ -159,6 +159,9 @@ class JobManager:
                 from ..analysis.loudness import measure_file
                 self.store.update(job_id, message="Measuring the loudness")
                 done["loudness"] = measure_file(result.output_path, cancel=cancel)
+                ln = plan.timeline.audio.loudnorm
+                if done["loudness"] and ln:
+                    done["loudness"]["chosen"] = float(ln["target"])     # the Overall loudness chosen in Export
             self.store.update(job_id, status="done", progress=1.0, phase="done", message="Finished", eta=0.0, result=done,
                               output_path=result.output_path)
         except Cancelled:

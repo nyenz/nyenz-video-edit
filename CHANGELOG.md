@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.30.0
+* **Overall loudness** (Export, just before the final video or the Quick preview): seven steps for how loud the whole
+  video is. It starts in the middle (**Standard**, the YouTube standard, -14 LUFS); **-1 / -2 / -3** are each 1.5 dB
+  quieter and **+1 / +2 / +3** each 1.5 dB louder. Peaks still never go over the limit. The choice is saved with the
+  project, and the finished video says whether it came out as you chose.
+
 ## 1.29.0
 * **A neural scene finder**: TransNetV2, a network trained only to find where one shot ends and the next begins (hard
   cuts, dissolves and fades). It looks at every frame of the video and works together with the old finder: each checks

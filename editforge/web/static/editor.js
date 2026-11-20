@@ -2599,6 +2599,7 @@ function startDrawBox() {
 function exportDialog() {
   if (!kept().length) { toast("The timeline is empty: put a piece back first.", true); return; }
   let quality = S.proj.settings.quality || "best", esize = S.proj.settings.export_size || "4k";
+  let loud = +S.proj.settings.loudness_step || 0;
   const close = () => { scrim.remove(); dlg.remove(); };
   const scrim = el("div", { class: "scrim", onclick: close });
   const sh = S.proj.settings.shape || "original", fr = S.proj.settings.frame;
@@ -2606,10 +2607,15 @@ function exportDialog() {
   const aspect = fr ? (RAT[fr.ratio] || S.info.width / Math.max(1, S.info.height)) : sh.startsWith("vertical") ? 9 / 16 : sh.startsWith("square") ? 1 : S.info.width / Math.max(1, S.info.height);
   const sizeOf = (v) => { const L = { "4k": 3840, "1440": 2560, "1080": 1920 }[v] || Math.max(S.info.width, S.info.height); const w = aspect >= 1 ? L : L * aspect, h = aspect >= 1 ? L / aspect : L; return Math.round(w / 2) * 2 + "×" + Math.round(h / 2) * 2; };
   const sizeTxt = el("span", { class: "num", text: sizeOf(esize) });
+  const loudNote = (k) => k === 0 ? "The whole video at the YouTube standard (−14 LUFS)." :
+    "The whole video " + (Math.abs(k) * 1.5).toFixed(1) + " dB " + (k < 0 ? "quieter" : "louder") + " than the standard (" + (-14 + k * 1.5).toFixed(1).replace("-", "−") + " LUFS)." +
+    (k > 0 ? " YouTube turns videos louder than −14 down again, so this mostly makes the sound denser." : "");
+  const loudTxt = el("p", { class: "hint", text: loudNote(loud) });
   const go = async (preview) => {
     try {
       if (quality !== S.proj.settings.quality) { S.proj.settings.quality = quality; }
       S.proj.settings.export_size = esize;
+      S.proj.settings.loudness_step = loud;
       await saveNow();
       await api("/api/projects/" + S.id + "/render", { method: "POST", json: { preview } });
       close(); toast(preview ? "Making a quick preview" : "Exporting your video"); Exports.show();
@@ -2624,6 +2630,9 @@ function exportDialog() {
         el("div", { class: "stat" }, el("span", { class: "lbl", text: "Pieces" }), el("span", { class: "num", text: String(kept().length) }))),
       el("div", { class: "field" }, el("span", { text: "Picture size" }), segmented([["4k", "4K"], ["1440", "1440p"], ["1080", "1080p"], ["source", "As the video"]], esize, (v) => { esize = v; sizeTxt.textContent = sizeOf(v); })),
       el("div", { class: "field" }, el("span", { text: "Quality" }), segmented([["best", "Best"], ["high", "High"], ["small", "Smaller file"]], quality, (v) => { quality = v; })),
+      el("div", { class: "field" }, el("span", { text: "Overall loudness" }),
+        segmented([[-3, "−3"], [-2, "−2"], [-1, "−1"], [0, "Standard"], [1, "+1"], [2, "+2"], [3, "+3"]], loud, (v) => { loud = +v; loudTxt.textContent = loudNote(loud); })),
+      loudTxt,
       el("p", { class: "hint", text: "4K + Best gives the sharpest result on YouTube (it streams 4K uploads at a higher quality, also to 1080p viewers). The file is big and takes longer." }),
       el("div", { class: "btns" }, btn("Quick preview", { icon: "eye", onclick: () => go(true) }), el("span", { class: "grow" }), btn("Export", { icon: "export", cls: "primary big", onclick: () => go(false) }))));
   document.body.append(scrim, dlg);

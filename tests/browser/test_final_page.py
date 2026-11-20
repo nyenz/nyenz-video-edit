@@ -151,3 +151,21 @@ def test_the_top_bar_always_shows_the_version_and_an_update_button_when_one_is_o
     page.evaluate("() => { Update.st = Object.assign({}, Update.st, { available: true, latest: '99.0.0' }); Update.paint(); }")
     assert page.inner_text(".update-pill") == "Update to 99.0.0" and not page.is_visible(".update-pill.quiet")
     assert page.errors == []
+
+
+def test_overall_loudness_has_seven_steps_and_is_used_by_the_preview(live, page, movie_id):
+    pid = open_final(live, page, movie_id, "Loud one")
+    page.click(".topbar button:has-text('Export'), button.primary:has-text('Export')")
+    dlg = page.locator(".dialog[aria-label=Export]")
+    seg = dlg.locator(".field:has-text('Overall loudness') .seg button")
+    assert seg.all_inner_texts() == ["−3", "−2", "−1", "Standard", "+1", "+2", "+3"]
+    assert dlg.locator(".field:has-text('Overall loudness') .seg button.on").inner_text() == "Standard"     # it starts in the middle
+    assert "−14 LUFS" in dlg.inner_text()
+    seg.nth(5).click()
+    assert "3.0 dB louder" in dlg.inner_text()
+    dlg.locator("button:has-text('Quick preview')").click()
+    page.wait_for_function("() => !document.querySelector('.dialog[aria-label=Export]')")
+    assert live.call("GET", f"/api/projects/{pid}")["project"]["settings"]["loudness_step"] == 2
+    page.evaluate("() => exportDialog()")                                 # (the Exports drawer is open now)
+    assert page.locator(".dialog[aria-label=Export] .seg button.on:has-text('+2')").count() == 1           # remembered
+    assert page.errors == []
