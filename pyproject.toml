@@ -22,7 +22,7 @@ editforge = "editforge.cli.main:main"
 include = ["editforge*"]
 
 [tool.setuptools.package-data]
-editforge = ["web/static/*"]
+editforge = ["web/static/*", "models/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -307,7 +307,7 @@ def test_track_over_http(web, moving):
     fid = c.upload(moving)
     body = {"input": fid, "at": 3.0, "start": 2.0, "end": 6.0, "box": {"x": box_x(3) / 640, "y": box_y(3) / 360, "w": 80 / 640, "h": 80 / 360}}
     status, data = c.json("POST", "/api/track", body)
-    assert status == 200 and data["found"] > 0.9 and 38 <= len(data["path"]) <= 42 and data["path"][0][0] == 2.0
+    assert status == 200 and data["found"] > 0.9 and 95 <= len(data["path"]) <= 105 and data["path"][0][0] == 2.0
     mid = min(data["path"], key=lambda p: abs(p[0] - 4.0))
     assert abs(mid[1] - (box_x(4) + 40) / 640) < 0.03
     for broken in ({**body, "box": {"x": 0.1}}, {**body, "box": {"x": 0, "y": 0, "w": 0, "h": 0.1}}, {**body, "start": 3.0, "end": 3.05},
@@ -379,3 +379,23 @@ def test_tracked_thing_stays_in_the_middle_of_a_tall_frame(moving, out):
         at = lambda x, y: px[(y * 360 + x) * 3:(y * 360 + x) * 3 + 3]
         assert not is_background(at(180, cy)), (t, cy)    # the box is in the middle ...
         assert is_background(at(20, cy)) and is_background(at(340, cy)), t   # ... and not at the sides
+
+
+@needs_cv
+def test_tracker_keeps_hold_through_a_cover_up_and_a_change_of_size(tmp_path):
+    """A patterned thing moves right while it grows and shrinks; for half a second a grey bar covers it completely.
+    The neural tracker must still be on it afterwards (within a few pixels of 640)."""
+    if not F.vit_available():
+        pytest.skip("VitTrack needs OpenCV 4.9 or newer")
+    src = str(tmp_path / "cover.mp4")
+    run(["-f", "lavfi", "-i", "color=c=0x505050:size=640x360:rate=25:duration=8", "-f", "lavfi", "-i", "testsrc2=size=96x96:rate=25:duration=8",
+         "-filter_complex", "[1]scale=w='trunc((72+24*sin(t*1.3))/2)*2':h=-2:eval=frame[o];[0][o]overlay=x='40+65*t':y=120,"
+         "drawbox=x=300:y=0:w=110:h=360:color=0x505050:t=fill:enable='between(t,3.9,4.5)'",
+         "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", src])
+    size0 = 72 + 24 * math.sin(1.0 * 1.3)
+    path, found = F.track_object(src, 1.0, [(40 + 65) / 640, 120 / 360, size0 / 640, size0 / 360], 0.0, 8.0, 640, 360)
+    assert found > 0.8
+    for t, x, y in path:
+        if 4.9 <= t <= 7.0:                                 # after the cover-up: back on it
+            want = (40 + 65 * t + (72 + 24 * math.sin(t * 1.3)) / 2) / 640
+            assert abs(x - want) < 0.03, (t, x, want)

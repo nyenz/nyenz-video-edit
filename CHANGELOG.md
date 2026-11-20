@@ -13,8 +13,12 @@
   face, a person or a car. The picture then moves with it, so it stays where you saw it, and never so far that the
   picture's edge shows. **Left–right** (the default) or **Left–right and up–down**; **Track again** / **Stop tracking** on
   the right. Dragging the picture still works: it keeps tracking from the new place.
-* **A stronger tracker**: it follows many small points (each checked forwards and back), corrects them with a picture
-  match, and searches the whole frame to find the thing again after it was covered or left the picture.
+* **A professional tracker**: VitTrack, a neural tracker (a small vision transformer, shipped inside the app, no download).
+  Every frame (25 a second) it finds the thing again from how it looks, also when it turns, grows or shrinks, or gets
+  darker. When it is covered or leaves the picture, the position keeps moving the way it moved, the thing is searched
+  for at several sizes near where it should be and in the whole frame, and tracking starts again the moment it is back.
+  Single-frame jumps are removed. (Tested: a thing that changes size and is fully covered for half a second is found
+  again within a few pixels.)
 
 ## 1.27.0
 * **Fixed: "Found again" was not in the exported video.** Every split track is in the export now, also what Separate

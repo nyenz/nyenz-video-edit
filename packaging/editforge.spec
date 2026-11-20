@@ -6,7 +6,8 @@ from PyInstaller.utils.hooks import collect_all
 
 ROOT = os.path.abspath(os.path.join(SPECPATH, ".."))
 datas = [(os.path.join(ROOT, "editforge", "web", "static"), os.path.join("editforge", "web", "static")),
-         (os.path.join(ROOT, "examples"), "examples")]
+         (os.path.join(ROOT, "examples"), "examples"),
+         (os.path.join(ROOT, "editforge", "models"), os.path.join("editforge", "models"))]     # VitTrack (object tracking)
 binaries = []
 hidden = ["editforge.web.server", "editforge.cli.main", "editforge.taskbar",
           "win32gui", "win32con", "win32process", "pythoncom", "pywintypes", "win32com.propsys.propsys", "win32com.propsys.pscon"]

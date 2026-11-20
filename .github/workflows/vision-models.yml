@@ -1,0 +1,72 @@
+# Makes the vision model files once and puts them on a release ("vision-model-1"), so the app (and setup) can download them:
+# * transnetv2.onnx: TransNetV2 (Soucek & Lokoc, MIT licence), the neural shot-change finder, converted from its published
+#   TensorFlow weights to ONNX and checked against TensorFlow on the same frames.
+# * vittrack.onnx: VitTrack from the OpenCV model zoo (Apache 2.0), the neural object tracker used by cv2.TrackerVit.
+# Run it by hand (Actions > Vision models > Run workflow). It only adds files; nothing in the app changes by running it.
+name: Vision models
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Tools
+        run: python -m pip install "tensorflow-cpu==2.15.*" "tf2onnx==1.16.1" "onnx==1.15.0" "onnxruntime==1.17.3" "numpy<2" "protobuf<4"
+      - name: Download
+        run: |
+          B=https://media.githubusercontent.com/media/soCzech/TransNetV2/master/inference/transnetv2-weights
+          mkdir -p tn/variables
+          curl -fsSL -o tn/saved_model.pb "$B/saved_model.pb"
+          curl -fsSL -o tn/variables/variables.data-00000-of-00001 "$B/variables/variables.data-00000-of-00001"
+          curl -fsSL -o tn/variables/variables.index "$B/variables/variables.index"
+          curl -fsSL -o vittrack.onnx https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/object_tracking_vittrack/object_tracking_vittrack_2023sep.onnx
+          ls -la tn tn/variables vittrack.onnx
+      - name: Look at the model
+        run: saved_model_cli show --dir tn --all | head -60
+      - name: Convert to ONNX
+        run: |
+          python - <<'EOF'
+          import numpy as np, tensorflow as tf, tf2onnx, onnx
+          m = tf.saved_model.load("tn")
+          # the model takes [batch, frames, 27, 48, 3] float32 (0..255) and gives two outputs per frame
+          spec = (tf.TensorSpec([1, None, 27, 48, 3], tf.float32, name="frames"),)
+          @tf.function(input_signature=spec)
+          def run(frames):
+              single, many = m(frames)
+              return {"single": tf.sigmoid(single), "many": tf.sigmoid(many["many_hot"])}
+          model, _ = tf2onnx.convert.from_function(run, input_signature=spec, opset=17, output_path="transnetv2.onnx")
+          print("inputs", [i.name for i in model.graph.input], "outputs", [o.name for o in model.graph.output])
+          # the same answers as TensorFlow?
+          import onnxruntime as ort
+          rng = np.random.default_rng(1)
+          x = rng.integers(0, 255, (1, 100, 27, 48, 3)).astype(np.float32)
+          x[:, 50:] = x[:, 50:] * 0.3            # a hard change half way
+          want = run(tf.constant(x))
+          s = ort.InferenceSession("transnetv2.onnx", providers=["CPUExecutionProvider"])
+          got = s.run(None, {s.get_inputs()[0].name: x})
+          names = [o.name for o in s.get_outputs()]
+          for name, g in zip(names, got):
+              w = want[name].numpy()
+              print(name, g.shape, float(np.abs(g - w).max()))
+              assert np.abs(g - w).max() < 1e-3
+          print("same as TensorFlow: ok")
+          EOF
+          ls -la transnetv2.onnx
+          sha256sum transnetv2.onnx vittrack.onnx
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view vision-model-1 -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create vision-model-1 -R "$GITHUB_REPOSITORY" --title "Vision models 1" \
+              --notes "Model files the app downloads once: TransNetV2 (shot changes, MIT) and VitTrack (object tracking, Apache 2.0)." --prerelease
+          gh release upload vision-model-1 -R "$GITHUB_REPOSITORY" transnetv2.onnx vittrack.onnx --clobber

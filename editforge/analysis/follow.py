@@ -10,9 +10,10 @@ turns that into a zoomed view that glides after the subject.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import threading
-from typing import Any, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from ..core.errors import Cancelled, EditForgeError, FeatureUnavailable
 from ..core.ffmpeg import get_tools
@@ -136,9 +137,9 @@ def _read_frames(path: str, start: float, end: float, w: int, h: int, cancel: Op
     return frames
 
 
-def track_object(path: str, at: float, box: Sequence[float], start: float, end: float, src_w: int, src_h: int,
-                 cancel: Optional[threading.Event] = None) -> Tuple[List[Point], float]:
-    """Follow the thing inside ``box`` (x, y, w, h as fractions of the picture, seen at time ``at``) from ``start`` to ``end``.
+def _track_points(path: str, at: float, box: Sequence[float], start: float, end: float, src_w: int, src_h: int,
+                  cancel: Optional[threading.Event] = None) -> Tuple[List[Point], float]:
+    """The tracker used when the neural one (VitTrack) is not available (OpenCV older than 4.9).
 
     Three methods work together, every frame (15 a second, on a 480-pixel copy):
     1. points: up to 80 small corners inside the box are followed from frame to frame (optical flow); each one is also
@@ -260,3 +261,179 @@ def track_object(path: str, at: float, box: Sequence[float], start: float, end: 
     points = [(round(start + k / TRACK_FPS, 4), (pos[k][0] + tw / 2.0) / w, (pos[k][1] + th / 2.0) / h) for k in range(len(frames))]
     found = sum(1 for k in range(len(frames)) if pos[k][2] >= LOST_SCORE) / float(len(frames))
     return calm(points, 0.35), round(found, 3)
+
+
+# ------------------------------------------------------------------------------------------------ the neural tracker
+VIT_FPS = 25.0                 # frames looked at per second (every frame of most videos)
+VIT_WIDTH = 640
+VIT_SURE = 0.30                # VitTrack's own confidence above which a position is trusted
+VIT_MODEL = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models", "vittrack.onnx")
+
+
+def vit_available() -> bool:
+    try:
+        import cv2
+        return hasattr(cv2, "TrackerVit_create") and os.path.isfile(VIT_MODEL)
+    except Exception:
+        return False
+
+
+def _read_color(path: str, start: float, end: float, w: int, h: int, fps: float, cancel: Optional[threading.Event]) -> List[Any]:
+    import numpy as np
+    cmd = [get_tools().ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-ss", f"{start:.3f}", "-t", f"{max(0.1, end - start):.3f}",
+           "-i", path, "-an", "-vf", f"fps={fps},scale={w}:{h}:flags=area", "-f", "rawvideo", "-pix_fmt", "bgr24", "-"]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
+    frames: List[Any] = []
+    size = w * h * 3
+    assert proc.stdout is not None
+    try:
+        while True:
+            if cancel is not None and cancel.is_set():
+                raise Cancelled()
+            buf = proc.stdout.read(size)
+            if len(buf) < size:
+                break
+            frames.append(np.frombuffer(buf, dtype=np.uint8).reshape(h, w, 3))
+    finally:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+        proc.wait()
+    return frames
+
+
+def _median3(vals: List[float]) -> List[float]:
+    """Removes single-frame spikes (a jump to something else for one frame) without blurring real motion."""
+    out = list(vals)
+    for i in range(1, len(vals) - 1):
+        out[i] = sorted(vals[i - 1:i + 2])[1]
+    return out
+
+
+def track_object(path: str, at: float, box: Sequence[float], start: float, end: float, src_w: int, src_h: int,
+                 cancel: Optional[threading.Event] = None) -> Tuple[List[Point], float]:
+    """Follow the thing inside ``box`` (x, y, w, h as fractions of the picture, seen at time ``at``) from ``start`` to ``end``.
+
+    With OpenCV 4.9 or newer this is VitTrack, a neural tracker (a small vision transformer, the same kind of method
+    professional trackers use): every frame (25 a second, on a 640-pixel copy) it finds the thing again from how it
+    looked, also when it turns, changes size, gets darker or is partly covered. It runs forwards and backwards from the
+    moment you drew the box. When its own confidence drops (the thing is gone or covered), the position waits where it
+    was last seen, and the thing is searched for in the whole frame; when it is found again, tracking starts again from
+    there. Single-frame jumps are removed and the path is smoothed a little.
+
+    Returns (path, found): ``path`` is (time, x, y) of the middle of the thing; ``found`` is the share of the time it was
+    followed with confidence. Without VitTrack the older point tracker is used.
+    """
+    if not object_tracking_available():
+        raise FeatureUnavailable("Following an object is switched off because the free 'opencv-python-headless' add-on is not installed.",
+                                 "Install it with:  pip install 'opencv-python-headless<5'")
+    if not vit_available():
+        return _track_points(path, at, box, start, end, src_w, src_h, cancel)
+    import cv2
+    import numpy as np
+    if end - start > MAX_TRACK_SECONDS:
+        raise EditForgeError(f"That is {end - start:.0f} seconds to follow; the most is {MAX_TRACK_SECONDS:.0f}.",
+                             "Pick fewer pieces, and follow the object in each group separately.")
+    if not (start - 0.05 <= at <= end + 0.05):
+        raise EditForgeError("The moment you drew the box is not inside the picked pieces.",
+                             "Pause the video inside one of the picked pieces, then draw the box again.")
+    bx, by, bw, bh = (float(v) for v in box)
+    bx, by = max(0.0, min(0.98, bx)), max(0.0, min(0.98, by))
+    bw, bh = max(0.01, min(1.0 - bx, bw)), max(0.01, min(1.0 - by, bh))
+    w = VIT_WIDTH
+    h = max(2, int(round(w * src_h / src_w / 2)) * 2)
+    frames = _read_color(path, start, end, w, h, VIT_FPS, cancel)
+    if len(frames) < 2:
+        raise EditForgeError("I could not read that part of the video.", "Try other pieces.")
+    k0 = max(0, min(len(frames) - 1, int(round((at - start) * VIT_FPS))))
+    tw, th = max(8, int(round(bw * w))), max(8, int(round(bh * h)))
+    x0, y0 = max(0, min(w - tw, int(round(bx * w)))), max(0, min(h - th, int(round(by * h))))
+    first = frames[k0][y0:y0 + th, x0:x0 + tw]
+    if float(first.std()) < 2.0:
+        raise EditForgeError("The box is on a plain area with nothing to recognise.", "Draw the box tightly around something with a clear shape.")
+    gray0 = cv2.cvtColor(first, cv2.COLOR_BGR2GRAY).astype(np.float32)
+
+    def new_tracker(img: Any, bb: Tuple[int, int, int, int]) -> Any:
+        prm = cv2.TrackerVit_Params()
+        prm.net = VIT_MODEL
+        t = cv2.TrackerVit_create(prm)
+        t.init(img, bb)
+        return t
+
+    def search(img: Any, tpl: Any, size: Tuple[float, float], near: Optional[Tuple[float, float]]) -> Tuple[Optional[Tuple[float, float, float, float]], float]:
+        """Look for the remembered thing at several sizes; near: only around that point (else the whole frame)."""
+        g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        best: Tuple[Optional[Tuple[float, float, float, float]], float] = (None, -1.0)
+        for k in (0.7, 0.85, 1.0, 1.18, 1.4):
+            sw, sh = int(round(size[0] * k)), int(round(size[1] * k))
+            if sw < 8 or sh < 8 or sw >= w or sh >= h:
+                continue
+            t = cv2.resize(tpl, (sw, sh), interpolation=cv2.INTER_AREA)
+            ox = oy = 0
+            area = g
+            if near is not None:
+                r = int(max(sw, sh) * 1.6)
+                ox, oy = int(max(0, near[0] - sw / 2 - r)), int(max(0, near[1] - sh / 2 - r))
+                area = g[oy:int(min(h, near[1] + sh / 2 + r)), ox:int(min(w, near[0] + sw / 2 + r))]
+                if area.shape[0] < sh or area.shape[1] < sw:
+                    continue
+            res = cv2.matchTemplate(area, t, cv2.TM_CCOEFF_NORMED)
+            _, sc, _, loc = cv2.minMaxLoc(res)
+            if sc == sc and sc > best[1]:
+                best = ((float(ox + loc[0]), float(oy + loc[1]), float(sw), float(sh)), float(sc))
+        return best
+
+    pos: Dict[int, Tuple[float, float, float]] = {k0: (x0 + tw / 2.0, y0 + th / 2.0, 1.0)}
+
+    def run(order: Sequence[int]) -> None:
+        tr = new_tracker(frames[k0], (x0, y0, tw, th))
+        cx, cy, bw_, bh_ = x0 + tw / 2.0, y0 + th / 2.0, float(tw), float(th)
+        vx = vy = 0.0                                   # how it moves (per frame), from the sure frames
+        tpl = gray0.copy()                              # how it looked when last seen clearly (for finding it again)
+        low = 0
+        for k in order:
+            if cancel is not None and cancel.is_set():
+                raise Cancelled()
+            img = frames[k]
+            ok, bb = tr.update(img) if tr is not None else (False, (0, 0, 0, 0))
+            score = float(tr.getTrackingScore()) if ok and tr is not None else 0.0
+            if ok and score >= VIT_SURE:
+                x, y, nw, nh = (float(v) for v in bb)
+                nx, ny = x + nw / 2.0, y + nh / 2.0
+                if low == 0:
+                    vx, vy = 0.75 * vx + 0.25 * (nx - cx), 0.75 * vy + 0.25 * (ny - cy)
+                cx, cy, bw_, bh_ = nx, ny, nw, nh
+                low = 0
+                if score >= 0.6:                        # sure: remember how it looks now
+                    xi, yi, wi, hi = int(round(x)), int(round(y)), int(round(nw)), int(round(nh))
+                    if xi >= 0 and yi >= 0 and xi + wi <= w and yi + hi <= h and wi >= 6 and hi >= 6:
+                        now = cv2.resize(cv2.cvtColor(img[yi:yi + hi, xi:xi + wi], cv2.COLOR_BGR2GRAY), (tw, th), interpolation=cv2.INTER_AREA)
+                        tpl = 0.85 * tpl + 0.15 * now.astype(np.float32)
+                pos[k] = (cx, cy, score)
+                continue
+            # not sure (covered, gone, blurred): it keeps moving the way it moved for up to a second, then waits;
+            # meanwhile it is looked for near where it should be, and every few frames in the whole frame
+            low += 1
+            if low <= VIT_FPS:
+                cx, cy = min(w, max(0.0, cx + vx)), min(h, max(0.0, cy + vy))
+            pos[k] = (cx, cy, score)
+            if low % 2 == 1:
+                cand, sc = search(img, tpl, (bw_, bh_), (cx, cy))
+                if sc < 0.6 and low % 6 == 1:
+                    cand, sc = search(img, tpl, (bw_, bh_), None)
+                if cand is not None and sc >= 0.6:
+                    tr = new_tracker(img, tuple(int(round(v)) for v in cand))
+                    cx, cy, bw_, bh_ = cand[0] + cand[2] / 2.0, cand[1] + cand[3] / 2.0, cand[2], cand[3]
+                    pos[k] = (cx, cy, sc)
+                    low = 0
+                    vx = vy = 0.0
+
+    run(range(k0 + 1, len(frames)))
+    run(range(k0 - 1, -1, -1))
+    ks = range(len(frames))
+    xs = _median3([pos[k][0] / w for k in ks])
+    ys = _median3([pos[k][1] / h for k in ks])
+    points = [(round(start + k / VIT_FPS, 4), xs[k], ys[k]) for k in ks]
+    found = sum(1 for k in ks if pos[k][2] >= VIT_SURE) / float(len(frames))
+    return calm(points, 0.2), round(found, 3)
