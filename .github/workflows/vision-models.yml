@@ -70,7 +70,11 @@ jobs:
                   for block in m.SDDCNN:
                       x = block(x)
                       feats.append(x)
-                  x = torch.mean(x, dim=[3, 4]).permute(0, 2, 1)
+                  if m.use_mean_pooling:
+                      x = torch.mean(x, dim=[3, 4]).permute(0, 2, 1)
+                  else:
+                      x = x.permute(0, 2, 3, 4, 1)
+                      x = x.reshape(x.shape[0], x.shape[1], -1)
                   x = torch.cat([m.frame_sim_layer(feats), x], 2)
                   x = torch.cat([m.color_hist_layer(frames), x], 2)
                   x = F.relu(m.fc1(x))
