@@ -1000,3 +1000,13 @@ label.swl.tight { padding: 0; gap: 8px; font-size: 12.5px; }
 .ex-h:first-child { margin-top: 0; }
 .ex-h:hover { color: var(--accent); }
 .ex-h svg { color: var(--muted); }
+
+/* 1.28: deep zoom (every frame), scene-change marks, tracking */
+.clipb .strip img { position: absolute; top: 0; }
+.clipb .strip.frames img { opacity: .95; border-right: 1px solid rgba(0, 0, 0, .55); box-sizing: border-box; }
+.ruler i.fr { top: 17px; height: 5px; background: #4a5162; }
+.ruler span.frn { position: absolute; top: 3px; transform: translateX(-50%); font-size: 9.5px; color: #6c7385; pointer-events: none; }
+.ruler .scut { position: absolute; top: 1px; width: 11px; height: 11px; margin-left: -5.5px; padding: 0; border: 0; border-radius: 2px; transform: rotate(45deg) scale(.8);
+  background: #ffd166; box-shadow: 0 0 0 1.5px rgba(0, 0, 0, .45); cursor: pointer; z-index: 3; transition: transform .12s, background .12s; }
+.ruler .scut:hover { transform: rotate(45deg) scale(1.05); background: #ffe199; }
+.track-box { border-top: 1px solid var(--line-soft); }

@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.28.0
+* **Zoom in 10 times further**: all the way in, every frame of the video is its own exact picture on the timeline, and
+  the ruler shows every frame (with its number). Cut on the exact frame you want (S).
+* **Scene changes on the ruler**: small yellow marks show where the scenes change; click one to go there, or press
+  **[** and **]** to jump to the previous / next one.
+* **Right-click a section**:
+  * **Find scene changes in this section**: looks much harder inside that section and cuts it at every scene change it
+    finds, each on its exact frame (each part becomes its own scene).
+  * **Cut on the exact picture change near here**: finds the exact frame where the picture changes and cuts there.
+* **Track** (Final, with a frame such as 9:16): right-click a section, **Track something here…**, drag a box around a
+  face, a person or a car. The picture then moves with it, so it stays where you saw it, and never so far that the
+  picture's edge shows. **Left–right** (the default) or **Left–right and up–down**; **Track again** / **Stop tracking** on
+  the right. Dragging the picture still works: it keeps tracking from the new place.
+* **A professional tracker**: VitTrack, a neural tracker (a small vision transformer, shipped inside the app, no download).
+  Every frame (25 a second) it finds the thing again from how it looks, also when it turns, grows or shrinks, or gets
+  darker. When it is covered or leaves the picture, the position keeps moving the way it moved, the thing is searched
+  for at several sizes near where it should be and in the whole frame, and tracking starts again the moment it is back.
+  Single-frame jumps are removed. (Tested: a thing that changes size and is fully covered for half a second is found
+  again within a few pixels.)
+
 ## 1.27.0
 * **Fixed: "Found again" was not in the exported video.** Every split track is in the export now, also what Separate
   again found.

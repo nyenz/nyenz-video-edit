@@ -435,7 +435,16 @@ function placeTargets() {
 /** The frame the viewer draws: the shape and background of the whole video, with the position of the section showing. */
 function effectiveFrame() {
   const base = S.proj.settings.frame, at = segAt(S.t), p = at ? at.s.p : null;
-  if (p && p.place) return Object.assign(Frame.full(base), p.place);
+  if (p && p.place && p.place.track && !S.dragFrom) {          // tracking: the picture moves with the tracked thing
+    const f = Object.assign(Frame.full(base), p.place), v = active(), t = v && isFinite(v.currentTime) ? v.currentTime : p.start;
+    const [dx, dy] = trackOffset(p.place, t), sh = pictureShare(f);
+    const lx = Math.max(0, sh.w - 1), ly = Math.max(0, sh.h - 1);
+    f.x = lx > 0 ? clamp(f.x + dx, -lx, lx) : f.x + dx;
+    f.y = dy ? (ly > 0 ? clamp(f.y + dy, -ly, ly) : f.y + dy) : f.y;
+    delete f.track;
+    return f;
+  }
+  if (p && p.place) { const f = Object.assign(Frame.full(base), p.place); delete f.track; return f; }
   return base;
 }
 function storeFrame(fr, live, force) {
@@ -481,17 +490,18 @@ function scrollToPlayhead() {
   if (x < sc.scrollLeft + 40 || x > sc.scrollLeft + sc.clientWidth - 40) sc.scrollLeft = x - sc.clientWidth * 0.3;
 }
 function setZoomFromSlider() {
-  // slider 0..100 maps to 2 .. 400 pixels per second on a log scale
+  // slider 0..100 maps to 2 .. 4000 pixels per second on a log scale (all the way in, every frame is a wide picture)
   const v = parseFloat($("zoom").value);
-  S.pps = 2 * Math.pow(200, v / 100);
+  S.pps = 2 * Math.pow(ZOOM_MAX / 2, v / 100);
 }
-function sliderFromZoom() { $("zoom").value = String(clamp(Math.log(S.pps / 2) / Math.log(200) * 100, 0, 100)); paintRange($("zoom")); }
+const ZOOM_MAX = 4000;
+function sliderFromZoom() { $("zoom").value = String(clamp(Math.log(S.pps / 2) / Math.log(ZOOM_MAX / 2) * 100, 0, 100)); paintRange($("zoom")); }
 function zoomTo(pps, anchorT) {
   const sc = $("tlScroll"), t = anchorT === undefined ? S.t : anchorT, before = px(t) - sc.scrollLeft;
-  S.pps = clamp(pps, 2, 400); sliderFromZoom(); renderTimeline();
+  S.pps = clamp(pps, 2, ZOOM_MAX); sliderFromZoom(); renderTimeline();
   sc.scrollLeft = px(t) - before;
 }
-function fitZoom() { const w = $("tlScroll").clientWidth - X0() - 32; S.pps = clamp(w / Math.max(1, rawTotal()), 2, 400); sliderFromZoom(); renderTimeline(); $("tlScroll").scrollLeft = 0; }
+function fitZoom() { const w = $("tlScroll").clientWidth - X0() - 32; S.pps = clamp(w / Math.max(1, rawTotal()), 2, ZOOM_MAX); sliderFromZoom(); renderTimeline(); $("tlScroll").scrollLeft = 0; }
 function renderRuler(total) {
   const r = $("ruler"); r.replaceChildren();
   if (S.mode === "final") r.append(el("div", { class: "ruler-corner" }));
@@ -503,6 +513,21 @@ function renderRuler(total) {
     const isMaj = Math.abs(t / major - Math.round(t / major)) < 1e-6;
     const tick = el("i", { class: isMaj ? "maj" : "" }); tick.style.left = px(t) + "px"; r.append(tick);
     if (isMaj) { const lab = el("span", { text: fmtTime(t, major < 1 ? 1 : 0) }); lab.style.left = px(t) + "px"; r.append(lab); }
+  }
+  // zoomed in far: a tick for every frame (and its number inside the second when there is room)
+  const fps = S.info.fps_float || 25, fpx = S.pps / fps;
+  if (fpx >= 7) {
+    const f0 = Math.floor(a * fps), f1 = Math.ceil(b * fps);
+    for (let k = f0; k <= f1; k++) {
+      const tick = el("i", { class: "fr" }); tick.style.left = px(k / fps) + "px"; r.append(tick);
+      if (fpx >= 46 && k % Math.round(fps) !== 0) { const lab = el("span", { class: "frn", text: String(((k % Math.round(fps)) + Math.round(fps)) % Math.round(fps)) }); lab.style.left = (px(k / fps) + fpx / 2) + "px"; r.append(lab); }
+    }
+  }
+  // scene changes: a small mark; click to go there
+  for (const m of cutMarks()) {
+    if (m < a || m > b) continue;
+    const d = el("button", { type: "button", class: "scut", title: "Scene change at " + fmtTime(m, 2) + " (click to go there; [ and ] jump between them)", onclick: (e) => { e.stopPropagation(); seek(m); } });
+    d.style.left = px(m) + "px"; r.append(d);
   }
 }
 function tagsOf(p) {
@@ -538,15 +563,27 @@ function renderTimeline() {
     b.style.left = x0 + "px"; b.style.width = w + "px";
     if (S.info.has_video) {
       const strip = el("div", { class: "strip" });
-      const n = Math.max(1, Math.min(12, Math.ceil(w / T.thumbW)));
-      for (let k = 0; k < n; k++) {
-        const ot = (k * T.thumbW + T.thumbW / 2) / S.pps;
-        const st = clamp(p.reverse ? p.end - ot * p.speed : p.start + ot * p.speed, p.start, p.end - 0.04);
-        const img = lazyThumb(thumbUrl(S.proj.source, Math.min(Math.round(st), Math.floor(S.info.duration - 0.05))));
-        img.style.width = T.thumbW + "px";
-        if (p.fx.includes("hflip")) img.style.transform = "scaleX(-1)";
-        if (p.fx.includes("grayscale")) img.style.filter = "grayscale(1)";
-        strip.append(img);
+      const fps = S.info.fps_float || 25, fpx = S.pps / fps, look = (img) => { if (p.fx.includes("hflip")) img.style.transform = "scaleX(-1)"; if (p.fx.includes("grayscale")) img.style.filter = "grayscale(1)"; };
+      if (fpx >= T.thumbW * 0.5) {
+        // zoomed in to single frames: every frame its own exact picture (only the ones on screen)
+        strip.classList.add("frames");
+        const k0 = Math.max(0, Math.floor((left - x0) / fpx)), k1 = Math.min(Math.ceil((r.out1 - r.out0) * fps), Math.ceil((right - x0) / fpx));
+        for (let k = k0; k < k1 && k - k0 < 160; k++) {
+          const ot = (k + 0.5) / fps, st = clamp(p.reverse ? p.end - ot * p.speed : p.start + ot * p.speed, p.start, Math.max(p.start, p.end - 0.5 / fps));
+          const img = lazyThumb(thumbUrl(S.proj.source, st) + "&exact=1");
+          img.style.left = (k * fpx) + "px"; img.style.width = Math.max(4, fpx - 1) + "px"; look(img);
+          strip.append(img);
+        }
+      } else {
+        const fine = T.thumbW / S.pps < 1.2;               // zoomed in: pictures a tenth of a second apart, not whole seconds
+        const k0 = Math.max(0, Math.floor((left - x0) / T.thumbW)), k1 = Math.min(Math.ceil(w / T.thumbW), Math.ceil((right - x0) / T.thumbW));
+        for (let k = k0; k < k1 && k - k0 < 80; k++) {
+          const ot = (k * T.thumbW + T.thumbW / 2) / S.pps;
+          const st = clamp(p.reverse ? p.end - ot * p.speed : p.start + ot * p.speed, p.start, p.end - 0.04);
+          const img = lazyThumb(thumbUrl(S.proj.source, Math.min(fine ? Math.round(st * 10) / 10 : Math.round(st), Math.floor(S.info.duration - 0.05))));
+          img.style.left = (k * T.thumbW) + "px"; img.style.width = T.thumbW + "px"; look(img);
+          strip.append(img);
+        }
       }
       b.append(strip);
     }
@@ -1778,6 +1815,8 @@ function timelineMenu(e) {
       "-",
       n > 1 ? ["Combine " + n + " scenes into one", "combine", combineScenes, { key: "Ctrl+J", off: lk, why }] : null,
       ["Split the scene here", "split", () => { seek(t); splitAtPlayhead(); }, { key: "S", off: lk, why }],
+      ["Cut on the exact picture change near here", "scissors", () => cutExact(t), { off: lk, why }],
+      ["Find more scene changes in this scene", "search", () => findCutsIn(p), { off: lk, why }],
       [n > 1 ? "Duplicate " + n + " scenes" : "Duplicate this scene", "copy", duplicateSelected, { key: "Ctrl+D", off: lk, why }],
       ["Select all", "grid", () => { S.sel = new Set(kept()); refreshAll({ keepVideo: true }); }, { key: "Ctrl+A" }],
       ["Choose sections instead", "list", () => { S.choose = "sections"; S.sel = new Set([p]); refreshAll({ keepVideo: true }); }],
@@ -1791,6 +1830,10 @@ function timelineMenu(e) {
       ["Split here", "split", () => { seek(t); splitAtPlayhead(); }, { key: "S", off: lk, why }],
       ["Cut before here", "cutb", () => cutSide("before", t), { key: "Q", off: lk, why }],
       ["Cut after here", "cuta", () => cutSide("after", t), { key: "W", off: lk, why }],
+      ["Cut on the exact picture change near here", "scissors", () => cutExact(t), { off: lk, why }],
+      ["Find scene changes in this section", "search", () => findCutsIn(p), { off: lk, why }],
+      S.mode === "final" && S.info.has_video ? ["Track something here…", "target", () => startTrack(p), { off: trackLocked("video") }] : null,
+      S.mode === "final" && p.place && p.place.track ? ["Stop tracking", "x", () => stopTrack([p])] : null,
       "-",
       [n > 1 ? "Duplicate " + n + " sections" : "Duplicate", "copy", duplicateSelected, { key: "Ctrl+D", off: lk, why }],
       ["Select all", "grid", () => { S.sel = new Set(kept()); refreshAll({ keepVideo: true }); }, { key: "Ctrl+A" }],
@@ -2233,6 +2276,10 @@ function renderInspector() {
     btn("Remove", { icon: "trash", cls: "danger", onclick: removeSelected })));
   R.append(basics);
   if (S.mode !== "final") { enhanceAll(R); return; }            // the Edit stage has no looks, colour, zoom or sound
+  const tb = trackBox(sel);
+  if (tb) R.append(tb);
+  else if (sel.length === 1 && S.info.has_video && Frame.active(S.proj.settings.frame)) R.append(el("div", { class: "pad track-box" },
+    btn("Track something in this section", { icon: "target", cls: "wide ghost", title: "Draw a box around a face, a person or a car: the picture moves with it", onclick: () => startTrack(sel[0]) })));
   // extras, closed until wanted
   const looks = el("div", { class: "looks" });
   for (const [k, name, ic] of LOOKS) {
@@ -2328,8 +2375,185 @@ function renderOverview(R) {
   const all = btn("Put all back", { icon: "restore", onclick: () => change(() => { for (const p of off) p.off = false; S.proj.pieces.sort((a, b) => a.start - b.start); markHand(); }) });
   R.append(sec("Removed pieces (" + off.length + ")", "trash", false, off.length ? list : el("p", { class: "hint", text: "Nothing removed yet." }), off.length ? all : null));
   R.append(sec("Shortcuts", "info", false,
-    ...[["Space", "Play / pause"], ["S", "Split at the playhead"], ["Delete", "Remove selected"], ["Ctrl+Z / Ctrl+Y", "Undo / redo"], ["Ctrl+D", "Duplicate"], ["Ctrl+A", "Select all"], ["← →", "One frame (Shift: one second)"], ["+ / −", "Zoom the timeline"]]
+    ...[["Space", "Play / pause"], ["S", "Split at the playhead"], ["Delete", "Remove selected"], ["Ctrl+Z / Ctrl+Y", "Undo / redo"], ["Ctrl+D", "Duplicate"], ["Ctrl+A", "Select all"], ["← →", "One frame (Shift: one second)"], ["+ / −", "Zoom the timeline (all the way in: every frame)"], ["[ / ]", "Previous / next scene change"]]
       .map(([k, v]) => el("div", { class: "row between" }, el("span", { class: "kbd", text: k }), el("span", { class: "note", text: v })))));
+}
+
+// ---- Scene changes: marks on the ruler, jump between them, find more inside a section, cut on the exact frame
+S.cuts = null;                                     // scene changes of the video (source seconds), when found
+async function loadCuts() {
+  if (!S.info.has_video || S.cutsBusy) return;
+  S.cutsBusy = true;
+  try {
+    const st = await api("/api/scenes?id=" + encodeURIComponent(S.proj.source));
+    if (st.state === "ready") { S.cuts = st.scenes || []; renderTimeline(); }
+  } catch (e) { /* no marks */ } finally { S.cutsBusy = false; }
+}
+/** Scene changes on the finished timeline (a change shows where its section plays it). */
+function cutMarks() {
+  if (!S.cuts || !S.cuts.length) return [];
+  const out = [];
+  for (const r of layout()) {
+    const p = r.p;
+    for (const c of S.cuts) {
+      if (c <= p.start + 0.02 || c >= p.end - 0.02) continue;
+      out.push(p.reverse ? r.out0 + (p.end - c) / p.speed : r.out0 + (c - p.start) / p.speed);
+    }
+  }
+  for (const r of layout().slice(1)) out.push(r.out0);                 // every join is a possible change too
+  return [...new Set(out.map((x) => +x.toFixed(4)))].sort((a, b) => a - b);
+}
+function jumpCut(dir) {
+  const marks = cutMarks(), eps = 1e-3;
+  const t = dir > 0 ? marks.find((x) => x > S.t + eps) : [...marks].reverse().find((x) => x < S.t - eps);
+  if (t === undefined) { toast(dir > 0 ? "No scene change after this." : "No scene change before this."); return; }
+  seek(t);
+  const sc = $("tlScroll"), x = px(t);
+  if (x < sc.scrollLeft + 40 || x > sc.scrollLeft + sc.clientWidth - 40) sc.scrollLeft = x - sc.clientWidth * 0.4;
+}
+/** Split one section at source times (in Scenes, each new part is its own scene). */
+function splitAtSource(p, times) {
+  const ts = times.filter((c) => c - p.start >= MIN_PIECE && p.end - c >= MIN_PIECE).sort((a, b) => a - b);
+  if (!ts.length) return 0;
+  change(() => {
+    const parts = [], edges = [p.start, ...ts, p.end];
+    for (let k = 0; k < edges.length - 1; k++) { const q = clone(p); q.start = +edges[k].toFixed(4); q.end = +edges[k + 1].toFixed(4); parts.push(q); }
+    if (p.reverse) parts.reverse();
+    const i = S.proj.pieces.indexOf(p);
+    S.proj.pieces.splice(i, 1, ...parts); markHand();
+    if (scenesOn() && p.unit !== undefined && p.unit !== null) {
+      const K = kept(); let fresh = Math.max(...K.map((q) => (q.unit === undefined ? -1 : q.unit))) + 1;
+      for (const q of parts.slice(1)) q.unit = fresh++;
+      renumberScenes();
+    }
+    S.sel = new Set(parts); S.anchor = parts[0];
+  });
+  return ts.length;
+}
+/** Look harder for scene changes inside this section, and cut it there (each on its exact frame). */
+async function findCutsIn(p) {
+  if (locked()) { lockedNote(); return; }
+  toast("Looking for scene changes in this section…");
+  let r;
+  try { r = await api("/api/scenes/inside", { method: "POST", json: { id: S.proj.source, start: p.start, end: p.end, sens: 1.8 } }); }
+  catch (e) { toast(errText(e), true); return; }
+  if (r.state === "waiting") { toast("The app is still looking at this video's pictures (" + Math.round((r.progress || 0) * 100) + "%). Try again in a moment.", true); return; }
+  const n = splitAtSource(p, r.cuts);
+  toast(n ? "Cut at " + n + " scene change" + (n > 1 ? "s" : "") + ", each on its exact frame." : "No other scene change was found in this section.");
+  loadCuts();
+}
+/** Cut on the exact frame where the picture changes, near the given moment of the timeline. */
+async function cutExact(t) {
+  if (locked()) { lockedNote(); return; }
+  const hit = segAt(t); if (!hit) return;
+  const p = hit.s.p, src = p.reverse ? p.end - (t - hit.s.out0) * p.speed : p.start + (t - hit.s.out0) * p.speed;
+  let r;
+  try { r = await api("/api/scenes/exact", { method: "POST", json: { id: S.proj.source, t: src, radius: 0.6 } }); }
+  catch (e) { toast(errText(e), true); return; }
+  if (!r.found) { toast("No clear picture change near here. Zoom in and cut by hand (S)."); return; }
+  if (!splitAtSource(p, [r.t])) { toast("The picture changes too close to the edge of this section to cut there."); return; }
+  const at = layout().find((q) => q.p.start === +r.t.toFixed(4) || (p.reverse && q.p.end === +r.t.toFixed(4)));
+  if (at) seek(at.out0);
+  toast("Cut on the exact frame where the picture changes.");
+}
+
+// ---- Track: right-click a section (Final, with a frame) and draw a box around something: the picture moves with it
+/** The tracked offset at source time t, kept inside the edges of the picture. */
+function trackOffset(pl, t) {
+  const tr = pl.track; if (!tr || !tr.path || tr.path.length < 2) return [0, 0];
+  const P = tr.path; let lo = 0, hi = P.length - 1;
+  if (t <= P[0][0]) return [P[0][1], tr.axes === "xy" ? P[0][2] : 0];
+  if (t >= P[hi][0]) return [P[hi][1], tr.axes === "xy" ? P[hi][2] : 0];
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (P[m][0] <= t) lo = m; else hi = m; }
+  const k = (t - P[lo][0]) / Math.max(1e-6, P[hi][0] - P[lo][0]);
+  return [P[lo][1] + (P[hi][1] - P[lo][1]) * k, tr.axes === "xy" ? P[lo][2] + (P[hi][2] - P[lo][2]) * k : 0];
+}
+/** How big the picture is on the canvas, as a share of the canvas (wider than 1 = it reaches past the sides). */
+function pictureShare(f) {
+  const fr = Frame.full(S.proj.settings.frame), RAT = { "9:16": 9 / 16, "16:9": 16 / 9, "4:3": 4 / 3, "3:4": 3 / 4, "1:1": 1, "4:5": 4 / 5, "2.35:1": 2.35, "2:1": 2, "1.85:1": 1.85, "5.8in": 9 / 19.5 };
+  const va = S.info.width / Math.max(1, S.info.height), ca = RAT[fr.ratio] || va;
+  const fitW = va >= ca ? 1 : va / ca, fitH = va >= ca ? ca / va : 1;
+  return { w: fitW * f.scale, h: fitH * f.scale };
+}
+function simplifyTrack(path) {
+  if (path.length < 3) return path;
+  const out = [path[0]];
+  for (let i = 1; i < path.length - 1; i++) {
+    const a = out[out.length - 1], b = path[i + 1], q = path[i], k = (q[0] - a[0]) / Math.max(1e-6, b[0] - a[0]);
+    const ex = a[1] + (b[1] - a[1]) * k, ey = a[2] + (b[2] - a[2]) * k;
+    if (Math.abs(ex - q[1]) > 0.003 || Math.abs(ey - q[2]) > 0.003 || q[0] - a[0] > 2) out.push(q);
+  }
+  out.push(path[path.length - 1]);
+  return out;
+}
+function startTrack(p) {
+  if (S.mode !== "final" || !Frame.active(S.proj.settings.frame)) { toast("Track works with a frame (Picture panel, for example 9:16). Choose a shape there first.", true); return; }
+  if (trackLocked("video")) { lockedNote("video"); return; }
+  const f = Frame.full(effectiveFrame());
+  if (Math.abs(f.rotate) > 0.5) { toast("Turn this section back to straight (Rotate 0) first, then track.", true); return; }
+  pause();
+  const r0 = layout().find((q) => q.p === p); if (!r0) return;
+  if (!(S.t >= r0.out0 && S.t < r0.out1)) seek(r0.out0 + Math.min(0.2, (r0.out1 - r0.out0) / 2));
+  S.sel = new Set([p]); refreshAll({ keepVideo: true });
+  const layer = $("drawLayer"), bx = $("drawBox");
+  layer.hidden = false;
+  toast("Drag a box tightly around the thing to track (a face, a person, a car).");
+  let x0 = 0, y0 = 0, r = null;
+  const down = (e) => { layer.setPointerCapture(e.pointerId); x0 = e.clientX; y0 = e.clientY; r = null; bx.hidden = false; };
+  const move = (e) => {
+    if (!layer.hasPointerCapture(e.pointerId)) return;
+    const lr = layer.getBoundingClientRect();
+    r = { x: Math.min(x0, e.clientX), y: Math.min(y0, e.clientY), w: Math.abs(e.clientX - x0), h: Math.abs(e.clientY - y0) };
+    bx.style.left = (r.x - lr.left) + "px"; bx.style.top = (r.y - lr.top) + "px"; bx.style.width = r.w + "px"; bx.style.height = r.h + "px";
+  };
+  const up = async () => {
+    layer.removeEventListener("pointerdown", down); layer.removeEventListener("pointermove", move); layer.removeEventListener("pointerup", up);
+    layer.hidden = true; bx.hidden = true;
+    if (!r || r.w < 8 || r.h < 8) { toast("That box was too small. Try again."); return; }
+    // canvas box -> picture (source) fractions: undo the frame's move and size
+    const cv = $("frame").querySelector("canvas.frame-cv"), cb = ((cv && cv.parentElement) || $("frame")).getBoundingClientRect();   // the canvas the frame is drawn on
+    if (cb.width < 4 || cb.height < 4) { toast("The picture is not showing. Open the Picture panel once, then try again.", true); return; }
+    const sh = pictureShare(f), cw = cb.width, ch = cb.height;
+    const pw = sh.w * cw, ph = sh.h * ch, pl = cb.left + cw / 2 + f.x * cw / 2 - pw / 2, ptop = cb.top + ch / 2 + f.y * ch / 2 - ph / 2;
+    const box = { x: clamp((r.x - pl) / pw, 0, 1), y: clamp((r.y - ptop) / ph, 0, 1), w: r.w / pw, h: r.h / ph };
+    const hit = segAt(S.t), srcT = p.reverse ? p.end - (S.t - hit.s.out0) * p.speed : p.start + (S.t - hit.s.out0) * p.speed;
+    const ox0 = box.x + box.w / 2, oy0 = box.y + box.h / 2;
+    toast("Tracking it through this section…");
+    try {
+      const res = await api("/api/track", { method: "POST", json: { input: S.proj.source, at: clamp(srcT, p.start, p.end), box, start: p.start, end: p.end } });
+      // the picture moves the other way to how the thing moves, so the thing stays where it was on the canvas
+      const path = simplifyTrack(res.path.map(([t, ox, oy]) => [t, +(-(ox - ox0) * sh.w * 2).toFixed(5), +(-(oy - oy0) * sh.h * 2).toFixed(5)]));
+      change(() => {
+        const base = Frame.full(S.proj.settings.frame);
+        const own = Object.assign({ x: base.x, y: base.y, scale: base.scale, rotate: base.rotate }, p.place || {});
+        own.track = { path, found: res.found, axes: (p.place && p.place.track && p.place.track.axes) || "x" };
+        p.place = own;
+      }, { keepVideo: true });
+      Frame.refresh && Frame.refresh();
+      toast("Tracked: found it " + Math.round(res.found * 100) + "% of the time" + (res.found < 0.7 ? ". Try a tighter box around something with a clear shape." : ". Play it to see."), res.found < 0.7);
+    } catch (e) { toast(errText(e), true); }
+  };
+  layer.addEventListener("pointerdown", down); layer.addEventListener("pointermove", move); layer.addEventListener("pointerup", up);
+}
+function stopTrack(ps) {
+  change(() => { for (const p of ps) if (p.place && p.place.track) { const o = Object.assign({}, p.place); delete o.track; p.place = o; } }, { keepVideo: true });
+  Frame.refresh && Frame.refresh();
+  toast("Tracking removed.");
+}
+function trackBox(ps) {
+  const tr = ps.map((p) => p.place && p.place.track).filter(Boolean);
+  if (!tr.length || S.mode !== "final") return null;
+  const axes = tr.every((t) => t.axes === "xy") ? "xy" : tr.every((t) => t.axes !== "xy") ? "x" : "";
+  const found = Math.round(Math.min(...tr.map((t) => t.found)) * 100);
+  return el("div", { class: "pad track-box" },
+    el("div", { class: "row between" }, el("b", { text: "Tracking" }), el("span", { class: "note num", text: "found " + found + "%" })),
+    el("div", { class: "field" }, el("span", { text: "Follow" }), segmented([["x", "Left–right"], ["xy", "Left–right and up–down"]], axes, (v) => {
+      change(() => { for (const p of ps) if (p.place && p.place.track) p.place = Object.assign({}, p.place, { track: Object.assign({}, p.place.track, { axes: v }) }); }, { keepVideo: true });
+      Frame.refresh && Frame.refresh();
+    })),
+    el("p", { class: "hint", text: "The picture moves so the tracked thing stays where you saw it. Drag the picture to place it; it keeps tracking." }),
+    el("div", { class: "btns" }, ps.length === 1 ? btn("Track again", { icon: "target", cls: "sm", onclick: () => startTrack(ps[0]) }) : null,
+      btn("Stop tracking", { icon: "x", cls: "sm ghost", onclick: () => stopTrack(ps) })));
 }
 
 // ---- follow a thing: draw a box on the viewer
@@ -2458,7 +2682,7 @@ async function openProject() {
   api("/api/recipes").then((x) => { S.recipes = x.recipes; renderRecipes(); }).catch(() => {});
   api("/api/projects").then(({ projects }) => { const pl = $("projList"); for (const p of projects.filter((q) => q.id !== S.id && !q.trashed && !q.missing && (q.stage || "edit") === S.mode).slice(0, 30)) pl.append(projItem(p)); if (!pl.children.length) pl.append(el("p", { class: "hint", text: "No other projects." })); }).catch(() => {});
   if (S.mode === "edit") renderVersionList(); else openPanel("sound");
-  loadPeaks();
+  loadPeaks(); loadCuts();
   if (S.mode === "edit") { try { const r = await api("/api/projects/" + S.id + "/task"); followTask(r.task); } catch (e) { /* only a help */ } }
   renderSteps();
   if (S.migrated) { S.migrated = false; scheduleSave(); }
@@ -2603,6 +2827,7 @@ function followTask(t) {
 }
 /** The scenes are in (put in by the app): load them, and keep the cut from before for Undo. */
 async function takeScenes(t) {
+  setTimeout(loadCuts, 300);
   try {
     const r = await api("/api/projects/" + S.id);
     const done = r.project.task_done || {};
@@ -2774,6 +2999,7 @@ function wire() {
     else if (k === "ArrowRight") { e.preventDefault(); seek(S.t + (e.shiftKey ? 1 : frame())); }
     else if (k === "Home") seek(0); else if (k === "End") seek(rawTotal());
     else if (k === "+" || k === "=") zoomTo(S.pps * 1.5); else if (k === "-") zoomTo(S.pps / 1.5);
+    else if (k === "]" && !mod) { e.preventDefault(); jumpCut(1); } else if (k === "[" && !mod) { e.preventDefault(); jumpCut(-1); }
   });
   // Leaving the page within half a second of a change: send the save in a way that survives closing the page.
   window.addEventListener("pagehide", () => {

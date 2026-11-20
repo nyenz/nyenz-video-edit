@@ -290,7 +290,34 @@ class ItemBuilder:
             chain += f",pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:black"
         return g.add(cur, chain, "fp"), Dims(W, H)
 
-    def _frame(self, g: Graph, cur: str, dims: Dims, n: int, place: Optional[Dict[str, float]] = None) -> Tuple[str, Dims]:
+    def _track_expr(self, track: Dict[str, Any], col: int, it: Any) -> str:
+        """The tracked offset (path column 1 = x, 2 = y) at this frame, as an expression of the overlay's t.
+        Before 'reverse', frame k of an item shows source time a + k / fps * speed (a = where the item starts reading)."""
+        seg = it.seg
+        a = self.source_window(it)[0] if seg.kind != "freeze" else seg.src_start_f / self.Ff
+        sp = 0.0 if seg.kind == "freeze" else float(seg.speed or 1.0)
+        tau = f"({a:.4f}+t*{sp:.6f})"
+        lo, hi = a - 0.5, a + it.n / self.Ff * max(sp, 0.0) + 0.5
+        pts = [q for q in track["path"] if lo <= q[0] <= hi]
+        before = [q for q in track["path"] if q[0] < lo]
+        after = [q for q in track["path"] if q[0] > hi]
+        if before:
+            pts.insert(0, before[-1])
+        if after:
+            pts.append(after[0])
+        if not pts:
+            return "0"
+        if len(pts) == 1:
+            return f"{pts[0][col]:.5f}"
+        terms = []
+        for q0, q1 in zip(pts, pts[1:]):
+            dt = max(1e-6, q1[0] - q0[0])
+            terms.append(f"gte({tau},{q0[0]:.4f})*lt({tau},{q1[0]:.4f})*({q0[col]:.5f}+({q1[col] - q0[col]:.5f})*({tau}-{q0[0]:.4f})/{dt:.4f})")
+        terms.append(f"lt({tau},{pts[0][0]:.4f})*{pts[0][col]:.5f}")
+        terms.append(f"gte({tau},{pts[-1][0]:.4f})*{pts[-1][col]:.5f}")
+        return "(" + "+".join(terms) + ")"
+
+    def _frame(self, g: Graph, cur: str, dims: Dims, n: int, place: Optional[Dict[str, Any]] = None, it: Any = None) -> Tuple[str, Dims]:
         """Two layers on a canvas of the chosen shape (like CapCut):
         below, the same picture filling the canvas (blurred, or black / white);
         above, the picture fitted, then scaled, moved and turned, and optionally cut to a mask shape with soft edges.
@@ -320,6 +347,17 @@ class ItemBuilder:
             front += f",format=rgba,rotate={math.radians(rot):.6f}:ow=rotw({math.radians(rot):.6f}):oh=roth({math.radians(rot):.6f}):c=0x00000000"
         g.add_raw(f"[{b}]{front}[{fg}]")
         dx, dy = float(fr.get("x", 0.0)) * W / 2, float(fr.get("y", 0.0)) * H / 2
+        ox, oy = f"{dx:.1f}", f"{dy:.1f}"
+        track = (place or {}).get("track") if isinstance((place or {}).get("track"), dict) else None
+        if track and it is not None and len(track.get("path") or []) >= 2:
+            # Track: the picture moves with the tracked thing. While the picture is wider (taller) than the canvas it never
+            # moves so far that its edge comes into view.
+            limx, limy = max(0.0, (fw - W) / 2.0), max(0.0, (fh - H) / 2.0)
+            ex = f"({dx:.1f}+{W / 2:.1f}*{self._track_expr(track, 1, it)})"
+            ox = f"clip({ex},{-limx:.1f},{limx:.1f})" if limx > 0 else ex
+            if track.get("axes") == "xy":
+                ey = f"({dy:.1f}+{H / 2:.1f}*{self._track_expr(track, 2, it)})"
+                oy = f"clip({ey},{-limy:.1f},{limy:.1f})" if limy > 0 else ey
         mask = (fr.get("mask") or {}).get("shape", "none")
         edge = float(fr.get("edge", 0.0) or 0.0)
         edge_r = edge / 100.0 * min(W, H) * 0.16                  # soft edges of the picture itself (into the layer below)
@@ -327,11 +365,11 @@ class ItemBuilder:
             fr = dict(fr, mask={"shape": "all", "feather": 0.0})
             mask = "all"
         if mask == "none":
-            g.add_raw(f"[{bg}][{fg}]overlay=x='(W-w)/2+{dx:.1f}':y='(H-h)/2+{dy:.1f}':format=auto,format=yuv420p[{top}]")
+            g.add_raw(f"[{bg}][{fg}]overlay=x='(W-w)/2+{ox}':y='(H-h)/2+{oy}':format=auto,format=yuv420p[{top}]")
             return top, Dims(W, H)
         g.add_raw(f"[{bg}]split=2[{bg1}][{bg2}]")
         sharp, alpha, cut, res = g.label("ks"), g.label("km"), g.label("kc"), g.label("kr")
-        g.add_raw(f"[{bg1}][{fg}]overlay=x='(W-w)/2+{dx:.1f}':y='(H-h)/2+{dy:.1f}':format=auto,format=yuva420p[{sharp}]")
+        g.add_raw(f"[{bg1}][{fg}]overlay=x='(W-w)/2+{ox}':y='(H-h)/2+{oy}':format=auto,format=yuva420p[{sharp}]")
         pcx, pcy = W / 2 + dx, H / 2 + dy
         rect = {"l": pcx - fw / 2, "r": pcx + fw / 2, "t": pcy - fh / 2, "b": pcy + fh / 2, "W": W, "H": H,
                 "rot": rot if abs(rot) > 0.01 else 0.0, "cx": pcx, "cy": pcy, "hw": fw / 2, "hh": fh / 2}
@@ -552,7 +590,7 @@ class ItemBuilder:
         elif seg.reframe is not None:
             cur, dims = self._reframe(g, cur, it, dims)
         if self.out.frame:
-            cur, dims = self._frame(g, cur, dims, it.n, seg.place)
+            cur, dims = self._frame(g, cur, dims, it.n, seg.place, it)
         else:
             cur, dims = self._fit(g, cur, dims)
         if seg.reverse:
