@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.28.0
+* **Zoom in 10 times further**: all the way in, every frame of the video is its own exact picture on the timeline, and
+  the ruler shows every frame (with its number). Cut on the exact frame you want (S).
+* **Scene changes on the ruler**: small yellow marks show where the scenes change; click one to go there, or press
+  **[** and **]** to jump to the previous / next one.
+* **Right-click a section**:
+  * **Find scene changes in this section**: looks much harder inside that section and cuts it at every scene change it
+    finds, each on its exact frame (each part becomes its own scene).
+  * **Cut on the exact picture change near here**: finds the exact frame where the picture changes and cuts there.
+* **Track** (Final, with a frame such as 9:16): right-click a section, **Track something here…**, drag a box around a
+  face, a person or a car. The picture then moves with it, so it stays where you saw it, and never so far that the
+  picture's edge shows. **Left–right** (the default) or **Left–right and up–down**; **Track again** / **Stop tracking** on
+  the right. Dragging the picture still works: it keeps tracking from the new place.
+* **A stronger tracker**: it follows many small points (each checked forwards and back), corrects them with a picture
+  match, and searches the whole frame to find the thing again after it was covered or left the picture.
+
 ## 1.27.0
 * **Fixed: "Found again" was not in the exported video.** Every split track is in the export now, also what Separate
   again found.

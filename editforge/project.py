@@ -220,8 +220,24 @@ def clean_place(raw: Any) -> Optional[Dict[str, float]]:
     """A piece's own position of the video layer: {x, y, scale, rotate} (the same meaning as in the frame)."""
     if not isinstance(raw, dict):
         return None
-    return {"x": round(_num(raw.get("x"), 0.0, -2.0, 2.0), 4), "y": round(_num(raw.get("y"), 0.0, -2.0, 2.0), 4),
-            "scale": round(_num(raw.get("scale"), 1.0, 0.1, 4.0), 3), "rotate": round(_num(raw.get("rotate"), 0.0, -180.0, 180.0), 2)}
+    out: Dict[str, Any] = {"x": round(_num(raw.get("x"), 0.0, -2.0, 2.0), 4), "y": round(_num(raw.get("y"), 0.0, -2.0, 2.0), 4),
+                           "scale": round(_num(raw.get("scale"), 1.0, 0.1, 4.0), 3), "rotate": round(_num(raw.get("rotate"), 0.0, -180.0, 180.0), 2)}
+    tr = raw.get("track") if isinstance(raw.get("track"), dict) else None
+    if tr:                                          # Track: the picture moves so the tracked thing stays put on the canvas
+        pts = []
+        for q in (tr.get("path") if isinstance(tr.get("path"), list) else [])[:20000]:
+            if isinstance(q, (list, tuple)) and len(q) >= 3:
+                try:
+                    t, dx, dy = float(q[0]), float(q[1]), float(q[2])
+                except (TypeError, ValueError):
+                    continue
+                if all(math.isfinite(v) for v in (t, dx, dy)) and t >= 0:
+                    pts.append([round(t, 4), round(max(-4.0, min(4.0, dx)), 5), round(max(-4.0, min(4.0, dy)), 5)])
+        pts.sort(key=lambda q: q[0])
+        if len(pts) >= 2:
+            out["track"] = {"path": pts, "found": round(_num(tr.get("found"), 1.0, 0.0, 1.0), 3),
+                            "axes": tr.get("axes") if tr.get("axes") in ("x", "xy") else "x"}
+    return out
 
 
 def clean_texts(raw: Any) -> List[Dict[str, Any]]:

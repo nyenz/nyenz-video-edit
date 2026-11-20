@@ -4,10 +4,8 @@ Both give a path of (source time, x, y) with x and y as fractions of the picture
 turns that into a zoomed view that glides after the subject.
 
 * Faces come from the face detector (several times a second) and are smoothed so the view is calm.
-* Objects are followed by template matching: the little picture inside your box is searched for near
-  its last position in every following frame. It is simple and needs no model download, but it loses
-  things that change shape a lot, leave the picture or get covered. When that happens the view stays
-  where it last saw the object.
+* Objects are followed by points (optical flow, checked forwards and back), a picture match that corrects
+  them, and a search of the whole frame when the thing is lost (see ``track_object``). No model download.
 """
 
 from __future__ import annotations
@@ -22,8 +20,8 @@ from .facepath import Face, track_all
 
 Point = Tuple[float, float, float]
 
-TRACK_FPS = 10.0
-TRACK_WIDTH = 320
+TRACK_FPS = 15.0
+TRACK_WIDTH = 480
 MAX_TRACK_SECONDS = 300.0
 LOST_SCORE = 0.35
 
@@ -142,8 +140,17 @@ def track_object(path: str, at: float, box: Sequence[float], start: float, end: 
                  cancel: Optional[threading.Event] = None) -> Tuple[List[Point], float]:
     """Follow the thing inside ``box`` (x, y, w, h as fractions of the picture, seen at time ``at``) from ``start`` to ``end``.
 
-    Returns (path, found) where ``path`` is (time, x, y) of the object's middle, ten times a second, and
-    ``found`` is the fraction of the time the object was matched with confidence.
+    Three methods work together, every frame (15 a second, on a 480-pixel copy):
+    1. points: up to 80 small corners inside the box are followed from frame to frame (optical flow); each one is also
+       followed BACK, and a point that does not come back to where it started is not trusted. The box moves by the
+       middle (median) of the trusted points, so a few wrong ones do not pull it away.
+    2. picture: the box's picture is looked for near that new place; a good match corrects the position (and keeps
+       slowly learning how the thing looks, so turning and lighting changes are followed).
+    3. finding it again: when both lose it (covered, out of the picture), the whole frame is searched every few frames
+       and following goes on when it is found again; meanwhile the view waits where it last saw it.
+
+    Returns (path, found): ``path`` is (time, x, y) of the middle of the thing, 15 times a second, smoothed; ``found``
+    is the share of the time it was followed with confidence.
     """
     if not object_tracking_available():
         raise FeatureUnavailable("Following an object is switched off because the free 'opencv-python-headless' add-on is not installed.",
@@ -165,35 +172,91 @@ def track_object(path: str, at: float, box: Sequence[float], start: float, end: 
     if len(frames) < 2:
         raise EditForgeError("I could not read that part of the video.", "Try other pieces.")
     k0 = max(0, min(len(frames) - 1, int(round((at - start) * TRACK_FPS))))
-    tw, th = max(8, int(round(bw * w))), max(8, int(round(bh * h)))
+    tw, th = max(10, int(round(bw * w))), max(10, int(round(bh * h)))
     x0, y0 = max(0, min(w - tw, int(round(bx * w)))), max(0, min(h - th, int(round(by * h))))
     first = frames[k0][y0:y0 + th, x0:x0 + tw].astype(np.float32)
     if float(first.std()) < 2.0:
         raise EditForgeError("The box is on a plain area with nothing to recognise.", "Draw the box tightly around something with a clear shape.")
-    reach = max(12, int(round(0.18 * w)))            # how far the object may move between two samples
-    pos = {k0: (x0, y0, 1.0)}
+    lk = dict(winSize=(21, 21), maxLevel=3, criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))
+    near = max(8, int(round(0.06 * w)))               # how far the picture match may correct the points
+    pos = {k0: (float(x0), float(y0), 1.0)}
+
+    def corners(img: Any, x: float, y: float) -> Any:
+        m = np.zeros_like(img)
+        xi, yi = int(round(x)), int(round(y))
+        m[max(0, yi):max(0, yi) + th, max(0, xi):max(0, xi) + tw] = 255
+        return cv2.goodFeaturesToTrack(img, maxCorners=80, qualityLevel=0.01, minDistance=3, mask=m, blockSize=5)
+
+    def match(img: Any, tpl: Any, x: float, y: float, reach: int) -> Tuple[float, float, float]:
+        ax, ay = int(max(0, x - reach)), int(max(0, y - reach))
+        zx, zy = int(min(w, x + tw + reach)), int(min(h, y + th + reach))
+        area = img[ay:zy, ax:zx].astype(np.float32)
+        if area.shape[0] < th or area.shape[1] < tw:
+            return x, y, -1.0
+        res = cv2.matchTemplate(area, tpl, cv2.TM_CCOEFF_NORMED)
+        _, score, _, loc = cv2.minMaxLoc(res)
+        if score != score:
+            return x, y, -1.0
+        return float(ax + loc[0]), float(ay + loc[1]), float(score)
 
     def run(order: Sequence[int]) -> None:
         tpl = first.copy()
-        px, py = x0, y0
+        x, y = float(x0), float(y0)
+        prev = frames[k0]
+        pts = corners(prev, x, y)
+        vx = vy = 0.0                                       # how it was moving (used while it is lost)
+        lost = 0
         for k in order:
             if cancel is not None and cancel.is_set():
                 raise Cancelled()
-            ax, ay = max(0, px - reach), max(0, py - reach)
-            zx, zy = min(w, px + tw + reach), min(h, py + th + reach)
-            area = frames[k][ay:zy, ax:zx].astype(np.float32)
-            score = -1.0
-            if area.shape[0] >= th and area.shape[1] >= tw:
-                res = cv2.matchTemplate(area, tpl, cv2.TM_CCOEFF_NORMED)
-                _, score, _, loc = cv2.minMaxLoc(res)
-                if score == score and score >= LOST_SCORE:           # found: move there
-                    px, py = ax + int(loc[0]), ay + int(loc[1])
-                    if score >= 0.6:                                  # sure: let the picture of the object adapt slowly
-                        tpl = 0.85 * tpl + 0.15 * frames[k][py:py + th, px:px + tw].astype(np.float32)
-            pos[k] = (px, py, float(score) if score == score else -1.0)
+            img = frames[k]
+            nx, ny, conf = x + vx, y + vy, 0.0
+            moved = False
+            if pts is not None and len(pts) >= 4:          # 1. points, checked back
+                p1, st1, _ = cv2.calcOpticalFlowPyrLK(prev, img, pts, None, **lk)
+                if p1 is not None:
+                    p0r, st2, _ = cv2.calcOpticalFlowPyrLK(img, prev, p1, None, **lk)
+                    if p0r is not None:
+                        fb = np.abs(pts - p0r).reshape(-1, 2).max(axis=1)
+                        good = (st1.reshape(-1) == 1) & (st2.reshape(-1) == 1) & (fb < 1.0)
+                        if int(good.sum()) >= 4:
+                            dxy = np.median((p1 - pts).reshape(-1, 2)[good], axis=0)
+                            nx, ny = x + float(dxy[0]), y + float(dxy[1])
+                            moved = True
+            mx, my, score = match(img, tpl, nx, ny, near)   # 2. picture
+            if score >= 0.55:
+                nx, ny = (mx, my) if not moved else (0.5 * nx + 0.5 * mx, 0.5 * ny + 0.5 * my)
+                conf = score
+            elif moved and score >= LOST_SCORE:
+                conf = score
+            elif not moved:
+                lost += 1
+                if lost % 3 == 0:                               # 3. look for it in the whole frame
+                    gx, gy, gs = match(img, tpl, w / 2 - tw / 2, h / 2 - th / 2, max(w, h))
+                    if gs >= 0.65:
+                        nx, ny, conf = gx, gy, gs
+            nx, ny = max(0.0, min(w - tw, nx)), max(0.0, min(h - th, ny))
+            if conf >= LOST_SCORE:
+                vx, vy = 0.7 * vx + 0.3 * (nx - x), 0.7 * vy + 0.3 * (ny - y)
+                lost = 0
+                if conf >= 0.7:                                 # sure: let the picture of the thing adapt slowly
+                    xi, yi = int(round(nx)), int(round(ny))
+                    patch = img[yi:yi + th, xi:xi + tw].astype(np.float32)
+                    if patch.shape == tpl.shape:
+                        tpl = 0.9 * tpl + 0.1 * patch
+            else:
+                vx, vy = 0.8 * vx, 0.8 * vy                     # lost: slow down and wait
+                if lost > 3:
+                    nx, ny = x, y
+            pos[k] = (nx, ny, conf)
+            if conf >= LOST_SCORE and (pts is None or len(pts) < 20 or k % 5 == 0):
+                pts = corners(img, nx, ny)
+            elif pts is not None and moved:
+                pts = p1.reshape(-1, 1, 2)[good.reshape(-1)] if int(good.sum()) >= 4 else pts
+            x, y, prev = nx, ny, img
 
     run(range(k0 + 1, len(frames)))
     run(range(k0 - 1, -1, -1))
     points = [(round(start + k / TRACK_FPS, 4), (pos[k][0] + tw / 2.0) / w, (pos[k][1] + th / 2.0) / h) for k in range(len(frames))]
     found = sum(1 for k in range(len(frames)) if pos[k][2] >= LOST_SCORE) / float(len(frames))
-    return calm(points, 0.5), round(found, 3)
+    return calm(points, 0.35), round(found, 3)

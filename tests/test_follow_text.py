@@ -356,3 +356,26 @@ def test_beats_in_the_silence_before_and_after_the_music_are_dropped():
     kept = B._trim_unsupported(frames, onset)
     assert kept[0] == 500 and kept[-1] == 1450 and len(kept) == 20
     assert B._trim_unsupported([10, 20, 30], onset) == [10, 20, 30]
+
+
+# ---------------------------------------------------------------------------- Track with a frame (1.28)
+@needs_cv
+def test_tracked_thing_stays_in_the_middle_of_a_tall_frame(moving, out):
+    """A 9:16 frame, the picture 3x wide; the box is tracked: the picture moves so the box stays in the middle."""
+    path, found = F.track_object(moving, 4.0, [box_x(4.0) / 640, box_y(4.0) / 360, 80 / 640, 80 / 360], 0.0, 8.0, 640, 360)
+    assert found > 0.9
+    share_w = 3.0                                          # the picture is 3 canvas widths wide
+    track = {"path": [[t, -(x - 0.5) * share_w * 2, 0.0] for t, x, y in path], "found": found, "axes": "x"}
+    place = {"x": 0.0, "y": 0.0, "scale": 3.0, "rotate": 0.0, "track": track}
+    proj = project([{"start": 0.5, "end": 7.0, "place": place}], frame={"ratio": "9:16", "bg": "black"})
+    assert proj["pieces"][0]["place"]["track"]["axes"] == "x" and len(proj["pieces"][0]["place"]["track"]["path"]) == len(path)
+    plan, res = make(proj, moving, out())
+    assert (res.verify.width, res.verify.height) == (360, 640)
+    ph = 360 / (16 / 9) * 3.0                              # the picture's height on the canvas
+    for t in (1.0, 2.5, 4.0, 5.0):                        # finished-video time; the source time is t + 0.5
+        st = t + 0.5
+        cy = int(round(320 + ((box_y(st) + 40) / 360 - 0.5) * ph))
+        px = frame_rgb(res.output_path, t, 360, 640)
+        at = lambda x, y: px[(y * 360 + x) * 3:(y * 360 + x) * 3 + 3]
+        assert not is_background(at(180, cy)), (t, cy)    # the box is in the middle ...
+        assert is_background(at(20, cy)) and is_background(at(340, cy)), t   # ... and not at the sides

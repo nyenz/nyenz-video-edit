@@ -111,3 +111,22 @@ def test_two_rough_cuts_on_the_same_frame_become_one(monkeypatch):
     monkeypatch.setattr(shots, "refine_cut", lambda path, t, cancel=None: 3.5)
     out = shots.refine_all("x.mp4", [shots.Cut(3.3, "cut", 0.5, 82), shots.Cut(3.6, "cut", 0.9, 90), shots.Cut(9.0, "dissolve", 0.4, 216)])
     assert [(c.t, c.score) for c in out] == [(3.5, 0.9), (9.0, 0.4)]
+
+
+def test_looking_harder_inside_a_part_and_finding_the_exact_frame(tmp_path):
+    """sens > 1 finds at least what the normal search finds; lo / hi keep it inside a part; refine_cut lands on the frame."""
+    parts = [_clip(tmp_path / f"h{i}.mp4", SRC[i], 3) for i in range(4)]
+    path = _join(tmp_path, "harder", parts)
+    feats = shots.extract_features(path, 12)
+    normal = [round(c.t, 1) for c in shots.find_cuts(feats)]
+    harder = [round(c.t, 1) for c in shots.find_cuts(feats, 1.8)]
+    assert set(normal) <= set(harder)
+    inside = shots.find_cuts(feats, 1.8, 4.0, 8.0)
+    assert [round(c.t) for c in inside] == [6]
+    assert abs(shots.refine_cut(path, 6.2, radius=0.6) - 6.0) <= 0.04
+    # a subtle change (the same picture, only its colours turned) is found when looking harder
+    a = _clip(tmp_path / "a.mp4", "testsrc2", 3)
+    b = _clip(tmp_path / "b.mp4", "testsrc2", 3, "hue=h=70:s=1.4")
+    soft = _join(tmp_path, "soft", [a, b])
+    f2 = shots.extract_features(soft, 6)
+    assert any(abs(c.t - 3.0) < 0.2 for c in shots.find_cuts(f2, 2.5))

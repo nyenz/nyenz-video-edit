@@ -411,6 +411,37 @@ class AppState:
                          name="editforge-resplit", daemon=True).start()
         return dict(job)
 
+    def scenes_inside(self, file_id: str, start: float, end: float, sens: float) -> Dict[str, Any]:
+        """Look harder for scene changes inside one part of a video (a section that should be several scenes).
+        Uses the saved picture fingerprints of the video; every hard cut is then put on its exact frame."""
+        from ..analysis import shots
+        src = self.resolve_input(file_id)
+        info = probe_media(src)
+        if not info.has_video:
+            raise EditForgeError("This video has no picture.", "Choose a video with a picture.")
+        st = self.scenes.status(src)
+        if st["state"] != "ready":
+            self.scenes.start(src, info.duration, True)
+            return {"state": "waiting", "progress": float(st.get("progress") or 0.0), "cuts": []}
+        feats = self.scenes.features(src)
+        if feats is None:
+            return {"state": "ready", "cuts": [t for t in st["scenes"] if start + 0.1 < t < end - 0.1]}
+        found = shots.find_cuts(feats, sens, start + 0.1, end - 0.1)
+        out = []
+        for c in found:
+            t = shots.refine_cut(src, c.t, radius=0.35) if c.kind == "cut" else c.t
+            if start + 0.08 < t < end - 0.08 and (not out or t - out[-1] >= 0.15):
+                out.append(round(t, 4))
+        return {"state": "ready", "cuts": out}
+
+    def scene_exact(self, file_id: str, t: float, radius: float) -> Dict[str, Any]:
+        """The exact moment of the picture change nearest to t (between two frames), or found False."""
+        from ..analysis import shots
+        src = self.resolve_input(file_id)
+        radius = max(0.1, min(2.0, radius))
+        got = shots.refine_cut(src, t, radius=radius)
+        return {"t": got, "found": abs(got - t) > 1e-6 or False}
+
     def even_points(self, file_id: str, split_id: str, layer: str, strength: int) -> List[List[float]]:
         """The Even out curve of a file (music, or the video itself) or of a split layer (in the video's time)."""
         from ..analysis import evenout
@@ -619,18 +650,21 @@ class AppState:
             with self._task_lock:
                 self._peaks_busy.discard(fp)
 
-    def thumbnail(self, src: str, at: float, height: int = 96) -> Optional[Path]:
-        """A small JPEG of the picture at ``at`` seconds (made once, then kept). None if it cannot be made."""
+    def thumbnail(self, src: str, at: float, height: int = 96, exact: bool = False) -> Optional[Path]:
+        """A small JPEG of the picture at ``at`` seconds (made once, then kept). None if it cannot be made.
+        exact: that very frame, from the video itself (for the timeline zoomed in to single frames)."""
         ms = max(0, int(round(at * 1000)))
-        out = self.thumbs / (f"{self.fingerprint(src)}_{ms}.jpg" if height == 96 else f"{self.fingerprint(src)}_{ms}_h{height}.jpg")
+        out = self.thumbs / (f"{self.fingerprint(src)}_{ms}{'_x' if exact else ''}.jpg" if height == 96 else f"{self.fingerprint(src)}_{ms}_h{height}.jpg")
         if out.is_file() and out.stat().st_size > 0:
             return out
-        if height == 96 and abs(at - round(at)) < 0.01:          # whole seconds come from the picture strip (made in one pass)
+        if exact:
+            light = None
+        elif height == 96 and abs(at - round(at)) < 0.01:          # whole seconds come from the picture strip (made in one pass)
             strip = self.previews.strip_picture(src, at)
             if strip is not None:
                 return strip
-        light = self.previews.path_for(src)          # the light copy decodes many times faster than a big original
-        if light.is_file() and light.stat().st_size > 0:
+        light = None if exact else self.previews.path_for(src)          # the light copy decodes many times faster than a big original
+        if light is not None and light.is_file() and light.stat().st_size > 0:
             src = str(light)
         part = out.with_name(out.name + f".{uuid.uuid4().hex[:8]}.part")
         with self._thumb_slots:
@@ -2030,6 +2064,17 @@ class Handler(BaseHTTPRequestHandler):
                 src = self.state.resolve_input(str(data.get("id") or ""))
                 info = probe_media(src)
                 self._json(self.state.scenes.start(src, info.duration, info.has_video))
+            elif path == "/api/scenes/inside":
+                data = self._read_json()
+                if data is None:
+                    return
+                self._json(self.state.scenes_inside(str(data.get("id") or ""), _float(data.get("start"), 0.0), _float(data.get("end"), 0.0),
+                                                    _float(data.get("sens"), 1.8)))
+            elif path == "/api/scenes/exact":
+                data = self._read_json()
+                if data is None:
+                    return
+                self._json(self.state.scene_exact(str(data.get("id") or ""), _float(data.get("t"), 0.0), _float(data.get("radius"), 0.6)))
             elif re.fullmatch(rf"/api/projects/{PROJECT_ID}/render", path):
                 data = self._read_json()
                 if data is None:
@@ -2432,7 +2477,7 @@ class Handler(BaseHTTPRequestHandler):
         except (EditForgeError, ValueError):
             self._error(404, "No picture for that.")
             return
-        pic = self.state.thumbnail(src, at, 240 if (query.get("h") or [""])[0] == "240" else 96)
+        pic = self.state.thumbnail(src, at, 240 if (query.get("h") or [""])[0] == "240" else 96, (query.get("exact") or [""])[0] == "1")
         if pic is None:
             self._error(404, "No picture for that.")
             return

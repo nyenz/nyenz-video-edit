@@ -293,9 +293,18 @@ class Cut:
     span: int = 0            # dissolves: how many frames on each side were compared
 
 
-def find_cuts(feats: Features) -> List[Cut]:
-    """Every scene change of the video, in time order."""
+def find_cuts(feats: Features, sens: float = 1.0, lo: float = 0.0, hi: float = 1e12) -> List[Cut]:
+    """Every scene change of the video, in time order.
+
+    sens > 1 looks harder (smaller jumps count, for "Find scene changes in this section"); lo..hi limits it to a part
+    of the video (seconds)."""
     import numpy as np
+    sens = max(0.5, min(3.0, float(sens)))
+    hard_min, hard_ratio = HARD_MIN / sens, max(1.3, HARD_RATIO / (1.0 + 0.45 * (sens - 1.0)))
+    stay, stay_min = STAY / (1.0 + 0.3 * (sens - 1.0)), STAY_MIN / sens
+    soft_min, soft_calm = SOFT_MIN / sens, SOFT_CALM * (1.0 + 0.5 * (sens - 1.0))
+    cover_cut, cover_soft = COVER_CUT / sens, COVER_SOFT / sens
+    min_scene = MIN_SCENE / (1.0 + 0.5 * (sens - 1.0))
     n = len(feats)
     if n < 6:
         return []
@@ -310,7 +319,7 @@ def find_cuts(feats: Features) -> List[Cut]:
     w = _dist(before_t, before_h, after_t, after_h)[:-1]
     base = _baseline(d)
     peak = d >= _local_max(d, 2) - 1e-9
-    ok = peak & (d >= HARD_MIN) & (d >= HARD_RATIO * np.maximum(base, 0.03)) & (w >= np.maximum(STAY_MIN, STAY * d))
+    ok = peak & (d >= hard_min) & (d >= hard_ratio * np.maximum(base, 0.03)) & (w >= np.maximum(stay_min, stay * d))
     lum = T.reshape(n, -1).astype(np.float32).mean(axis=1) / 255.0
     for i in np.flatnonzero(ok):
         if lum[i] <= BLACK or lum[min(n - 1, i + 1)] <= BLACK:       # into or out of black: judged below, as a whole
@@ -332,7 +341,7 @@ def find_cuts(feats: Features) -> List[Cut]:
         inside = _rolling_max(d_full, -span, span)
         valid = np.zeros(n, dtype=bool)
         valid[span + calm + 1: n - span - calm - 2] = True
-        good = valid & (far >= SOFT_MIN) & (calm_before <= SOFT_CALM) & (calm_after <= SOFT_CALM) & (inside <= 0.6 * far)
+        good = valid & (far >= soft_min) & (calm_before <= soft_calm) & (calm_after <= soft_calm) & (inside <= 0.6 * far)
         peak2 = far >= _local_max(far, span) - 1e-9
         for i in np.flatnonzero(good & peak2):
             cands.append(Cut((i + 0.5) / fps, "dissolve", float(far[i]), int(i), span))
@@ -361,9 +370,9 @@ def find_cuts(feats: Features) -> List[Cut]:
     kept = []
     for c in cands:
         if c.kind == "cut":
-            i0, i1, need = c.frame, c.frame + 1, COVER_CUT
+            i0, i1, need = c.frame, c.frame + 1, cover_cut
         elif c.kind == "dissolve":
-            i0, i1, need = c.frame - c.span, c.frame + c.span + 1, COVER_SOFT
+            i0, i1, need = c.frame - c.span, c.frame + c.span + 1, cover_soft
         else:
             kept.append(c)
             continue
@@ -371,7 +380,7 @@ def find_cuts(feats: Features) -> List[Cut]:
         b = np.median(cells[min(n - 1, i1): min(n, i1 + 3)], axis=0)
         if float((np.abs(a - b).mean(axis=1) / 255.0 > 0.12).mean()) >= need:
             kept.append(c)
-    out = _thin(kept, MIN_SCENE, feats)
+    out = _thin([c for c in kept if lo <= c.t <= hi], min_scene, feats)
     for c in out:
         if c.kind == "dissolve":
             c.t = _dissolve_centre(feats, c)
