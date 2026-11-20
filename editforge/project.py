@@ -1046,8 +1046,9 @@ def remap_words(words: Sequence[Word], segments: Sequence[Segment], fps: float) 
 
 
 def _solo_any(st: Dict[str, Any], layers: Optional[Sequence[Dict[str, Any]]] = None) -> bool:
-    """Is anything soloed? (then only the soloed things are heard)"""
-    return bool(st["solo"]) or any(x.get("solo") for x in (layers if layers is not None else st["layers"]))
+    """Solo is only for listening in the app (like in a mixing desk): the exported video always has every track that is
+    not muted, so a Solo left on by mistake never takes sound out of the video. So: nothing is soloed for the export."""
+    return False
 
 
 def _layer_mix(st: Dict[str, Any], live: List[Dict[str, Any]], src_path: str, planner: Any,

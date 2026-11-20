@@ -202,7 +202,8 @@ const Layers = (() => {
     const f = S.mutedAll || (p && p.mute) || !st().original_sound ? 0 : (p ? Math.max(0, p.volume) : 1);
     const shape = p && typeof partShapeGain === "function" && typeof active === "function" ? partShapeGain(p, n, active().currentTime) : 1;   // even out, fades
     const duck = typeof stemDuckGain === "function" && typeof active === "function" ? stemDuckGain(n, active().currentTime) : 1;   // going down under another track
-    L.gains[n].gain.value = Math.max(0, v) * f * ownGain(p, n) * shape * duck;
+    const master = typeof masterGain === "function" ? masterGain() : 1;            // the Overall loudness chosen in Export
+    L.gains[n].gain.value = Math.max(0, v) * f * ownGain(p, n) * shape * duck * master;
   }
   function gainsNow(p) { for (const n of NAMES) setGain(n, gainOf(n), p); }
   function on() { return usable(); }

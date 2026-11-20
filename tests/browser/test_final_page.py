@@ -214,3 +214,54 @@ def test_song_parts_can_be_dragged_and_taken_out(live, page, movie_id, music_id)
     ps = page.evaluate("() => mspans(layers()[0]).map((r) => [+r.a.toFixed(1), +r.src.toFixed(1), !!r.q.mute])")
     assert [20.0, 15.0, False] in ps and [15.0, 15.0, True] in ps                               # moved 5 s right, a gap before it
     assert page.errors == []
+
+
+def test_loudness_is_heard_live_without_making_anything_and_solo_is_easy_to_see(live, page, movie_id, music_id):
+    pid = open_final(live, page, movie_id, "Listen")
+    jobs_before = len(live.call("GET", "/api/jobs")["jobs"])
+    page.evaluate("() => exportDialog()")
+    dlg = page.locator(".dialog[aria-label=Export]")
+    dlg.locator(".field:has-text('Overall loudness') .seg button").nth(6).click()            # +3: plays right away, louder
+    page.wait_for_function("() => S.playing")
+    assert abs(page.evaluate("() => masterGain()") - 10 ** (4.5 / 20)) < 1e-6
+    assert "Stop listening" in dlg.inner_text()
+    dlg.locator("button:has-text('Stop listening')").click()
+    page.wait_for_function("() => !S.playing")
+    dlg.locator(".field:has-text('Overall loudness') .seg button").nth(0).click()            # -3: quieter
+    assert abs(page.evaluate("() => masterGain()") - 10 ** (-4.5 / 20)) < 1e-6
+    page.evaluate("() => pause()")
+    page.keyboard.press("Escape")
+    page.wait_for_selector(".dialog[aria-label=Export]", state="detached")                    # Esc closes it
+    assert len(live.call("GET", "/api/jobs")["jobs"]) == jobs_before                           # nothing was rendered
+    page.evaluate("() => saveNow()")
+    assert live.call("GET", f"/api/projects/{pid}")["project"]["settings"]["loudness_step"] == -3
+    # a Solo left on shows next to the player, and one click hears everything again
+    page.evaluate("(id) => { S.proj.settings.layers = [{ file: id, volume: 0.5, mute: false, solo: true }]; scheduleSave(); loadFiles(); }", music_id)
+    page.wait_for_selector("#soloChip:not([hidden])")
+    page.click("#soloChip")
+    page.wait_for_selector("#soloChip", state="hidden")
+    assert page.evaluate("() => S.proj.settings.layers[0].solo") is False
+    assert page.errors == []
+
+
+def test_a_finished_video_keeps_playing_and_stays_full_screen_while_the_exports_list_updates(live, page, movie_id):
+    open_final(live, page, movie_id, "Watch it")
+    page.evaluate("() => { S.proj.pieces = S.proj.pieces.map((p, i) => Object.assign(p, { off: i > 2 })); saveNow(); }")
+    page.evaluate("() => exportDialog()")
+    page.click(".dialog[aria-label=Export] button:has-text('Quick preview file')")
+    page.wait_for_selector("#exportsDrawer .job button:has-text('Watch')", timeout=180000)
+    page.locator("#exportsDrawer .job button:has-text('Watch')").first.click()
+    page.wait_for_selector("#exportsDrawer .mini video")
+    page.evaluate("() => { const v = document.querySelector('#exportsDrawer .mini video'); v.muted = true; v._mark = 1; return v.play(); }")
+    page.evaluate("() => Exports.refresh()")                       # what the app does every second while something is running
+    page.evaluate("() => { Exports.sig = 'changed'; return Exports.refresh(); }")
+    assert page.evaluate("() => { const v = document.querySelector('#exportsDrawer .mini video'); return !!v && v._mark === 1 && !v.paused; }")
+    page.click("#exportsDrawer .mini button[title='Full screen']")
+    page.wait_for_function("() => document.fullscreenElement && document.fullscreenElement.classList.contains('mini')")
+    page.evaluate("() => { Exports.sig = 'changed again'; return Exports.refresh(true); }")
+    assert page.evaluate("() => !!document.fullscreenElement")       # still full screen
+    bar = page.locator(".mini.is-full .mini-bar").bounding_box()
+    assert bar and bar["y"] + bar["height"] <= 800 + 1                # the controls are on the screen in full screen
+    page.keyboard.press("Escape")
+    page.wait_for_function("() => !document.fullscreenElement")
+    assert page.errors == []

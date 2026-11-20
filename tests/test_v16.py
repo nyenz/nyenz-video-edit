@@ -585,6 +585,8 @@ def test_music_goes_down_under_voices_and_muted_parts_are_silent_in_the_export(w
     assert lv(0.75, 1.05) < 0.08 * A                     # the muted part
     assert 0.18 < lv(2.1, 2.5) / A < 0.45                 # while someone talks: about 30 %
     assert lv(3.6, 4.3) / A > 0.8                         # and back up after
+    # the video's own sound is still there with the song (its music and effects tracks)
+    print("DBG", [round(level(y[int(44100 * 3.6): int(44100 * 4.3)], hz), 4) for hz in (300, 500, 1000, 3000)])
     # the levels of a music file can be measured too (for Normalise)
     st, r = c.json("POST", "/api/split/levels", {"file": mid, "ranges": [[0, 1], [7, 8]]})
     assert st == 200 and len(r["levels"]) == 2 and r["levels"][0]["rms"] > -40 and abs(r["levels"][0]["rms"] - r["levels"][1]["rms"]) < 1.5

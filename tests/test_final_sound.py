@@ -85,7 +85,7 @@ def test_the_final_mix_meets_the_standard_with_two_music_layers_and_reports_it(w
     assert abs(again["lufs"] - m["lufs"]) < 0.11
 
 
-def test_a_muted_layer_is_not_in_the_mix_and_solo_leaves_only_that_layer(web, media, tmp_path):
+def test_solo_is_only_for_listening_the_export_has_every_track(web, media, tmp_path):
     c, state = web
     a = tone(tmp_path / "a.wav", 330, 10, -6)
     b = tone(tmp_path / "b.wav", 1200, 10, -6)
@@ -99,5 +99,5 @@ def test_a_muted_layer_is_not_in_the_mix_and_solo_leaves_only_that_layer(web, me
         ia, ib = c.upload(a), c.upload(b)
         return {"original_sound": False, "layers": [{"file": ia, "volume": 1.0, "solo": True}, {"file": ib, "volume": 1.0}]}
     done = render(c, state, media, tmp_path, settings)
-    assert freq_energy(done["output_path"], 330) > freq_energy(done["output_path"], 1200) + 25        # only layer a is heard
+    assert abs(freq_energy(done["output_path"], 330) - freq_energy(done["output_path"], 1200)) < 6        # both are heard, Solo or not
     assert done["result"]["loudness"]["ok"]

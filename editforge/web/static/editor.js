@@ -265,7 +265,7 @@ function dress(v, p) {
   if (p.color.saturation !== 1) f.push("saturate(" + p.color.saturation + ")");
   v.style.filter = f.join(" ");
   v.muted = S.mutedAll || p.mute || !ownSoundOn() || Layers.on();     // with the three layers on, they carry the sound
-  v.volume = clamp(p.volume, 0, 1);
+  setVideoVol(v, p.volume);
   v.playbackRate = clamp(p.speed, 0.0625, 16);
 }
 function badge(p) {
@@ -332,7 +332,7 @@ function tick() {
     badge(nx.p); prepNext(nx);
   }
   Layers.follow(active(), V.seg.p); musicGains(); musicFollow(); paintMeter();
-  if (!Layers.on() && V.seg.p) { const vv = active(), pp = V.seg.p; vv.volume = clamp(pp.volume * partShapeGain(pp, "original", vv.currentTime), 0, 1); }
+  if (!Layers.on() && V.seg.p) { const vv = active(), pp = V.seg.p; setVideoVol(vv, pp.volume * partShapeGain(pp, "original", vv.currentTime)); }
   renderPlayhead(); renderOverlay();
   if (S.followPlay) scrollToPlayhead();
   V.raf = requestAnimationFrame(tick);
@@ -346,6 +346,21 @@ function seek(t) {
 const MUSIC = new Map();
 function layers() { return S.proj.settings.layers || []; }
 function soloOn() { return layers().some((x) => x.solo); }
+/** Solo is easy to forget: while it is on, the player says so, with one click to hear everything again. */
+function renderSoloChip() {
+  const c = $("soloChip"); if (!c) return;
+  const stems = (S.proj.settings.solo || []).length, on = S.mode === "final" && (soloOn() || stems > 0);
+  c.hidden = !on; if (!on) return;
+  const names = layers().filter((x) => x.solo).map((x) => ((S.files || []).find((f) => f.id === x.file) || { name: x.file.split("/").pop() }).name);
+  c.querySelector("span").textContent = "Solo on";
+  c.title = "Solo: here you only hear " + (names.length ? names.join(", ") : "the chosen track") + ". It is only for listening: the export always has every track that is not muted. Click to hear everything again.";
+}
+function stopSolo() {
+  change(() => { S.proj.settings.layers = layers().map((x) => (x.solo ? Object.assign({}, x, { solo: false }) : x)); S.proj.settings.solo = []; }, { keepVideo: true });
+  if (typeof Layers !== "undefined" && Layers.apply) Layers.apply();
+  renderMusicLayers(); renderTimeline(); renderInspector(); if (S.playing) musicPlay();
+  toast("Solo is off: you hear everything again.");
+}
 function heard(x) { return !x.mute && (!soloOn() || x.solo); }
 function ownSoundOn() { return S.proj.settings.original_sound && !soloOn(); }
 let MCTX = null;
@@ -360,7 +375,26 @@ function musicPlayer(file) {
   }
   return a;
 }
-function setMusicGain(m, v) { if (m._gain) { if (m.volume !== 1) m.volume = 1; m._gain.gain.value = Math.max(0, v); } else m.volume = clamp(v, 0, 1); }
+function setMusicGain(m, v) { v *= masterGain(); if (m._gain) { if (m.volume !== 1) m.volume = 1; m._gain.gain.value = Math.max(0, v); } else m.volume = clamp(v, 0, 1); }
+/** The Overall loudness chosen in Export, heard live in the player (Standard = 1): the whole sound a step quieter or louder. */
+function masterGain() { return S.mode === "final" && S.proj ? Math.pow(10, ((+S.proj.settings.loudness_step || 0) * 1.5) / 20) : 1; }
+/** The video's own sound. Louder than 100 % needs Web Audio, so a video is routed through it once that is wanted. */
+function setVideoVol(v, vol) {
+  const g = Math.max(0, vol) * masterGain();
+  if (!v._gain && g > 1.001) {
+    try {
+      const C = window.AudioContext || window.webkitAudioContext;
+      if (C) { MCTX = MCTX || new C(); const n = MCTX.createGain(); MCTX.createMediaElementSource(v).connect(n); n.connect(MCTX.destination); v._gain = n; if (MCTX.state === "suspended") MCTX.resume(); }
+    } catch (e) { v._gain = null; }
+  }
+  if (v._gain) { if (v.volume !== 1) v.volume = 1; v._gain.gain.value = g; } else v.volume = clamp(g, 0, 1);
+}
+/** Hear a new Overall loudness right away: everything playing now follows it. */
+function applyMaster() {
+  musicGains();
+  if (typeof Layers !== "undefined" && Layers.apply) Layers.apply();
+  if (V.seg && V.seg.p) for (const v of [V.a, V.b]) setVideoVol(v, V.seg.p.volume);
+}
 /** How loud a music track is right now: the track, the part under the playhead, and going down under voices. */
 function musicLevel(x, t) { return Math.max(0, x.volume) * partGain(x, t) * duckGain(x, t) * musicShapeGain(x, t); }
 function musicGains() { for (const x of layers()) if (heard(x)) setMusicGain(musicPlayer(x.file), musicLevel(x, S.t)); }
@@ -644,6 +678,7 @@ function renderTimeline() {
   renderLoudLane();
   if (S.mode === "final") prefetchEnvs();
   if (S.mode === "final" && !S.playing) paintMeter();
+  renderSoloChip();
   renderPlayhead();
 }
 
@@ -2001,7 +2036,7 @@ function timelineMenu(e) {
     items = [["Move the playhead here", "target", () => seek(t)], ["Play from here", "play", () => { seek(t); play(); }],
       "-", ["Select all", "grid", () => { S.sel = new Set(kept()); refreshAll({ keepVideo: true }); }, { key: "Ctrl+A" }],
       ["Undo", "undo", undo, { key: "Ctrl+Z", off: !S.undo.length }], ["Redo", "redo", redo, { key: "Ctrl+Y", off: !S.redo.length }],
-      "-", ["Zoom in here", "zin", () => zoomTo(S.pps * 2, t)], ["Show the whole video", "fit", fitZoom]];
+      "-", ["Zoom in here", "zin", () => zoomTo(S.pps * 2, t)], ["Show the whole video", "widen", fitZoom]];
   }
   ctxMenu(items, e.clientX, e.clientY);
 }
@@ -2250,7 +2285,7 @@ function renderMusicLayers() {
   });
   if (!layers().length) box.append(el("p", { class: "hint", text: "No music yet." }));
   const note = $("audioNote");
-  if (note) note.textContent = soloOn() ? "Solo is on: the video's own sound and the other layers are not heard." : "";
+  if (note) note.textContent = soloOn() ? "Solo is on: here you only hear the soloed music. It is only for listening: the export always has every track that is not muted." : "";
   renderTimeline();
 }
 /** A small, fast version to check the whole mix; the result shows in Exports with the live meter and the measured loudness. */
@@ -2758,7 +2793,17 @@ function exportDialog() {
   if (!kept().length) { toast("The timeline is empty: put a piece back first.", true); return; }
   let quality = S.proj.settings.quality || "best", esize = S.proj.settings.export_size || "4k";
   let loud = +S.proj.settings.loudness_step || 0;
-  const close = () => { scrim.remove(); dlg.remove(); };
+  const pickLoud = (v) => {                        // heard at once in the player (it plays from the playhead): nothing is made
+    loud = +v; loudTxt.textContent = loudNote(loud);
+    change(() => { S.proj.settings.loudness_step = loud; }, { keepVideo: true });
+    if (MCTX && MCTX.state === "suspended") MCTX.resume();
+    applyMaster();
+    if (!S.playing) play();
+    listen.replaceChildren(icon("pause", "s"), el("span", { text: "Stop listening" }));
+  };
+  const esc = (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); } };
+  const close = () => { scrim.remove(); dlg.remove(); document.removeEventListener("keydown", esc, true); };
+  document.addEventListener("keydown", esc, true);                 // Esc closes it, like every other window in the app
   const scrim = el("div", { class: "scrim", onclick: close });
   const sh = S.proj.settings.shape || "original", fr = S.proj.settings.frame;
   const RAT = { "16:9": 16 / 9, "4:3": 4 / 3, "2.35:1": 2.35, "2:1": 2, "1.85:1": 1.85, "9:16": 9 / 16, "3:4": 3 / 4, "1:1": 1, "4:5": 4 / 5, "5.8in": 9 / 19.5 };
@@ -2769,6 +2814,8 @@ function exportDialog() {
     "The whole video " + (Math.abs(k) * 1.5).toFixed(1) + " dB " + (k < 0 ? "quieter" : "louder") + " than the standard (" + (-14 + k * 1.5).toFixed(1).replace("-", "−") + " LUFS)." +
     (k > 0 ? " YouTube turns videos louder than −14 down again, so this mostly makes the sound denser." : "");
   const loudTxt = el("p", { class: "hint", text: loudNote(loud) });
+  const listen = btn(S.playing ? "Stop listening" : "Listen", { icon: S.playing ? "pause" : "play", cls: "sm ghost", title: "Play the video here with this loudness (nothing is made)",
+    onclick: () => { if (S.playing) { pause(); listen.replaceChildren(icon("play", "s"), el("span", { text: "Listen" })); } else { if (MCTX && MCTX.state === "suspended") MCTX.resume(); applyMaster(); play(); listen.replaceChildren(icon("pause", "s"), el("span", { text: "Stop listening" })); } } });
   const go = async (preview) => {
     try {
       if (quality !== S.proj.settings.quality) { S.proj.settings.quality = quality; }
@@ -2789,10 +2836,10 @@ function exportDialog() {
       el("div", { class: "field" }, el("span", { text: "Picture size" }), segmented([["4k", "4K"], ["1440", "1440p"], ["1080", "1080p"], ["source", "As the video"]], esize, (v) => { esize = v; sizeTxt.textContent = sizeOf(v); })),
       el("div", { class: "field" }, el("span", { text: "Quality" }), segmented([["best", "Best"], ["high", "High"], ["small", "Smaller file"]], quality, (v) => { quality = v; })),
       el("div", { class: "field" }, el("span", { text: "Overall loudness" }),
-        segmented([[-3, "−3"], [-2, "−2"], [-1, "−1"], [0, "Standard"], [1, "+1"], [2, "+2"], [3, "+3"]], loud, (v) => { loud = +v; loudTxt.textContent = loudNote(loud); })),
-      loudTxt,
+        segmented([[-3, "−3"], [-2, "−2"], [-1, "−1"], [0, "Standard"], [1, "+1"], [2, "+2"], [3, "+3"]], loud, pickLoud)),
+      el("div", { class: "row loud-row" }, listen, loudTxt),
       el("p", { class: "hint", text: "4K + Best gives the sharpest result on YouTube (it streams 4K uploads at a higher quality, also to 1080p viewers). The file is big and takes longer." }),
-      el("div", { class: "btns" }, btn("Quick preview", { icon: "eye", onclick: () => go(true) }), el("span", { class: "grow" }), btn("Export", { icon: "export", cls: "primary big", onclick: () => go(false) }))));
+      el("div", { class: "btns" }, btn("Quick preview file", { icon: "eye", title: "Makes a small, fast video file of the whole mix (shows in Exports). To only hear the loudness, use Listen.", onclick: () => go(true) }), el("span", { class: "grow" }), btn("Export", { icon: "export", cls: "primary big", onclick: () => go(false) }))));
   document.body.append(scrim, dlg);
 }
 
@@ -3096,6 +3143,7 @@ function wire() {
   const frame = () => 1 / (S.info.fps_float || 25);
   $("tBack").addEventListener("click", () => seek(S.t - frame()));
   $("tFwd").addEventListener("click", () => seek(S.t + frame()));
+  $("soloChip").addEventListener("click", stopSolo);
   $("tMute").addEventListener("click", () => { S.mutedAll = !S.mutedAll; $("tMute").replaceChildren(icon(S.mutedAll ? "mute" : "vol")); showFrame(); musicMute(); });
   $("frame").addEventListener("click", (e) => { if (e.target.closest("#drawLayer")) return; if (!Frame.editing) togglePlay(); });
   // a press on the picture chooses the section that is showing there (also before dragging it in Picture)

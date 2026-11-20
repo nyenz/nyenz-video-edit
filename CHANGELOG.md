@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.32.0
+* **Solo is only for listening now**: a Solo left on never takes sound out of an export or a Quick preview any more (that
+  is why a preview could have only the song). While Solo is on, the player shows **Solo on / Hear all**.
+* **Hear the Overall loudness right away**: picking a step in Export plays the video in the player at that loudness, and
+  **Listen** plays or stops it. Nothing is made until you press Export (or *Quick preview file*).
+* **Full screen in Exports fixed**: the controls stay on screen, Esc leaves it, double-click goes in and out, and the
+  list no longer restarts a video you are watching (or throws it out of full screen) while other things update.
+* **Fit the whole video** has its own icon now, so it is not mistaken for full screen.
+* Esc closes the Export window. The player's controls, the top bar and the Clips page no longer run off the edge or
+  wrap on smaller windows.
+
 ## 1.31.0
 * **Go down under several tracks at once, each with its own level**: a song (or a split track) can now go down under
   Voices, Music and Effects together, for example to 30 % while people talk and to 10 % under effects. Each track has its

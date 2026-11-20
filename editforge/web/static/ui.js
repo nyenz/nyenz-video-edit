@@ -29,6 +29,7 @@ const ICONS = {
   zin: "M11 11m-7 0a7 7 0 1 0 14 0a7 7 0 1 0-14 0M21 21l-4.3-4.3M11 8v6M8 11h6",
   zout: "M11 11m-7 0a7 7 0 1 0 14 0a7 7 0 1 0-14 0M21 21l-4.3-4.3M8 11h6",
   fit: "M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3",
+  widen: "M3 5v14M21 5v14M7 12h10M7 12l3-3M7 12l3 3M17 12l-3-3M17 12l-3 3",
   plus: "M12 5v14M5 12h14",
   upload: "M12 16V4M7 9l5-5 5 5M4 17v3h16v-3",
   download: "M12 4v12M7 11l5 5 5-5M4 17v3h16v-3",
@@ -286,6 +287,7 @@ const Update = {
     if (!this.node || !st) return;
     this.node.classList.toggle("quiet", !st.available);
     this.label.textContent = st.available ? "Update to " + st.latest : "Version " + st.current;
+    this.label.dataset.v = st.available ? "Update to " + st.latest : "v" + st.current;
     this.node.title = st.available ? "Version " + st.latest + " is out. Click to update." : "You have version " + st.current + ". Click to check for a newer one.";
   },
   async refresh() {
@@ -491,8 +493,14 @@ const Exports = {
     if (!this.visible) return;
     const sig = JSON.stringify(data.jobs.map((j) => [j.id, j.status, Math.round((j.progress || 0) * 100), j.message])) + [...this.openIds].join();
     if (!force && sig === this.sig) return;
-    this.sig = sig;
-    const body = $("exportsBody"); body.replaceChildren();
+    const body = $("exportsBody");
+    // while a finished video is being watched here (playing, or full screen), the list is not rebuilt: that would stop
+    // it or throw it out of full screen. It catches up as soon as the video is paused.
+    const playing = [...body.querySelectorAll(".mini video")].some((v) => !v.paused);
+    const full = document.fullscreenElement && body.contains(document.fullscreenElement);
+    if (full || (playing && !force)) { this.later = true; return; }
+    this.sig = sig; this.later = false;
+    body.replaceChildren();
     if (!data.jobs.length) body.append(el("p", { class: "hint", text: "Nothing yet. Videos you make appear here." }));
     // grouped, so finished videos, clips and quick previews never mix
     const busy = data.jobs.filter((j) => j.status === "running" || j.status === "queued");
@@ -842,7 +850,11 @@ function miniPlayer(url, opts) {
   v.addEventListener("timeupdate", show); v.addEventListener("loadedmetadata", show);
   bar.addEventListener("input", () => { if (v.duration) v.currentTime = parseFloat(bar.value) / 1000 * v.duration; paintRange(bar); });
   muteB.addEventListener("click", () => { v.muted = !v.muted; muteB.replaceChildren(icon(v.muted ? "mute" : "vol")); });
-  fullB.addEventListener("click", () => { if (document.fullscreenElement) document.exitFullscreen(); else if (box.requestFullscreen) box.requestFullscreen(); });
+  fullB.addEventListener("click", () => { if (document.fullscreenElement) document.exitFullscreen(); else if (box.requestFullscreen) box.requestFullscreen().catch(() => {}); });
+  const catchUp = () => { if (typeof Exports !== "undefined" && Exports.later) setTimeout(() => { if (v.paused && !document.fullscreenElement) Exports.refresh(); }, 300); };
+  v.addEventListener("pause", catchUp); v.addEventListener("ended", catchUp);
+  document.addEventListener("fullscreenchange", () => { fullB.replaceChildren(icon(document.fullscreenElement === box ? "x" : "fit")); fullB.title = document.fullscreenElement === box ? "Leave full screen (Esc)" : "Full screen"; box.classList.toggle("is-full", document.fullscreenElement === box); catchUp(); });
+  v.addEventListener("dblclick", () => fullB.click());
   return box;
 }
 
