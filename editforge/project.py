@@ -69,6 +69,7 @@ EXPORT_SIZES: Dict[str, Optional[int]] = {"4k": 3840, "1440": 2560, "1080": 1920
 DEFAULT_SETTINGS: Dict[str, Any] = {
     "shape": "original", "transition": "none", "transition_s": 0.3, "music": "", "music_volume": 0.25, "duck": True,
     "original_sound": True, "even_loudness": False, "fade_in": 0.0, "fade_out": 0.0, "quality": "best",
+    "loudness_step": 0,
     "captions": "off", "caption_style": "karaoke", "caption_position": "bottom", "caption_size": "medium",
     # sound clean-up
     "noise": "off", "vocals": "keep", "voice_boost": False, "compress": False, "bass": 0.0, "treble": 0.0,
@@ -85,6 +86,10 @@ SOUND_KEYS = ("original",) + STEM_KEYS          # the video's own sound (as one 
 MAX_LAYERS = 8
 #: the final mix of every video meets the YouTube standard: -14 LUFS, and no peak above -1 dB (true peak)
 FINAL_LOUDNESS = {"target": -14.0, "true_peak": -1.5, "lra": 11.0}
+#: Overall loudness (Export): 7 steps, 0 is the standard above; each step is this many dB quieter or louder (a small but
+#: clear change). The peaks still stay under the limit, so louder steps are also a little more squeezed.
+LOUDNESS_STEP_DB = 1.5
+LOUDNESS_STEPS = 3
 #: the canvas shapes (CapCut's list); "5.8in" is a tall phone screen
 FRAME_RATIOS: Dict[str, Optional[tuple]] = {"original": None, "16:9": (16, 9), "4:3": (4, 3), "2.35:1": (2.35, 1), "2:1": (2, 1),
                                              "1.85:1": (1.85, 1), "9:16": (9, 16), "3:4": (3, 4), "1:1": (1, 1), "4:5": (4, 5),
@@ -259,6 +264,13 @@ def clean_texts(raw: Any) -> List[Dict[str, Any]]:
     return out
 
 
+def final_loudness(settings: Dict[str, Any]) -> Dict[str, float]:
+    """The loudness the finished video is set to: the standard, moved by the chosen Overall loudness step."""
+    step = int(settings.get("loudness_step") or 0)
+    step = max(-LOUDNESS_STEPS, min(LOUDNESS_STEPS, step))
+    return dict(FINAL_LOUDNESS, target=FINAL_LOUDNESS["target"] + step * LOUDNESS_STEP_DB)
+
+
 def clean_settings(raw: Any) -> Dict[str, Any]:
     raw = raw if isinstance(raw, dict) else {}
     s = dict(DEFAULT_SETTINGS)
@@ -276,6 +288,7 @@ def clean_settings(raw: Any) -> Dict[str, Any]:
     s["fade_out"] = round(_num(raw.get("fade_out"), 0.0, 0.0, 10.0), 3)
     if raw.get("quality") in QUALITIES:
         s["quality"] = raw["quality"]
+    s["loudness_step"] = int(round(_num(raw.get("loudness_step"), 0.0, -LOUDNESS_STEPS, LOUDNESS_STEPS)))
     s["export_size"] = raw.get("export_size") if raw.get("export_size") in EXPORT_SIZES else "4k"
     s["captions"] = str(raw.get("captions") or "off")[:300]          # "off", "auto" (listen to the speech) or a subtitle file id
     if raw.get("caption_style") in CAPTION_STYLES:
@@ -1107,7 +1120,7 @@ def plan_project(project: Dict[str, Any], src_path: str, *, music_path: Optional
         m.extra = ",".join(x for x in (music_shape(t, total_s, cache), music_envelope(t.get("parts"), duck, act_out.get(under) or [], total_s)) if x)
         audio.music.append(m)
     if audio.music or (media.has_audio and not silent):
-        audio.loudnorm = dict(FINAL_LOUDNESS)             # always last, on the whole mix (video sound + every music layer)
+        audio.loudnorm = final_loudness(st)               # always last, on the whole mix (video sound + every music layer)
     if media.has_audio and not silent:
         if st["noise"] != "off":
             audio.denoise = {"amount": NOISE_LEVELS[st["noise"]], "highpass": True}

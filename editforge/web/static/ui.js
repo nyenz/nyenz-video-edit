@@ -402,6 +402,15 @@ function paintRange(r) {
   f();
 }
 /** A segmented choice; onpick(value). */
+/** What to say about a finished video's measured loudness: the YouTube standard, or the Overall loudness chosen in Export. */
+function loudVerdict(ld) {
+  const chosen = ld.chosen === undefined || ld.chosen === null ? -14 : +ld.chosen;
+  if (Math.abs(chosen + 14) < 0.05) return { good: !!ld.ok, text: ld.ok ? "meets the YouTube standard" : "outside the YouTube standard" };
+  const near = Math.abs(ld.lufs - chosen) <= 1 && ld.true_peak <= -1.45;
+  const step = Math.round((chosen + 14) / 1.5), name = (step > 0 ? "+" : "−") + Math.abs(step);
+  return { good: near, text: near ? "as you chose (Overall loudness " + name + ")" : "not quite what you chose (Overall loudness " + name + ")" };
+}
+
 function segmented(options, value, onpick) {
   const box = el("div", { class: "seg", role: "radiogroup" });
   const set = (v) => { for (const b of box.children) b.classList.toggle("on", b.dataset.v === String(v)); };
@@ -511,7 +520,7 @@ const Exports = {
     const v = j.result && j.result.verify;
     if (j.status === "done" && j.result) node.append(el("div", { class: "facts", text: fmtTime(j.result.duration) + " long" + (v && v.width ? " · " + v.width + "×" + v.height : "") + (v && v.size_bytes ? " · " + fmtSize(v.size_bytes) : "") + (j.preview ? " · quick preview" : "") }));
     const ld = j.status === "done" && j.result && j.result.loudness;
-    if (ld) node.append(el("div", { class: "facts " + (ld.ok ? "good" : "warn"), text: "Loudness " + ld.lufs.toFixed(1) + " LUFS · peak " + ld.true_peak.toFixed(1) + " dBTP · " + (ld.ok ? "meets the YouTube standard" : "outside the YouTube standard") }));
+    if (ld) { const lv = loudVerdict(ld); node.append(el("div", { class: "facts " + (lv.good ? "good" : "warn"), text: "Loudness " + ld.lufs.toFixed(1) + " LUFS · peak " + ld.true_peak.toFixed(1) + " dBTP · " + lv.text })); }
     for (const w of j.warnings || []) node.append(el("div", { class: "facts warn", text: w }));
     if (j.error) node.append(el("div", { class: "facts err", text: j.error + (j.error_fix ? " " + j.error_fix : "") }));
     const acts = el("div", { class: "btns" });
@@ -765,8 +774,9 @@ function loudnessMeter(v, measured) {
   const live = el("b", { class: "num", text: "–" }), peak = el("span", { class: "num", text: "–" });
   const head = el("div", { class: "lhead" });
   if (measured) {
-    head.append(icon(measured.ok ? "check" : "info", "s"), el("span", { class: "lnum", text: "Whole video: " + measured.lufs.toFixed(1) + " LUFS · peak " + measured.true_peak.toFixed(1) + " dBTP" }),
-      el("small", { class: measured.ok ? "good" : "warn", text: measured.ok ? "meets the YouTube standard" : "outside the YouTube standard" }));
+    const lv = loudVerdict(measured);
+    head.append(icon(lv.good ? "check" : "info", "s"), el("span", { class: "lnum", text: "Whole video: " + measured.lufs.toFixed(1) + " LUFS · peak " + measured.true_peak.toFixed(1) + " dBTP" }),
+      el("small", { class: lv.good ? "good" : "warn", text: lv.text }));
   } else head.append(icon("sliders", "s"), el("span", { class: "lnum", text: "Loudness while it plays" }));
   const box = el("div", { class: "lmeter" }, head, bar, el("div", { class: "lrow" }, el("span", { text: "Now " }), live, el("span", { text: " LUFS" }), el("span", { class: "grow" }), el("span", { text: "Peak " }), peak, el("span", { text: " dB" })));
   let ctx = null, timer = 0, ring = [], hold = -99;
