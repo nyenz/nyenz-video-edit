@@ -56,6 +56,29 @@ jobs:
               return F.normalize(h.view(frames.shape[0], frames.shape[1], 512), p=2, dim=2)
           T.ColorHistograms.compute_color_histograms = staticmethod(hist)
 
+          # The same maths, but quicker on a normal computer: the (2+1)D convolutions are written as 2-D convolutions (which
+          # onnxruntime runs much faster than 3-D ones), and the four spatial convolutions of a block, which all read the same
+          # input, become one.
+          def block(self, x):
+              n, c, t, h, w = x.shape
+              convs = [self.Conv3D_1, self.Conv3D_2, self.Conv3D_4, self.Conv3D_8]
+              ws = torch.cat([k.layers[0].weight[:, :, 0] for k in convs])
+              y = F.conv2d(x.permute(0, 2, 1, 3, 4).reshape(n * t, c, h, w), ws, padding=1)
+              y = y.reshape(n, t, -1, h, w).permute(0, 2, 1, 3, 4).reshape(n, -1, t, h * w)
+              outs, at = [], 0
+              for k in convs:
+                  l = k.layers[1]
+                  d, f2 = l.dilation[0], l.in_channels
+                  outs.append(F.conv2d(y[:, at:at + f2], l.weight[..., 0], l.bias, padding=(d, 0), dilation=(d, 1)))
+                  at += f2
+              x = torch.cat(outs, 1).reshape(n, -1, t, h, w)
+              if self.bn is not None:
+                  x = self.bn(x)
+              if self.activation is not None:
+                  x = self.activation(x)
+              return x
+          T.DilatedDCNNV2.forward = block
+
           tm, tfm = convert_weights("../../tn")
           tm.eval()
 
@@ -104,6 +127,12 @@ jobs:
                   print(g.shape, w.shape, "biggest difference", d)
           assert worst < 5e-3, worst
           print("same as TensorFlow: ok", worst)
+          import time
+          s.run(None, {"frames": tests[0]})
+          t0 = time.time()
+          for _ in range(5):
+              s.run(None, {"frames": tests[0]})
+          print("seconds per 100 frames:", (time.time() - t0) / 5)
           PY
           cd ../..
           ls -la transnetv2.onnx
