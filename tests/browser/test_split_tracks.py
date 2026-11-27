@@ -265,7 +265,7 @@ def test_even_out_fades_auto_level_and_the_sound_check(live, page, split_movie, 
     page.wait_for_selector("#laneStems .lane.stem", timeout=30000)
     # a split track: Even out and fades for the whole Music track
     page.click("#laneStems .stem-head[data-layer=music]")
-    page.click("#right .even-field .seg button:has-text('Gentle')")
+    page.click("#right .even-field .seg button:has-text('Light')")
     assert page.evaluate("() => kept().every(p => p.mix.music.even === 1)")
     page.fill("#right input[aria-label='Fade in']", "1.5")
     page.dispatch_event("#right input[aria-label='Fade in']", "change")
@@ -276,8 +276,8 @@ def test_even_out_fades_auto_level_and_the_sound_check(live, page, split_movie, 
     page.evaluate("(id) => { change(() => { S.proj.settings.layers = layers().concat([{ file: id, volume: 0.5, mute: false, solo: false, auto: 1 }]); }, { keepVideo: true }); loadFiles(); }", mid)
     page.wait_for_selector("#laneM .mpart")
     page.locator("#laneM .mpart").first.click(position={"x": 30, "y": 12})
-    assert "evened" in page.inner_text("#laneM .mpart")
-    page.click("#right .track-box .seg button:has-text('Strong')")
+    assert "level" in page.inner_text("#laneM .mpart")
+    page.click("#right .track-box .level-seg button:has-text('Strong')")
     assert page.evaluate("() => S.proj.settings.layers[0].auto") == 2
     page.locator("#laneM .mpart").first.click(position={"x": 30, "y": 12})
     page.click("#right .pad:not(.track-box) .even-field .seg button:has-text('Off')")
@@ -292,8 +292,8 @@ def test_even_out_fades_auto_level_and_the_sound_check(live, page, split_movie, 
     page.wait_for_selector("#mixCheck .check-nums", timeout=240000)
     assert "LUFS" in page.inner_text("#mixCheck")
     assert page.is_visible("#laneL") and page.evaluate("() => S.check.points.length") > 20
-    if page.evaluate("() => S.check.problems.length"):
-        page.click("#mixCheck button:has-text('Even out the problem spots')")
+    if page.query_selector("#mixCheck button:has-text('Fix all')"):
+        page.click("#mixCheck button:has-text('Fix all')")
     page.evaluate("() => saveNow()")
     saved = live.call("GET", f"/api/projects/{pid}")["project"]
     assert saved["pieces"][0]["mix"]["music"]["even"] == 1 and saved["settings"]["layers"][0]["auto"] == 2

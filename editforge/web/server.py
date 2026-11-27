@@ -489,7 +489,45 @@ class AppState:
             elif kind:
                 bad.append({"kind": kind, "start": max(0.0, tt - 3.0), "end": tt})       # short-term = the 3 s before
         bad = [b for b in bad if b["end"] - b["start"] >= 3.4]
-        return {"points": pts, "problems": bad, "loudness": job.get("result", {}).get("loudness")}
+        # dead air: no sound at all for 2 seconds or more
+        from ..analysis.silence import detect_silences
+        try:
+            for a, b in detect_silences(job["output_path"], -60.0, 2.0):
+                bad.append({"kind": "silent", "start": round(a, 2), "end": round(b, 2)})
+        except EditForgeError:
+            pass
+        warm = [x for x in pts if x[0] >= 3.0]          # short-term loudness needs 3 s of sound before it means anything
+        # steady noise (hiss, hum, wind) with nothing else: quiet, and hardly changing for 4 seconds
+        for k in range(0, max(0, len(warm) - 8), 4):
+            w = [v for _, v in warm[k:k + 8]]
+            if all(-58.0 < v < -38.0 for v in w) and max(w) - min(w) < 2.0:
+                a, b = max(0.0, warm[k][0] - 3.0), warm[k + 7][0]
+                if bad and bad[-1]["kind"] == "noisy" and a <= bad[-1]["end"]:
+                    bad[-1]["end"] = b
+                else:
+                    bad.append({"kind": "noisy", "start": a, "end": b})
+        bad.sort(key=lambda b: b["start"])
+        return {"points": pts, "problems": bad, "loudness": (job.get("result") or {}).get("loudness")}
+
+    def silences(self, pid: str, noise_db: float, min_s: float) -> Dict[str, Any]:
+        """Silent stretches of a project's video (source time): of the Voices track when the sound is split, else of the
+        sound itself. For Remove silence."""
+        from ..analysis.silence import detect_silences
+        proj = project_mod.clean_project(self.load_project(pid), 1e9)
+        src = self.resolve_input(str(proj["source"]))
+        info = probe_media(src)
+        if not info.has_audio:
+            raise EditForgeError("This video has no sound, so there is no silence to find.", "")
+        sid = proj["settings"].get("mix_split") or ""
+        split = self.splitter.store.resolve(sid) if sid else None
+        noise_db, min_s = max(-70.0, min(-20.0, noise_db)), max(0.2, min(10.0, min_s))
+        if split and "voices" in split["files"]:
+            found = [(a + split["start"], b + split["start"]) for a, b in detect_silences(split["files"]["voices"], noise_db, min_s)]
+            what = "voices"
+        else:
+            found = detect_silences(src, noise_db, min_s, duration=info.duration)
+            what = "sound"
+        return {"ranges": [[round(a, 3), round(b, 3)] for a, b in found], "from": what}
 
     def voices(self, pid: str, of: str = "voices") -> Dict[str, Any]:
         """When someone talks in this project's video (source time), for 'Music goes down under voices'."""
@@ -2150,6 +2188,11 @@ class Handler(BaseHTTPRequestHandler):
             elif re.fullmatch(r"/api/jobs/[0-9a-f]{12}/cancel", path):
                 ok = self.state.manager.cancel(path.split("/")[3])
                 self._json({"ok": ok})
+            elif re.fullmatch(rf"/api/projects/{PROJECT_ID}/silences", path):
+                data = self._read_json()
+                if data is None:
+                    return
+                self._json(self.state.silences(path.split("/")[3], _float(data.get("noise"), -40.0), _float(data.get("min"), 1.0)))
             elif re.fullmatch(r"/api/jobs/[0-9a-f]{12}/rename", path):
                 data = self._read_json()
                 if data is None:

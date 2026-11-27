@@ -79,9 +79,9 @@
         <div class="jobs">
           <div class="job loud-box">
             <div class="job-h"><span class="job-ic"><i data-ic="sliders" class="s"></i></span><b>Loudness</b><span class="pill good">Always on</span></div>
-            <p class="hint">Every export ends at YouTube's level: <b>-14 LUFS</b>, peaks under <b>-1 dB</b>, on everything together.</p>
-            <p class="hint">So it sounds as loud as other YouTube videos at your usual laptop volume, whatever you set here. <b>Sound check</b> shows where your mix is too loud or too quiet before that.</p>
-            <button id="checkMix" class="btn wide primary" type="button"><i data-ic="pulse" class="s"></i><span>Sound check</span></button>
+            <p class="hint">Every export ends at the level of where it goes (YouTube: <b>-14 LUFS</b>, peaks under <b>-1 dB</b>), on everything together. Choose where in Export.</p>
+            <p class="hint"><b>Find problems</b> lists what is too loud, too quiet, silent, noisy or clipped, with one click to fix it.</p>
+            <button id="checkMix" class="btn wide primary" type="button"><i data-ic="search" class="s"></i><span>Find problems</span></button>
             <div id="mixCheck" class="mix-check" hidden></div>
           </div>
           <div class="job">
@@ -89,6 +89,14 @@
             <p class="hint">Hiss, hum and wind.</p>
             <div id="noiseSeg"></div>
             <select id="sNoise" hidden data-enhanced="1" aria-label="Remove noise"><option value="off">Off</option><option value="light">Light</option><option value="medium">Medium</option><option value="strong">Strong</option></select>
+          </div>
+          <div class="job">
+            <div class="job-h"><span class="job-ic"><i data-ic="magnet" class="s"></i></span><b>Quick fixes</b></div>
+            <p class="hint">One click each. Ctrl + Z undoes them.</p>
+            <div class="btns">
+              <button id="qVoice" class="btn" type="button" title="Low cut, Clear voice, light cleaning, gentle Dynamics and Level on the voices (or the sound)"><i data-ic="face" class="s"></i><span>Make voice clear</span></button>
+              <button id="qSilence" class="btn ghost" type="button" title="Take the pauses out of the video"><i data-ic="scissors" class="s"></i><span>Remove silence</span></button>
+            </div>
           </div>
           <div class="job layers" id="lyBox">
             <div class="job-h layers-head"><span class="job-ic"><i data-ic="layers" class="s"></i></span><b>Split the sound</b></div>

@@ -27,6 +27,36 @@ STRENGTHS = {
     1: {"win": 10, "hi": 1.5, "lo": 2.5, "down": 0.8, "up": 0.75, "max_down": -18.0, "max_up": 12.0, "fast": 8.0, "attack": 4, "glide": 5},
     2: {"win": 5, "hi": 0.5, "lo": 1.0, "down": 1.0, "up": 0.95, "max_down": -30.0, "max_up": 18.0, "fast": 4.0, "attack": 2, "glide": 3},
 }
+# 3 and 4 came later (Level: Light 1, Medium 3, Strong 2, Max 4), so older projects keep their numbers
+STRENGTHS[3] = {"win": 7, "hi": 1.0, "lo": 1.8, "down": 0.9, "up": 0.85, "max_down": -24.0, "max_up": 15.0, "fast": 6.0, "attack": 3, "glide": 4}
+STRENGTHS[4] = {"win": 3, "hi": 0.3, "lo": 0.5, "down": 1.0, "up": 1.0, "max_down": -36.0, "max_up": 24.0, "fast": 3.0, "attack": 1, "glide": 2}
+#: Level, Custom: 1000 + speed * 100 + most boost * 10 + most cut (each an index into these lists)
+CUSTOM_SPEED = ({"win": 12, "attack": 5, "glide": 7}, {"win": 7, "attack": 3, "glide": 4}, {"win": 3, "attack": 1, "glide": 2})
+CUSTOM_BOOST = (3.0, 6.0, 12.0, 18.0, 24.0)
+CUSTOM_CUT = (6.0, 12.0, 18.0, 24.0, 36.0)
+
+
+def valid(strength: Any) -> bool:
+    """A Level strength this version knows: 1..4, or a Custom code."""
+    try:
+        s = int(strength)
+    except (TypeError, ValueError):
+        return False
+    if s in STRENGTHS:
+        return True
+    return 1000 <= s < 1300 and (s // 10) % 10 < len(CUSTOM_BOOST) and s % 10 < len(CUSTOM_CUT)
+
+
+def params(strength: int) -> Dict[str, Any]:
+    if strength in STRENGTHS:
+        return STRENGTHS[strength]
+    if valid(strength):
+        sp, bo, cu = (strength - 1000) // 100, (strength // 10) % 10, strength % 10
+        return dict(STRENGTHS[3], **CUSTOM_SPEED[sp], down=1.0, up=0.95, max_up=CUSTOM_BOOST[bo], max_down=-CUSTOM_CUT[cu],
+                    fast=4.0 if sp == 2 else 6.0)
+    return STRENGTHS[1]
+
+
 _LOCK = threading.Lock()
 _MEM: Dict[str, List[List[float]]] = {}
 
@@ -62,7 +92,7 @@ def gains(x: Any, sr: int, strength: int) -> Any:
     sound (gentle: most of the way, strong: all the way), and sudden loud bursts are caught within a tenth of a second.
     Silence (and the quiet hiss between words) is never pulled up."""
     import numpy as np
-    p = STRENGTHS[2 if strength >= 2 else 1]
+    p = params(int(strength))
     step = int(sr * HOP)
     n = len(x) // step
     if n < 5:
@@ -121,7 +151,7 @@ def simplify(g: Sequence[float], hop: float = HOP, tol: float = 0.4) -> List[Lis
 
 def envelope(path: str, strength: int, cache_dir: Optional[str] = None) -> List[List[float]]:
     """[[seconds of the file, dB], ...] (empty: nothing to change, or numpy is missing). Kept on disk in cache_dir."""
-    strength = 2 if strength >= 2 else 1
+    strength = int(strength) if valid(strength) else 1
     try:
         key = _key(path, strength)
     except OSError:

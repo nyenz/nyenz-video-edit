@@ -700,7 +700,7 @@ function renderTimeline() {
       const g = r.q.mute ? 0 : x.volume * r.q.volume;
       const d = el("div", { class: "lane-item music mpart" + (heard(x) ? "" : " off") + (r.q.mute ? " muted" : "") + (chosen ? " sel" : ""), "data-k": String(r.k), ondblclick: () => openPanel("sound") },
         icon(r.q.mute ? "mute" : "music", "s"), el("span", { text: (r.k === 0 || chosen ? name + " · " : "") + (r.q.mute ? "gap (silent)" : Math.round(g * 100) + "%") +
-          ((r.q.even === undefined ? x.auto : r.q.even) ? " · " + ((r.q.even === undefined ? x.auto : r.q.even) === 2 ? "evened strong" : "evened") : "") + (r.q.fin || r.q.fout ? " · fades" : "") }));
+          ((r.q.even === undefined ? x.auto : r.q.even) ? " · level " + levelName(r.q.even === undefined ? x.auto : r.q.even).toLowerCase() : "") + (r.q.fin || r.q.fout ? " · fades" : "") }));
       d.style.left = px(r.a) + "px"; d.style.width = Math.max(6, px(r.b) - px(r.a) - 2) + "px"; row.append(d);
     }
     for (const k of Object.keys(duckOf(x.duck, null, "voices"))) for (const [a, b] of S.duckBy[k] || []) {
@@ -902,7 +902,7 @@ function partShapeGain(p, n, t) {
   const sh = n === "original" ? p : p.mix && p.mix[n];
   if (!sh || !(sh.even || sh.fin || sh.fout)) return 1;
   let g = fadeGain(sh, p.start, p.end, t, p.reverse);
-  if (sh.even) {
+  if (sh.even && !S.levelOff) {
     const sp = n === "original" ? null : Layers.split();
     const pts = n === "original" ? envPoints({ file: S.proj.source }, sh.even) : sp && envPoints({ split: sp.id, layer: n }, sh.even);
     if (pts) g *= dbGain(envDb(pts, t));
@@ -919,19 +919,40 @@ function musicShapeGain(x, t) {
   if (!r) return g;
   g *= fadeGain(r.q, r.a, r.b, t, false);
   const s = r.q.even === undefined ? (x.auto || 0) : r.q.even;
-  if (s) {
+  if (s && !S.levelOff) {
     const pts = envPoints({ file: x.file }, s), m = MUSIC.get(x.file), D = m && m.duration;
     if (pts && D) g *= dbGain(envDb(pts, (t + (+x.start || 0)) % D));
   }
   return g;
 }
-/** Even out (Off / Gentle / Strong) for the chosen parts. cur: 0, 1, 2, or null when they differ. */
+/** Level: every loud moment down and every quiet moment up, smoothly, so the sound stays at a good level all the way.
+ *  Light (1), Medium (3), Strong (2), Max (4), or Custom (1000 + speed * 100 + most boost * 10 + most cut). */
+const LEVELS = [[0, "Off"], [1, "Light"], [3, "Medium"], [2, "Strong"], [4, "Max"]];
+const LV_SPEED = ["Slow", "Normal", "Fast"], LV_BOOST = [3, 6, 12, 18, 24], LV_CUT = [6, 12, 18, 24, 36];
+function levelName(v) { v = +v || 0; if (v >= 1000) return "Custom"; const x = LEVELS.find(([k]) => k === v); return x ? x[1] : "Off"; }
+function levelCode(sp, bo, cu) { return 1000 + sp * 100 + bo * 10 + cu; }
+function levelParts(v) { return v >= 1000 ? [Math.floor((v - 1000) / 100), Math.floor(v / 10) % 10, v % 10] : [1, 2, 2]; }
+S.levelOff = false;            // A/B: hear the sound without Level for a moment
 function evenField(cur, onpick, off, note) {
-  const seg = segmented([[0, "Off"], [1, "Gentle"], [2, "Strong"]], cur === null ? "" : cur, (v) => onpick(+v));
+  const custom = cur !== null && cur >= 1000;
+  const seg = segmented(LEVELS.concat([["c", "Custom"]]), cur === null ? "" : custom ? "c" : cur, (v) => onpick(v === "c" ? (custom ? cur : levelCode(1, 2, 2)) : +v));
+  seg.classList.add("level-seg");
   if (off) for (const b of seg.children) b.disabled = true;
+  let more = null;
+  if (custom) {
+    const [sp, bo, cu] = levelParts(cur);
+    const row = (label, opts, val, mk) => { const g = segmented(opts.map((o, i) => [i, o]), val, (i) => onpick(mk(+i))); if (off) for (const b of g.children) b.disabled = true;
+      return el("div", { class: "field" }, el("span", { text: label }), g); };
+    more = el("div", { class: "level-custom" },
+      row("How fast it reacts", LV_SPEED, sp, (i) => levelCode(i, bo, cu)),
+      row("Most it lifts quiet moments", LV_BOOST.map((d) => "+" + d), bo, (i) => levelCode(sp, i, cu)),
+      row("Most it lowers loud moments", LV_CUT.map((d) => "−" + d), cu, (i) => levelCode(sp, bo, i)));
+  }
+  const ab = el("button", { type: "button", class: "ab-btn" + (S.levelOff ? " on" : ""), title: "Hear it without Level (A/B). Click again to hear it with Level.",
+    onclick: () => { S.levelOff = !S.levelOff; ab.classList.toggle("on", S.levelOff); ab.textContent = S.levelOff ? "Hearing before" : "A/B"; if (typeof Layers !== "undefined") Layers.apply(); musicGains(); } }, S.levelOff ? "Hearing before" : "A/B");
   return el("div", { class: "field even-field" },
-    el("span", {}, el("b", { text: "Even out" }), el("small", { class: "note", text: " loud moments down, quiet moments up" })), seg,
-    note ? el("p", { class: "hint", text: note }) : null);
+    el("span", { class: "lv-head" }, el("b", { text: "Level" }), el("small", { class: "note", text: " keeps it at a good level all the way" }), cur ? ab : null), seg, more,
+    el("p", { class: "hint", text: note || "Quiet pauses are never pulled up, so no hiss comes up. Voices stay above music with Go down under voices." }));
 }
 /** Fade in / fade out sliders (seconds, 0 to 10). Values null when the chosen parts differ. */
 function fadeFields(fin, fout, onset, off, labels) {
@@ -1018,47 +1039,94 @@ async function soundCheck() {
     if (j.status !== "done") throw new Error(j.message || "The sound check could not be made.");
     note.textContent = "Measuring…";
     const c = await api("/api/jobs/" + job.id + "/curve");
-    S.check = Object.assign(c, { sig: JSON.stringify([S.proj.pieces, S.proj.settings]) });
+    S.check = Object.assign(c, { sig: JSON.stringify([S.proj.pieces, S.proj.settings]), clipped: clippedSpots() });
     api("/api/jobs/" + job.id, { method: "DELETE" }).catch(() => {});      // the quick version was only for measuring: no leftover file
   } catch (e) { box.replaceChildren(el("p", { class: "hint warn", text: errText(e) })); return; } finally { b.disabled = false; }
   renderCheck(); renderTimeline();
 }
+const PROBLEM = { loud: ["Too loud", "#ff6b8a"], quiet: ["Too quiet", "#ffd166"], silent: ["Silent", "#9aa0ad"], noisy: ["Noise", "#c08cff"], clipped: ["Clipped", "#ff4d4d"] };
+S.probTab = "all";
+function probDot(col) { const d = el("i", { class: "prob-dot" }); d.style.background = col; return d; }
+/** Clipped spots in the recording itself (the wave picture touches the top), in finished-video time. */
+function clippedSpots() {
+  const out = [], add = (a, b) => { const l = out[out.length - 1]; if (l && a - l.end < 1) l.end = Math.max(l.end, b); else out.push({ kind: "clipped", start: a, end: b }); };
+  for (const r of layout()) {
+    const p = r.p; if (p.mute) continue;
+    const srcs = stemsOn() ? Layers.NAMES.map((n) => [(S.stemPeaks || {})[n], Layers.split().start, 50, Layers.gainOf(n) * Layers.ownGain(p, n) * p.volume]) : [[S.peaks, 0, S.peakRate || 50, p.volume]];
+    for (const [P, off, R, g] of srcs) {
+      if (!P || !P.length || g < 0.5) continue;
+      let hits = 0, first = -1;
+      for (let i = Math.max(0, Math.floor((p.start - off) * R)); i < Math.min(P.length, Math.ceil((p.end - off) * R)); i++) {
+        if (P[i] >= 253) { hits++; if (first < 0) first = i; }
+      }
+      if (hits >= 3) { const ts = first / R + off, t = r.out0 + (p.reverse ? p.end - ts : ts - p.start) / p.speed; add(Math.max(r.out0, t - 0.5), Math.min(r.out1, t + 2)); }
+    }
+  }
+  return out;
+}
 function renderCheck() {
   const box = $("mixCheck"), c = S.check; if (!box || !c) return;
-  const m = c.loudness, loud = c.problems.filter((x) => x.kind === "loud"), quiet = c.problems.filter((x) => x.kind === "quiet");
+  const m = c.loudness, all = c.problems.concat(c.clipped || []).sort((a, b) => a.start - b.start);
   const old = c.sig !== JSON.stringify([S.proj.pieces, S.proj.settings]);
-  const verdict = !c.problems.length ? ["good", "Ready for YouTube: even and at the right level all the way."]
-    : ["warn", (loud.length ? loud.length + " too loud" : "") + (loud.length && quiet.length ? " and " : "") + (quiet.length ? quiet.length + " too quiet" : "") + " stretch" + (c.problems.length > 1 ? "es" : "") + ". They show on the Loudness strip under the tracks."];
+  const counts = {}; for (const x of all) counts[x.kind] = (counts[x.kind] || 0) + 1;
+  if (S.probTab !== "all" && !counts[S.probTab]) S.probTab = "all";
+  const tabs = el("div", { class: "prob-tabs" }, ...[["all", "All", null]].concat(Object.keys(PROBLEM).filter((k) => counts[k]).map((k) => [k, PROBLEM[k][0], PROBLEM[k][1]])).map(([k, l, col]) =>
+    el("button", { type: "button", class: "prob-tab" + (S.probTab === k ? " on" : ""), onclick: () => { S.probTab = k; renderCheck(); } },
+      col ? probDot(col) : null, el("span", { text: l }), el("small", { class: "num", text: String(k === "all" ? all.length : counts[k]) }))));
+  const shown = all.filter((x) => S.probTab === "all" || x.kind === S.probTab);
+  const list = el("div", { class: "prob-list" });
+  for (const x of shown.slice(0, S.probMore ? 200 : 6)) {
+    list.append(el("div", { class: "prob-row", onclick: () => { seek(x.start); } },
+      probDot(PROBLEM[x.kind][1]), el("span", { class: "prob-kind", text: PROBLEM[x.kind][0] }),
+      el("span", { class: "num note", text: fmtTime(x.start, 0) + " – " + fmtTime(x.end, 0) }),
+      el("span", { class: "grow" }),
+      x.kind === "silent" ? btn("Remove", { cls: "sm ghost", title: "Take the silence out of the video", onclick: (e) => { e.stopPropagation(); removeSilenceDialog(); } })
+        : btn("Fix", { cls: "sm ghost", title: FIX_TIP[x.kind], onclick: (e) => { e.stopPropagation(); fixProblems([x]); } })));
+  }
+  if (shown.length > 6) list.append(el("button", { type: "button", class: "link-btn", text: S.probMore ? "Show fewer" : "Show all " + shown.length, onclick: () => { S.probMore = !S.probMore; renderCheck(); } }));
+  const verdict = !all.length ? ["good", "No problems found: even, clean and at the right level all the way."]
+    : ["warn", all.length + " problem" + (all.length > 1 ? "s" : "") + " found. Click one to go there. They also show on the Loudness strip under the tracks."];
   box.replaceChildren(
     el("div", { class: "check-nums" },
       el("span", {}, el("small", { text: "Whole video" }), el("b", { class: "num", text: m ? m.lufs.toFixed(1) + " LUFS" : "—" })),
       el("span", {}, el("small", { text: "Highest peak" }), el("b", { class: "num", text: m ? m.true_peak.toFixed(1) + " dB" : "—" })),
-      el("span", {}, el("small", { text: "YouTube" }), el("b", { class: "num", text: "-14 LUFS" }))),
+      el("span", {}, el("small", { text: "Aim" }), el("b", { class: "num", text: final_target() + " LUFS" }))),
     el("p", { class: "hint " + verdict[0], text: verdict[1] }),
-    old ? el("p", { class: "hint", text: "You changed things since this check. Press Sound check again to see the new result." }) : null,
-    c.problems.length ? btn("Even out the problem spots", { icon: "pulse", cls: "wide", title: "Switches on Even out (gentle) for the parts under those stretches", onclick: fixProblems }) : null);
+    old ? el("p", { class: "hint", text: "You changed things since this check. Press Find problems again to see the new result." }) : null,
+    all.length ? tabs : null, all.length ? list : null,
+    all.some((x) => x.kind !== "silent") ? btn("Fix all (" + all.filter((x) => x.kind !== "silent").length + ")", { icon: "pulse", cls: "wide", title: "Level for too loud and too quiet, Clean for noise, a little lower and Level for clipped spots", onclick: () => fixProblems(all) }) : null);
 }
-/** Even out (gentle) for everything that plays in the problem stretches: video sections (or their split tracks) and music parts. */
-function fixProblems() {
-  const c = S.check; if (!c || !c.problems.length) return;
-  const hit = (a, b) => c.problems.some((x) => a < x.end && b > x.start);
+const FIX_TIP = { loud: "Level (medium) for the parts here", quiet: "Level (medium) for the parts here", noisy: "Clean (medium) for the parts here", clipped: "A little lower and Level (medium) for the parts here" };
+function final_target() { const MF = { youtube: -14, tiktok: -14, instagram: -14, podcast: -16, tv: -23 }; return (MF[S.proj.settings.made_for] || -14) + 1.5 * (+S.proj.settings.loudness_step || 0); }
+/** Fix problems: Level for too loud / too quiet, Clean for noise, lower and Level for clipped spots, for everything that plays there. */
+function fixProblems(list) {
+  const c = S.check; if (!c) return;
+  list = (list || c.problems).filter((x) => x.kind !== "silent"); if (!list.length) return;
+  const kinds = (a, b) => new Set(list.filter((x) => a < x.end && b > x.start).map((x) => x.kind));
+  const apply = (sh, ks) => {
+    let did = false;
+    if ((ks.has("loud") || ks.has("quiet") || ks.has("clipped")) && !sh.even) { sh.even = 3; did = true; }
+    if (ks.has("noisy") && !sh.nr) { sh.nr = 2; did = true; }
+    if (ks.has("clipped") && (sh.volume === undefined || sh.volume > 0.7)) { sh.volume = 0.7; did = true; }
+    return did;
+  };
   let n = 0;
   if (!change(() => {
     for (const r of layout()) {
-      if (!hit(r.out0, r.out1)) continue;
+      const ks = kinds(r.out0, r.out1); if (!ks.size) continue;
       const p = r.p;
       if (stemsOn()) {
-        for (const k of Layers.NAMES) { if (partLocked(p, k)) continue; const m = Object.assign({}, p.mix || {}); m[k] = Object.assign({ volume: 1, mute: false }, m[k] || {}); if (!m[k].even) { m[k].even = 1; n++; } p.mix = m; }
-      } else if (!p.even) { p.even = 1; n++; }
+        for (const k of Layers.NAMES) { if (partLocked(p, k)) continue; const m = Object.assign({}, p.mix || {}); m[k] = Object.assign({ volume: 1, mute: false }, m[k] || {}); if (apply(m[k], ks)) n++; p.mix = m; }
+      } else if (apply(p, ks)) n++;
     }
     layers().forEach((x, i) => {
       if (musicLocked(i)) return;
       const ps = mparts(x).map((q) => Object.assign({ volume: 1, mute: false }, q));
-      mspans(x).forEach((r) => { if (hit(r.a, r.b) && !(r.q.even === undefined ? x.auto : r.q.even)) { ps[r.k].even = 1; n++; } });
+      mspans(x).forEach((r) => { const ks = kinds(r.a, r.b); ks.delete("noisy"); ks.delete("clipped"); if (ks.size && !(r.q.even === undefined ? x.auto : r.q.even)) { ps[r.k].even = 3; n++; } });
       setLayer(i, { parts: ps });
     });
   }, { sound: true, keepVideo: true })) return;
-  toast(n ? "Even out is on for " + n + " part" + (n === 1 ? "" : "s") + ". Press Sound check again to see the result." : "Those parts are already evened out (or locked).");
+  toast(n ? "Fixed " + n + " part" + (n === 1 ? "" : "s") + ". Press Find problems again to check." : "Those parts are already fixed (or locked).");
   renderCheck();
 }
 /** The Loudness strip under the tracks: short-term loudness against YouTube's level. */
@@ -1072,7 +1140,7 @@ function renderLoudLane() {
   cv.style.left = left + "px"; cv.style.width = w + "px"; cv.style.height = H + "px";
   const g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, H);
   const y = (v) => H - 2 - clamp((v + 40) / 34, 0, 1) * (H - 4);            // -40 .. -6 LUFS
-  for (const x of c.problems) { g.fillStyle = x.kind === "loud" ? "rgba(255, 107, 138, .22)" : "rgba(255, 209, 102, .18)"; g.fillRect(px(x.start) - left, 0, Math.max(2, px(x.end) - px(x.start)), H); }
+  for (const x of c.problems.concat(c.clipped || [])) { g.globalAlpha = .26; g.fillStyle = PROBLEM[x.kind][1]; g.fillRect(px(x.start) - left, 0, Math.max(2, px(x.end) - px(x.start)), H); g.globalAlpha = 1; }
   g.strokeStyle = "rgba(255,255,255,.35)"; g.setLineDash([4, 4]); g.beginPath(); g.moveTo(0, y(-14)); g.lineTo(w, y(-14)); g.stroke(); g.setLineDash([]);
   let prev = null;
   for (const [t, v] of c.points) {
@@ -1510,9 +1578,8 @@ function musicMenuItems(i, t) {
     n ? [allMuted ? "Turn these parts on" : "Delete, leave a gap (mute)", allMuted ? "vol" : "mute", () => musicChange((c) => { c.mute = !allMuted; }), { key: "Del", off: lk }] : null,
     n ? ["Loudness", "sliders", null, { off: lk, sub: loudnessItems((v) => musicChange((c) => { c.volume = v; c.mute = false; }), () => normaliseMusic(false), n > 1 ? () => normaliseMusic(true) : null) }] : null,
     n > 1 ? ["Join these parts", "combine", () => joinMusicParts(), { off: lk }] : null,
-    n ? ["Even out and fades", "pulse", null, { off: lk, sub: [
-      ["Even out: gentle", "pulse", () => musicChange((c) => { c.even = 1; })], ["Even out: strong", "pulse", () => musicChange((c) => { c.even = 2; })],
-      ["Even out: off", "x", () => musicChange((c) => { c.even = 0; })], "-",
+    n ? ["Level and fades", "pulse", null, { off: lk, sub: [
+      ...LEVELS.map(([v, l]) => ["Level: " + l.toLowerCase(), v ? "pulse" : "x", () => musicChange((c) => { c.even = v; })]), "-",
       ["Gentle fade in and out (1 s)", "sliders", () => musicChange((c) => { c.fin = 1; c.fout = 1; })], ["No fades", "x", () => musicChange((c) => { delete c.fin; delete c.fout; })]] }] : null,
     ...(n ? shapeMenuItems((k) => same(list.map((q) => q.q[k] || 0)), (k, v) => musicChange((c) => { if (v) c[k] = v; else delete c[k]; }), lk, false) : []),
     ["Volume line", "pulse", null, { sub: lineItems("song:" + i, t) }],
@@ -1597,13 +1664,15 @@ function renderMusicInspector(R) {
       (k, v) => musicChange((c) => { if (k === "__all") for (const x of TONE_KEYS) delete c[x]; else if (v) c[k] = v; else delete c[k]; }), lk,
       { title: "Shape the chosen parts", dyn: false }) : null));
   const setTrack = (patch) => { if (musicLocked(i)) { toast(musicLocked(i), true); renderInspector(); return; } change(() => setLayer(i, patch), { keepVideo: true }); renderMusicLayers(); if (S.playing) musicPlay(); };
-  const autoSeg = segmented([[0, "Off"], [1, "Gentle"], [2, "Strong"]], x.auto || 0, (v) => setTrack({ auto: +v }));
-  if (lk) for (const b of autoSeg.children) b.disabled = true;
+
   R.append(el("div", { class: "pad track-box" },
     el("div", { class: "field" }, el("span", {}, el("b", { text: "Whole song" })) ),
-    el("div", { class: "field even-field" }, el("span", {}, "Auto level ", el("small", { class: "note", text: "the song's own loud bits down, quiet bits up" })), autoSeg),
+    evenField(x.auto || 0, (v) => setTrack({ auto: v }), lk, "Level for the whole song. A part's own Level (above) wins for that part."),
     rng("Loudness", x.volume, (v) => setTrack({ volume: v }), "Loudness of the whole music track"),
     songStartField(x, setTrack, lk),
+    el("div", { class: "btns" },
+      btn("Ends with the video", { icon: "outp", cls: "sm ghost", title: "Start the song so its own ending lands at the end of the video", onclick: () => songEndsWithVideo(i) }),
+      btn("Cuts on the beat", { icon: "magnet", cls: "sm ghost", title: "Move each cut between sections a little, so it lands on a beat of this song", onclick: () => cutsOnBeat(i) })),
     fadeFields(x.fade_in === undefined ? 0.5 : x.fade_in, x.fade_out === undefined ? 1.5 : x.fade_out, (k, v) => setTrack(k === "fin" ? { fade_in: v } : { fade_out: v }), lk,
       ["Song fades in", "Song fades out"]),
     shapeBox((k) => (x.shape || {})[k] || (k === "tone" ? "" : 0),
@@ -1766,9 +1835,8 @@ function stemMenu(e) {
   ctxMenu([
     [allMuted ? "Turn these parts on" : "Mute these parts", allMuted ? "vol" : "mute", () => stemChange((c) => { c.mute = !allMuted; }), { key: "Del", off: lk }],
     ["Loudness", "sliders", null, { off: lk, sub: loudnessItems((v) => stemChange((c) => { c.volume = v; c.mute = false; }), () => normaliseParts(false), () => normaliseParts(true)) }],
-    ["Even out and fades", "pulse", null, { off: lk, sub: [
-      ["Even out: gentle", "pulse", () => put("even", 1), { on: val("even") === 1 }], ["Even out: strong", "pulse", () => put("even", 2), { on: val("even") === 2 }],
-      ["Even out: off", "x", () => put("even", 0), { on: val("even") === 0 }], "-",
+    ["Level and fades", "pulse", null, { off: lk, sub: [
+      ...LEVELS.map(([v, l]) => ["Level: " + l.toLowerCase(), v ? "pulse" : "x", () => put("even", v), { on: val("even") === v }]), "-",
       ["Gentle fade in and out (1 s)", "sliders", () => stemChange((c) => { c.fin = 1; c.fout = 1; })], ["No fades", "x", () => stemChange((c) => { c.fin = 0; c.fout = 0; })]] }],
     ...shapeMenuItems(val, put, lk, true),
     "-",
@@ -1859,6 +1927,98 @@ function chooseSections(test, what) {
   S.asel = new Map(); S.sel = new Set(lv.filter(([, d]) => test(d, mid)).map(([p]) => p));
   refreshAll({ keepVideo: true });
   toast(S.sel.size ? "Chose " + S.sel.size + " " + what + " section" + (S.sel.size > 1 ? "s" : "") + "." : "No " + what + " sections.", !S.sel.size);
+}
+/** Remove silence: finds the pauses (in the voices when the sound is split, else in the sound) and takes them out of
+ *  the video sections, keeping a little around the words so nothing is cut off. */
+async function removeSilenceDialog() {
+  if (locked()) { lockedNote(); return; }
+  let noise = -40, min = 1, keep = 0.25;
+  const body = [
+    el("p", { class: "msg", text: "Takes the pauses out of the video. Ctrl + Z brings them back." }),
+    el("div", { class: "field" }, el("span", { text: "What counts as silent" }), segmented([[-50, "Very quiet"], [-40, "Quiet"], [-30, "Soft talking too"]], noise, (v) => { noise = +v; })),
+    el("div", { class: "field" }, el("span", { text: "Shortest pause to take out" }), segmented([[0.5, "0.5 s"], [1, "1 s"], [2, "2 s"], [4, "4 s"]], min, (v) => { min = +v; })),
+    el("div", { class: "field" }, el("span", { text: "Keep around the words" }), segmented([[0.1, "0.1 s"], [0.25, "0.25 s"], [0.5, "0.5 s"]], keep, (v) => { keep = +v; })),
+  ];
+  if (!(await dialogBox("Remove silence", body, [["Cancel", null, "ghost"], ["Remove the pauses", true, "primary"]]))) return;
+  toast("Listening for pauses…");
+  let r;
+  try { await saveNow(); r = await api("/api/projects/" + S.id + "/silences", { method: "POST", json: { noise, min } }); } catch (e) { toast(errText(e), true); return; }
+  const cuts = r.ranges.map(([a, b]) => [a + keep, b - keep]).filter(([a, b]) => b - a >= 0.2);
+  let removed = 0, n = 0;
+  const out = [];
+  for (const p of S.proj.pieces) {
+    if (p.off) { out.push(p); continue; }
+    let parts = [[p.start, p.end]];
+    for (const [a, b] of cuts) {
+      const next = [];
+      for (const [x, y] of parts) {
+        if (b <= x || a >= y) { next.push([x, y]); continue; }
+        if (a > x) next.push([x, a]); if (b < y) next.push([b, y]);
+        removed += Math.min(y, b) - Math.max(x, a); n++;
+      }
+      parts = next;
+    }
+    parts = parts.filter(([x, y]) => y - x >= 0.15);
+    for (const [x, y] of parts) out.push(Object.assign(clone(p), { start: +x.toFixed(4), end: +y.toFixed(4) }));
+  }
+  if (!n) { toast("No pauses that long were found (from the " + r.from + ").", true); return; }
+  if (!change(() => { S.proj.pieces = out.map(fixPiece); S.sel.clear(); markHand(); })) return;
+  refreshAll();
+  toast("Took out " + n + " pause" + (n > 1 ? "s" : "") + " (" + removed.toFixed(1) + " s, found in the " + r.from + "). Ctrl + Z brings them back.");
+}
+/** One tap: a clear voice (low cut, Clear voice tone, a little cleaning and Dynamics, Level light). */
+function makeVoiceClear() {
+  const preset = { tone: "voice", hp: 80, nr: 1, dyn: 1, even: 1 };
+  if (stemsOn()) {
+    if (trackLocked("voices") || trackLocked("sound")) { lockedNote("sound"); return; }
+    S.sel.clear(); S.asel = new Map(); for (const p of kept()) aselSet(p, "voices", true);
+    stemChange((c) => Object.assign(c, preset));
+    refreshAll({ keepVideo: true });
+    toast("Voices made clear: low cut, Clear voice, light cleaning, gentle Dynamics and Level. Each can be changed under Shape the sound.");
+  } else {
+    if (trackLocked("sound")) { lockedNote("sound"); return; }
+    if (!change(() => { for (const p of kept()) Object.assign(p, preset); }, { sound: true })) return;
+    refreshAll({ keepVideo: true });
+    toast("The sound is made clearer for talking. Split the sound first for the best result: then only the voices change.");
+  }
+}
+/** The song's own ending lands at the end of the video (it starts that far into the song), with a gentle fade. */
+async function songEndsWithVideo(i) {
+  const x = layers()[i]; if (!x) return;
+  if (musicLocked(i)) { toast(musicLocked(i), true); return; }
+  const m = musicPlayer(x.file);
+  if (!m.duration) await new Promise((ok) => { m.addEventListener("loadedmetadata", ok, { once: true }); setTimeout(ok, 3000); });
+  const D = m.duration, T = rawTotal();
+  if (!D) { toast("The song is still loading. Try again in a moment.", true); return; }
+  const start = Math.max(0, D - T);
+  change(() => setLayer(i, { start: +start.toFixed(2), fade_out: Math.min(3, x.fade_out === undefined ? 1.5 : x.fade_out) }), { keepVideo: true });
+  refreshAll({ keepVideo: true }); if (S.playing) musicPlay();
+  toast(D >= T ? "The song now starts at " + fmtTime(start, 1) + ", so it ends with the video." : "The song is shorter than the video, so it starts from its beginning and plays again; its fade ends with the video.");
+}
+/** Cuts on the beat: each cut between sections moves (a little, never more than a quarter second, earlier or later) onto
+ *  a beat of the song. */
+async function cutsOnBeat(i) {
+  const x = layers()[i]; if (!x) return;
+  if (locked()) { lockedNote(); return; }
+  let r; try { r = await api("/api/beats", { method: "POST", json: { input: x.file } }); } catch (e) { toast(errText(e), true); return; }
+  if (!r.beats || !r.beats.length) { toast("No beat was found in this song.", true); return; }
+  const off = +x.start || 0, D = r.duration || 1e9, beats = [];
+  for (let k = 0; ; k++) { let any = false; for (const b of r.beats) { const t = b - off + k * D; if (t > rawTotal() + 1) break; if (t >= 0) beats.push(t); any = true; } if (!any || k > 50 || r.beats[0] - off + (k + 1) * D > rawTotal()) break; }
+  let n = 0;
+  if (!change(() => {
+    for (let j = 0; j < kept().length - 1; j++) {
+      const r1 = layout()[j], p = r1.p, cut = r1.out1;               // positions move as earlier cuts move
+      const b = beats.reduce((best, t) => (Math.abs(t - cut) <= 0.26 && (best === null || Math.abs(t - cut) < Math.abs(best - cut)) ? t : best), null);
+      if (b === null || Math.abs(cut - b) < 0.01) continue;
+      const len = (b - r1.out0) * p.speed; if (len < 0.3) continue;
+      if (p.reverse) { const st = p.end - len; if (st < 0) continue; p.start = +st.toFixed(4); }          // earlier: shorter; later: a little longer
+      else { const en = p.start + len; if (en > S.info.duration) continue; p.end = +en.toFixed(4); }
+      n++;
+    }
+    markHand();
+  })) return;
+  refreshAll();
+  toast(n ? n + " cut" + (n > 1 ? "s" : "") + " moved onto the beat (" + Math.round(r.tempo || 0) + " BPM). Ctrl + Z undoes it." : "The cuts are already on the beat.");
 }
 /** Ask for a stretch of time ("0:10 - 0:25") and hand it on. */
 async function chooseByTime(fn) {
@@ -3095,9 +3255,13 @@ function exportDialog() {
   const aspect = fr ? (RAT[fr.ratio] || S.info.width / Math.max(1, S.info.height)) : sh.startsWith("vertical") ? 9 / 16 : sh.startsWith("square") ? 1 : S.info.width / Math.max(1, S.info.height);
   const sizeOf = (v) => { const L = { "4k": 3840, "1440": 2560, "1080": 1920 }[v] || Math.max(S.info.width, S.info.height); const w = aspect >= 1 ? L : L * aspect, h = aspect >= 1 ? L / aspect : L; return Math.round(w / 2) * 2 + "×" + Math.round(h / 2) * 2; };
   const sizeTxt = el("span", { class: "num", text: sizeOf(esize) });
-  const loudNote = (k) => k === 0 ? "The whole video at the YouTube standard (−14 LUFS)." :
-    "The whole video " + (Math.abs(k) * 1.5).toFixed(1) + " dB " + (k < 0 ? "quieter" : "louder") + " than the standard (" + (-14 + k * 1.5).toFixed(1).replace("-", "−") + " LUFS)." +
-    (k > 0 ? " YouTube turns videos louder than −14 down again, so this mostly makes the sound denser." : "");
+  const MF = { youtube: ["YouTube", -14], tiktok: ["TikTok", -14], instagram: ["Instagram", -14], podcast: ["Podcast", -16], tv: ["TV", -23] };
+  let made = S.proj.settings.made_for || "youtube";
+  const loudNote = (k) => { const [name, base] = MF[made];
+    return (k === 0 ? "The whole video at the " + name + " standard (" + String(base).replace("-", "−") + " LUFS)." :
+      "The whole video " + (Math.abs(k) * 1.5).toFixed(1) + " dB " + (k < 0 ? "quieter" : "louder") + " than the " + name + " standard (" + (base + k * 1.5).toFixed(1).replace("-", "−") + " LUFS).") +
+      (k > 0 && made !== "tv" ? " " + name + " turns videos louder than its standard down again, so this mostly makes the sound denser." : ""); };
+  const pickMade = (v) => { made = v; change(() => { S.proj.settings.made_for = v; }, { keepVideo: true }); loudTxt.textContent = loudNote(loud); };
   const loudTxt = el("p", { class: "hint", text: loudNote(loud) });
   const listen = btn(S.playing ? "Stop listening" : "Listen", { icon: S.playing ? "pause" : "play", cls: "sm ghost", title: "Play the video here with this loudness (nothing is made)",
     onclick: () => { if (S.playing) { pause(); listen.replaceChildren(icon("play", "s"), el("span", { text: "Listen" })); } else { if (MCTX && MCTX.state === "suspended") MCTX.resume(); applyMaster(); play(); listen.replaceChildren(icon("pause", "s"), el("span", { text: "Stop listening" })); } } });
@@ -3120,6 +3284,7 @@ function exportDialog() {
         el("div", { class: "stat" }, el("span", { class: "lbl", text: "Pieces" }), el("span", { class: "num", text: String(kept().length) }))),
       el("div", { class: "field" }, el("span", { text: "Picture size" }), segmented([["4k", "4K"], ["1440", "1440p"], ["1080", "1080p"], ["source", "As the video"]], esize, (v) => { esize = v; sizeTxt.textContent = sizeOf(v); })),
       el("div", { class: "field" }, el("span", { text: "Quality" }), segmented([["best", "Best"], ["high", "High"], ["small", "Smaller file"]], quality, (v) => { quality = v; })),
+      el("div", { class: "field" }, el("span", { text: "Made for" }), segmented(Object.entries(MF).map(([k, [l]]) => [k, l]), made, pickMade)),
       el("div", { class: "field" }, el("span", { text: "Overall loudness" }),
         segmented([[-3, "−3"], [-2, "−2"], [-1, "−1"], [0, "Standard"], [1, "+1"], [2, "+2"], [3, "+3"]], loud, pickLoud)),
       el("div", { class: "row loud-row" }, listen, loudTxt),
@@ -3398,6 +3563,8 @@ function wire() {
     autoSongLevel(d.id);
   }));
   $("checkMix").addEventListener("click", soundCheck);
+  $("qVoice").addEventListener("click", makeVoiceClear);
+  $("qSilence").addEventListener("click", removeSilenceDialog);
   $("beatBtn").addEventListener("click", beatCut);
   for (const id of ["sBass", "sTreble"]) $(id).addEventListener("input", soundLabels);
   paintFollow();
