@@ -173,7 +173,15 @@ class PreviewMaker:
             except OSError:
                 pass
 
+    SEG = 120.0                 # a long video's light copy is made in parts of 2 minutes, each kept as it is done
+
     def _make(self, source: str, out: Path, duration: float, has_audio: bool) -> None:
+        if duration > self.SEG * 4:
+            try:
+                self._make_in_parts(source, out, duration, has_audio)
+            except Exception as exc:  # never let the thread die silently
+                self._set(out, state="failed", error=str(exc)[:300])
+            return
         part = str(out) + ".part"
         # A keyframe every half second makes jumping around in the player quick and exact.
         # The fast scaler saves about a fifth of the time; at 480p it looks the same.
@@ -210,3 +218,82 @@ class PreviewMaker:
                     os.remove(part)
                 except OSError:
                     pass
+
+    def _make_in_parts(self, source: str, out: Path, duration: float, has_audio: bool) -> None:
+        """A long video: the picture in parts of SEG seconds (each finished part is kept, so after a power cut or a restart
+        it goes on from there), the sound in one quick pass, then all joined without making them again."""
+        import json
+        import math
+        import shutil
+        d = Path(str(out) + ".parts")
+        d.mkdir(parents=True, exist_ok=True)
+        key = {"duration": round(duration, 2), "seg": self.SEG, "h": PREVIEW_HEIGHT, "audio": has_audio}
+        meta = d / "meta.json"
+        try:
+            if json.loads(meta.read_text()) != key:
+                shutil.rmtree(d, ignore_errors=True)
+                d.mkdir(parents=True, exist_ok=True)
+        except (OSError, ValueError):
+            pass
+        meta.write_text(json.dumps(key))
+        for stale in d.glob("*.part"):
+            stale.unlink(missing_ok=True)
+        n = int(math.ceil(duration / self.SEG))
+        if self.strips:
+            self.strips.mkdir(parents=True, exist_ok=True)
+        for k in range(n):
+            a = k * self.SEG
+            seg = d / f"{k:04d}.mp4"
+            if seg.is_file() and seg.stat().st_size > 0:
+                self._set(out, progress=min(0.95, 0.9 * (a + self.SEG) / duration))
+                continue
+            part = str(seg) + ".part"
+            length = min(self.SEG, duration - a)
+            args = ["-y", "-ss", f"{a:.3f}", "-t", f"{length:.3f}", "-i", source, "-map", "0:v:0", "-an",
+                    "-vf", f"scale=-2:{PREVIEW_HEIGHT}:flags=fast_bilinear", "-c:v", "libx264", "-preset", "veryfast", "-crf", "27", "-g", "12",
+                    "-pix_fmt", "yuv420p", "-f", "mp4", part]
+            if self.strips:
+                args += ["-map", "0:v:0", "-vf", f"fps=1:round=up,scale=-2:{STRIP_HEIGHT}:flags=fast_bilinear", "-q:v", "6",
+                         "-start_number", str(int(round(a))), "-f", "image2", self.strip_pattern(source)]
+
+            def on_progress(dd: Dict[str, str], a=a) -> None:
+                try:
+                    t = float(dd.get("out_time_us", "0")) / 1e6
+                except ValueError:
+                    return
+                self._set(out, progress=max(0.0, min(0.95, 0.9 * (a + t) / max(duration, 0.001))))
+            res = run_ffmpeg(args, on_progress=on_progress, cancel=self._cancel, low_priority=True)
+            if not res.ok:
+                if os.path.exists(part):
+                    os.remove(part)
+                message, fix = friendly_ffmpeg_error(res.stderr_tail, res.returncode)
+                self._set(out, state="failed", error=f"{message} {fix}".strip())
+                return
+            os.replace(part, seg)
+        audio = d / "sound.m4a"
+        if has_audio and not (audio.is_file() and audio.stat().st_size > 0):
+            res = run_ffmpeg(["-y", "-i", source, "-map", "0:a:0", "-vn", "-c:a", "aac", "-b:a", "96k", "-ac", "2", "-f", "mp4", str(audio) + ".part"],
+                             cancel=self._cancel, low_priority=True)
+            if not res.ok:
+                message, fix = friendly_ffmpeg_error(res.stderr_tail, res.returncode)
+                self._set(out, state="failed", error=f"{message} {fix}".strip())
+                return
+            os.replace(str(audio) + ".part", audio)
+        self._set(out, progress=0.97)
+        lst = d / "list.txt"
+        lst.write_text("".join(f"file '{(d / f'{k:04d}.mp4').as_posix()}'\n" for k in range(n)), encoding="utf-8")
+        part = str(out) + ".part"
+        args = ["-y", "-f", "concat", "-safe", "0", "-i", str(lst)] + (["-i", str(audio)] if has_audio else [])
+        args += ["-map", "0:v:0"] + (["-map", "1:a:0"] if has_audio else []) + ["-c", "copy", "-movflags", "+faststart", "-f", "mp4", part]
+        res = run_ffmpeg(args, cancel=self._cancel, low_priority=True)
+        if not res.ok:
+            if os.path.exists(part):
+                os.remove(part)
+            message, fix = friendly_ffmpeg_error(res.stderr_tail, res.returncode)
+            self._set(out, state="failed", error=f"{message} {fix}".strip())
+            return
+        os.replace(part, out)
+        if self.strips:
+            self._mark_strip(source)
+        shutil.rmtree(d, ignore_errors=True)
+        self._set(out, state="ready", progress=1.0, error="")

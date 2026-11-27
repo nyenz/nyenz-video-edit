@@ -1,0 +1,47 @@
+# Copies two small detectors from OpenCV's model zoo to a release (tag subject-model-1), for 9:16 tracking:
+#   * YuNet (faces, MIT licence, about 0.2 MB): finds faces, also turned and small ones.
+#   * YOLOX-S (people and things, Apache-2.0 licence, about 36 MB): finds whoever or whatever stands out in a shot.
+# The app downloads them the first time tracking needs them. Their fingerprints are written in the run summary.
+name: Subject models
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/subject-models.yml
+
+permissions:
+  contents: write
+
+jobs:
+  copy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: subject-model-1
+      ZOO: https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models
+    steps:
+      - name: Is it already published?
+        id: have
+        run: |
+          n=$(gh release view "$TAG" --repo "${{ github.repository }}" --json assets --jq '.assets | length' 2>/dev/null || echo 0)
+          if [ "$n" -ge 2 ]; then echo "have=yes" >> "$GITHUB_OUTPUT"; else echo "have=no" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Download
+        if: steps.have.outputs.have == 'no'
+        run: |
+          curl -fsSL --retry 3 -o faces-yunet.onnx "$ZOO/face_detection_yunet/face_detection_yunet_2023mar.onnx"
+          curl -fsSL --retry 3 -o subjects-yolox.onnx "$ZOO/object_detection_yolox/object_detection_yolox_2022nov.onnx"
+          ls -l *.onnx
+          sha256sum *.onnx | tee sums.txt
+          # a real ONNX file starts with a protobuf header, not an HTML or LFS pointer page
+          for f in *.onnx; do test "$(stat -c %s "$f")" -gt 100000; ! head -c 200 "$f" | grep -q "git-lfs"; done
+
+      - name: Publish
+        if: steps.have.outputs.have == 'no'
+        run: |
+          notes="Detectors used by Nyenz Edit's 9:16 tracking, copied from OpenCV's model zoo (https://github.com/opencv/opencv_zoo): YuNet face detector (MIT licence) and YOLOX-S object detector (Apache-2.0 licence, trained on COCO). SHA-256: $(tr '\n' ' ' < sums.txt). This is not an app version: there is nothing to install from here."
+          gh release create "$TAG" faces-yunet.onnx subjects-yolox.onnx --repo "${{ github.repository }}" --target "${{ github.event.repository.default_branch }}" --prerelease --title "Subject models 1 (used by Nyenz Edit)" --notes "$notes"
+          { echo "### Subject models published"; echo '```'; cat sums.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

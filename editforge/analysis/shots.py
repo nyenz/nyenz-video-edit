@@ -158,7 +158,7 @@ class Fine:
 
 def extract_all(path: str, duration: float, *, read_from: Optional[str] = None, fps: float = FPS,
                 cancel: Optional[threading.Event] = None, progress: Optional[Callable[[float], None]] = None,
-                on_big: Optional[Callable[[Any], None]] = None) -> Tuple[Features, Fine]:
+                on_big: Optional[Callable[[Any], None]] = None, start: float = 0.0) -> Tuple[Features, Fine]:
     """One pass over the video: every frame is looked at (for the exact frame of cuts), and 12 frames a second are kept
     as picture fingerprints (for finding the scenes). read_from: a smaller copy of the same video to read instead
     (much quicker; it has the same frames at the same times). on_big: also given every frame at 48 x 27 (blocks of
@@ -173,7 +173,8 @@ def extract_all(path: str, duration: float, *, read_from: Optional[str] = None, 
               f"[b]scale={W}:{H}:flags=area,format=rgb24,pad={BW}:{H}:0:0[y];[x][y]vstack")
     else:
         vf = f"fps={rate:.6f},scale={W}:{H}:flags=area,format=rgb24"
-    args = [get_tools().ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-hwaccel", "auto", "-i", src, "-map", "0:v:0", "-an",
+    span = ["-ss", f"{start:.3f}", "-t", f"{duration:.3f}"] if start > 0 else []      # one part of a long video (``duration`` long)
+    args = [get_tools().ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-hwaccel", "auto"] + span + ["-i", src, "-map", "0:v:0", "-an",
             "-vf", vf, "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
     dims = (BW, BH + H) if on_big else (W, H)
     thumbs: List[Any] = []

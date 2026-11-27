@@ -42,7 +42,7 @@ def test_new_project_is_sliced_listed_and_reopened(web, media):
     c, _ = web
     fid = c.upload(media["scenes"])
     p = new_project(c, fid, 1.5)
-    assert [round(x["end"] - x["start"], 2) for x in p["pieces"]] == [1.5, 1.5, 1.5, 1.5] and p["name"] == "scenes"
+    assert [round(x["end"] - x["start"], 2) for x in p["pieces"]] == [1.5, 1.5, 1.5, 1.5] and p["name"] == "Scenes"
     whole = new_project(c, fid, 0)
     assert len(whole["pieces"]) == 1 and whole["pieces"][0]["end"] == 6.0
     listed = c.json("GET", "/api/projects")[1]["projects"]
@@ -97,7 +97,7 @@ def test_make_a_project_video_with_a_pattern(web, media):
     preview, full = c.wait_jobs(ids)
     assert preview["status"] == full["status"] == "done", (preview, full)
     assert preview["kind"] == "project" and preview["preview"] and not full["preview"] and "script" not in full
-    assert Path(preview["output_path"]).name == "scenes_preview.mp4" and Path(full["output_path"]).name == "scenes.mp4"
+    assert Path(preview["output_path"]).name == "Scenes_preview.mp4" and Path(full["output_path"]).name == "Scenes.mp4"
     out = full["output_path"]
     assert count_frames(out) == 100 == count_frames(preview["output_path"])
     r, g, b = color_at(out, 0.5)

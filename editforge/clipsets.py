@@ -237,6 +237,100 @@ class SceneFinder:
         threading.Thread(target=self._run, args=(src, duration, f), name="editforge-scenes", daemon=True).start()
         return self.status(src)
 
+    PART = 300.0               # seconds per part of a long video
+    OVERLAP = 4.0              # each part also reads a little before it, so nothing at the joins is missed
+
+    def _parts_dir(self, src: str) -> Path:
+        return self.folder / "parts" / self._file(src).stem
+
+    def _drop_parts(self, src: str) -> None:
+        import shutil
+        shutil.rmtree(self._parts_dir(src), ignore_errors=True)
+
+    def _in_parts(self, src: str, duration: float, quick: Optional[str], model: Any, cancel: threading.Event,
+                  prog: Callable[[float], None]) -> Tuple[Any, Any, Any]:
+        """Look at a long video in parts of PART seconds; each finished part is saved, so a restart goes on from there.
+        Every part gives exactly the frames of its own stretch, so the parts join without any drift."""
+        import json
+        import numpy as np
+        from .analysis import shots
+        d = self._parts_dir(src)
+        d.mkdir(parents=True, exist_ok=True)
+        rate = shots._native_rate(quick or src)
+        fps = shots.FPS
+        n = int(np.ceil(duration / self.PART))
+        key = {"rate": round(rate, 4), "net": model is not None, "v": NET_VERSION, "part": self.PART, "duration": round(duration, 2)}
+        meta = d / "meta.json"
+        try:
+            if json.loads(meta.read_text()) != key:
+                self._drop_parts(src)
+                d.mkdir(parents=True, exist_ok=True)
+        except (OSError, ValueError):
+            pass
+        meta.write_text(json.dumps(key))
+        T, H_, J, P = [], [], [], []
+
+        def fit(arr: Any, want: int) -> Any:
+            if len(arr) >= want:
+                return arr[:want]
+            pad = np.repeat(arr[-1:], want - len(arr), axis=0) if len(arr) else np.zeros((want,) + arr.shape[1:], dtype=arr.dtype)
+            return np.concatenate([arr, pad])
+        for k in range(n):
+            a, b = k * self.PART, min(duration, (k + 1) * self.PART)
+            pf = d / f"{k:04d}.npz"
+            if pf.is_file():
+                try:
+                    z = np.load(str(pf))
+                    T.append(z["thumbs"]); H_.append(z["hist"]); J.append(z["jump"])
+                    if model is not None:
+                        P.append(z["net"])
+                    prog(0.97 * b / duration)
+                    continue
+                except Exception:  # noqa: BLE001 - a half-written part: look at it again
+                    pf.unlink(missing_ok=True)
+            a0, b1 = max(0.0, a - self.OVERLAP), min(duration, b + self.OVERLAP)     # a little before and after: the joins are seen
+            stream = None
+            if model is not None:
+                from .analysis import transnet
+                stream = transnet.Streamer(model)
+
+            def part_prog(t: float, a=a, a0=a0, b=b) -> None:
+                prog(0.97 * min(b, a0 + t) / duration)
+            try:
+                try:
+                    feats, fine = shots.extract_all(src, b1 - a0, read_from=quick, cancel=cancel, start=a0,
+                                                    on_big=stream.push if stream else None, progress=part_prog)
+                except Exception:  # noqa: BLE001 - the smaller copy could not be read: the video itself
+                    if not quick:
+                        raise
+                    if stream is not None:
+                        stream.close()
+                        stream = transnet.Streamer(model)
+                    feats, fine = shots.extract_all(src, b1 - a0, cancel=cancel, start=a0, on_big=stream.push if stream else None, progress=part_prog)
+                probs = stream.finish() if stream is not None else None
+            except BaseException:
+                if stream is not None:
+                    stream.close()
+                raise
+            skip_t, skip_f = int(round((a - a0) * fps)), int(round((a - a0) * rate))
+            want_t = int(round(b * fps)) - int(round(a * fps))
+            want_f = int(round(b * rate)) - int(round(a * rate))
+            th = fit(feats.thumbs[skip_t:], want_t)
+            hi = fit(feats.hist[skip_t:], want_t)
+            ju = fit(fine.jump[max(0, skip_f - 1):], want_f - (1 if k == 0 else 0))     # the jump into each frame of this part
+            out = {"thumbs": th, "hist": hi, "jump": ju}
+            if probs is not None:
+                out["net"] = fit(probs[skip_f:], want_f)
+            tmp = d / f"{k:04d}.tmp.npz"
+            np.savez_compressed(str(tmp), **out)
+            tmp.replace(pf)
+            T.append(th); H_.append(hi); J.append(ju)
+            if probs is not None:
+                P.append(out["net"])
+        feats = shots.Features(fps, np.concatenate(T), np.concatenate(H_))
+        fine = shots.Fine(rate, np.concatenate(J))
+        return feats, fine, (np.concatenate(P) if model is not None else None)
+
     def stop(self, src: str) -> bool:
         """Stop looking at this video (or take it out of the queue)."""
         f = self._file(src)
@@ -278,6 +372,15 @@ class SceneFinder:
                         quick = None
                 model = _net_model(self.home)
                 net: List[Any] = []
+                if duration > self.PART * 1.5:
+                    # a long video is looked at in parts of 5 minutes, each kept as it is done: after a power cut or a
+                    # restart it goes on from the last part instead of from the start
+                    feats, fine, probs = self._in_parts(src, duration, quick, model, cancel, prog)
+                    parted = True
+                    if probs is not None:
+                        net.append(None)
+                else:
+                    parted = False
 
                 def read(where: Optional[str]) -> Tuple[Any, Any]:
                     net.clear()
@@ -293,23 +396,25 @@ class SceneFinder:
                         if stream is not None:
                             stream.close()
                         raise
-                try:
-                    feats, fine = read(quick)
-                except Cancelled:
-                    raise
-                except Exception:                         # noqa: BLE001 - the smaller copy could not be read: the video itself
-                    if not quick:
+                if not parted:
+                    try:
+                        feats, fine = read(quick)
+                    except Cancelled:
                         raise
-                    feats, fine = read(None)
+                    except Exception:                         # noqa: BLE001 - the smaller copy could not be read: the video itself
+                        if not quick:
+                            raise
+                        feats, fine = read(None)
                 found = shots.find_cuts(feats)
                 import numpy as np
                 extra: Dict[str, Any] = {}
                 if net:
                     from .analysis import transnet
-                    probs = net[0].finish()
+                    probs = net[0].finish() if net[0] is not None else probs
                     found = transnet.combine(found, probs, fine.rate, feats=feats)
                     extra = {"net": probs.astype(np.float16), "net_rate": fine.rate}
                 cuts = shots.refine_fine(found, fine)
+                self._drop_parts(src)
                 tmp = f.with_suffix(".tmp.npz")
                 np.savez_compressed(str(tmp), fps=feats.fps, thumbs=feats.thumbs, hist=feats.hist, **extra)
                 tmp.replace(f.with_suffix(".npz"))
