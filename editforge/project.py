@@ -180,22 +180,134 @@ def clean_piece(raw: Any, duration: float) -> Optional[Dict[str, Any]]:
 MAX_FADE = 10.0
 
 
+#: sound shaping of a part (the same in the player, see ui.js TONES): name -> FFmpeg filters
+TONES = {
+    "voice": ["highpass=f=90", "equalizer=f=250:t=q:w=1:g=-3", "equalizer=f=3000:t=q:w=1.2:g=4"],   # clear voice
+    "cutbass": ["bass=g=-10:f=180"],
+    "bright": ["treble=g=5:f=5000"],
+    "warm": ["bass=g=3:f=200", "treble=g=-3:f=8000"],
+    "phone": ["highpass=f=400", "lowpass=f=3400"],
+}
+HP_CHOICES = (80, 150, 300)            # Low cut (Hz)
+LP_CHOICES = (12000, 8000, 4000)       # High cut (Hz)
+DYN = {1: "acompressor=threshold=-20dB:ratio=3:attack=10:release=150:makeup=2",       # gentle: evens peaks
+       2: "acompressor=threshold=-28dB:ratio=6:attack=5:release=120:makeup=4"}        # strong: thick, steady
+NR = {1: 6, 2: 12, 3: 20}              # Clean: noise taken out (dB)
+MAX_NUDGE_MS = 2000
+
+
 def clean_shape(raw: Any) -> Dict[str, Any]:
-    """Even out (0 off, 1 gentle, 2 strong) and gentle fade in / out (seconds) of a part's sound; only what is set."""
+    """How a part's sound is shaped; only what is set: Even out (0 off, 1 gentle, 2 strong), gentle fade in / out
+    (seconds), Tone (a preset), Low cut / High cut (Hz), Dynamics (1 gentle, 2 strong), Clean (1 to 3) and Nudge (ms,
+    to fix sync)."""
     out: Dict[str, Any] = {}
     if not isinstance(raw, dict):
         return out
-    try:
-        ev = int(raw.get("even") or 0)
-    except (TypeError, ValueError):
-        ev = 0
+    def _int(k: str) -> int:
+        try:
+            return int(raw.get(k) or 0)
+        except (TypeError, ValueError):
+            return 0
+    ev = _int("even")
     if ev in (1, 2):
         out["even"] = ev
     for k in ("fin", "fout"):
         v = round(_num(raw.get(k), 0.0, 0.0, MAX_FADE), 2)
         if v >= 0.05:
             out[k] = v
+    if raw.get("tone") in TONES:
+        out["tone"] = raw["tone"]
+    if _int("hp") in HP_CHOICES:
+        out["hp"] = _int("hp")
+    if _int("lp") in LP_CHOICES:
+        out["lp"] = _int("lp")
+    if _int("dyn") in DYN:
+        out["dyn"] = _int("dyn")
+    if _int("nr") in NR:
+        out["nr"] = _int("nr")
+    nudge = int(round(_num(raw.get("nudge"), 0.0, -MAX_NUDGE_MS, MAX_NUDGE_MS)))
+    if nudge:
+        out["nudge"] = nudge
     return out
+
+
+def tone_filters(sh: Dict[str, Any], timeline: bool = False) -> List[str]:
+    """FFmpeg filters for a part's Tone, Low cut, High cut, Clean and Dynamics. ``timeline``: only filters that can be
+    switched on for a stretch of time (Dynamics cannot, so it is left out there)."""
+    f: List[str] = []
+    if sh.get("hp"):
+        f.append(f"highpass=f={int(sh['hp'])}")
+    if sh.get("lp"):
+        f.append(f"lowpass=f={int(sh['lp'])}")
+    f += TONES.get(sh.get("tone") or "", [])
+    if sh.get("nr"):
+        f.append(f"afftdn=nr={NR[int(sh['nr'])]}:nf=-50:tn=1")
+    if sh.get("dyn") and not timeline:
+        f.append(DYN[int(sh["dyn"])])
+    return f
+
+
+MAX_LINE_POINTS = 400
+
+
+def clean_line(raw: Any) -> List[List[float]]:
+    """A volume line: points [seconds in the finished video, loudness 0..2] sorted by time (empty = no line)."""
+    if not isinstance(raw, list):
+        return []
+    pts: Dict[float, float] = {}
+    for x in raw[: MAX_LINE_POINTS * 2]:
+        if isinstance(x, (list, tuple)) and len(x) == 2:
+            t = round(_num(x[0], -1.0, 0.0, 1e6), 3)
+            if t >= 0:
+                pts[t] = round(_num(x[1], 1.0, 0.0, 2.0), 3)
+    return [[t, pts[t]] for t in sorted(pts)][:MAX_LINE_POINTS]
+
+
+def line_at(line: Sequence[Sequence[float]], t: float) -> float:
+    """Loudness of a volume line at a time (straight between points, flat before the first and after the last)."""
+    if not line:
+        return 1.0
+    if t <= line[0][0]:
+        return float(line[0][1])
+    for (a, ga), (b, gb) in zip(line, line[1:]):
+        if t <= b:
+            return float(ga) + (float(gb) - float(ga)) * ((t - a) / (b - a) if b > a else 1.0)
+    return float(line[-1][1])
+
+
+def _db(g: float) -> float:
+    return round(max(-60.0, 20.0 * math.log10(max(g, 0.001))), 2)
+
+
+def line_curve_out(line: Sequence[Sequence[float]], total: float) -> List[List[float]]:
+    """A volume line as a dB curve in finished-video time, from 0 to the end."""
+    if not line:
+        return []
+    ts = sorted({0.0, float(total)} | {float(t) for t, _ in line if 0 < t < total})
+    pts = [[t, _db(line_at(line, t))] for t in ts]
+    return [[-10.0, pts[0][1]]] + pts + [[float(total) + 10.0, pts[-1][1]]]       # flat past both ends
+
+
+def line_curve_src(line: Sequence[Sequence[float]], segs: Sequence[Any], fps: float) -> List[List[float]]:
+    """A volume line (finished-video time) as a dB curve in source time, through the segments that play it."""
+    if not line:
+        return []
+    out: Dict[float, float] = {}
+    for seg in segs:
+        if getattr(seg, "kind", "clip") != "clip":
+            continue
+        o0, o1 = seg.out_start / fps, (seg.out_start + seg.frames) / fps
+        s0, s1, sp = seg.src_start_f / fps, (seg.src_start_f + seg.src_len_f) / fps, float(seg.speed or 1.0)
+        rev = bool(getattr(seg, "reverse", False))
+        for t in [o0, o1] + [float(x) for x, _ in line if o0 < x < o1]:
+            src = (s1 - (t - o0) * sp) if rev else (s0 + (t - o0) * sp)
+            out[round(src, 4)] = _db(line_at(line, t))
+    pts = [[t, out[t]] for t in sorted(out)]
+    return ([[pts[0][0] - 10.0, pts[0][1]]] + pts + [[pts[-1][0] + 10.0, pts[-1][1]]]) if pts else []   # flat past both ends
+
+
+def has_tone(sh: Dict[str, Any]) -> bool:
+    return any(sh.get(k) for k in ("tone", "hp", "lp", "dyn", "nr", "nudge"))
 
 
 def clean_piece_mix(raw: Any) -> Optional[Dict[str, Dict[str, Any]]]:
@@ -357,10 +469,18 @@ def clean_settings(raw: Any) -> Dict[str, Any]:
             for k, d in (("fade_in", 0.5), ("fade_out", 1.5)):
                 if x.get(k) is not None:
                     y[k] = round(_num(x.get(k), d, 0.0, MAX_FADE), 2)
+            vl = clean_line(x.get("vline"))
+            if vl:
+                y["vline"] = vl                       # the song's volume line
+            sh = {k: v for k, v in clean_shape(x.get("shape")).items() if k in ("tone", "hp", "lp", "dyn", "nr")}
+            if sh:
+                y["shape"] = sh                       # tone, cuts, dynamics, clean of the whole song
             layers.append(y)
     s["layers"] = layers
     for key in ("mute", "solo"):
         s[key] = [k for k in SOUND_KEYS if k in (raw.get(key) if isinstance(raw.get(key), list) else [])]
+    vlines = raw.get("vline") if isinstance(raw.get("vline"), dict) else {}
+    s["vline"] = {k: clean_line(vlines.get(k)) for k in SOUND_KEYS if clean_line(vlines.get(k))}   # volume lines of the own sound / split tracks
     sid = str(raw.get("mix_split") or "")
     s["mix_split"] = sid if SPLIT_ID.match(sid) else ""
     for layer in STEM_KEYS:
@@ -628,32 +748,37 @@ def duck_points(ranges: Sequence[Sequence[float]], level: float) -> List[List[fl
 
 
 def _shape_of(sh: Dict[str, Any], env_path: Optional[str], offset: float, p: Dict[str, Any], cache: Optional[str],
-              duck: Optional[List[List[float]]] = None) -> Optional[Dict[str, Any]]:
+              duck: Optional[List[List[float]]] = None, line: Optional[List[List[float]]] = None) -> Optional[Dict[str, Any]]:
     from .analysis import evenout
     dpts = [list(x) for x in evenout.window(duck, p["start"] - 0.5, p["end"] + 0.5)] if duck else []
-    if not (sh.get("even") or sh.get("fin") or sh.get("fout") or dpts):
+    if not (sh.get("even") or sh.get("fin") or sh.get("fout") or dpts or has_tone(sh) or line):
         return None
     env: List[List[float]] = []
     if sh.get("even") and env_path:
         full = evenout.envelope(env_path, int(sh["even"]), cache)
         env = [list(x) for x in evenout.window(evenout.shifted(full, offset), p["start"] - 0.5, p["end"] + 0.5)]
     return {"env": env, "duck": dpts, "a": float(p["start"]), "b": float(p["end"]), "fin": float(sh.get("fin") or 0),
-            "fout": float(sh.get("fout") or 0), "rev": bool(p.get("reverse"))}
+            "fout": float(sh.get("fout") or 0), "rev": bool(p.get("reverse")), "tone": tone_filters(sh),
+            "nudge": int(sh.get("nudge") or 0), "line": [list(x) for x in (line or [])]}
 
 
 def attach_shapes(live: List[Dict[str, Any]], groups: List[List[Any]], src_path: str, mix: Optional[Dict[str, Any]], cache: Optional[str],
-                  ducks: Optional[Dict[str, List[List[float]]]] = None) -> None:
-    """Even out, fades and going down of each section's own sound (the plain sound, or each split layer) go onto its segments.
-    ``ducks``: for each split layer that goes down, its curve in source time."""
+                  ducks: Optional[Dict[str, List[List[float]]]] = None, lines: Optional[Dict[str, List[List[float]]]] = None,
+                  fps: float = 25.0) -> None:
+    """Even out, fades, tone and going down of each section's own sound (the plain sound, or each split layer) go onto its
+    segments. ``ducks``: for each split layer that goes down, its curve in source time. ``lines``: volume lines (finished-video
+    time) of the own sound ('original') or of split layers."""
+    lines = lines or {}
     for p, segs in zip(live, groups):
         shape: Dict[str, Dict[str, Any]] = {}
         if mix:
             for name in mix["files"]:
-                sh = _shape_of((p.get("mix") or {}).get(name) or {}, mix["files"][name], float(mix["start"]), p, cache, (ducks or {}).get(name))
+                sh = _shape_of((p.get("mix") or {}).get(name) or {}, mix["files"][name], float(mix["start"]), p, cache, (ducks or {}).get(name),
+                               line_curve_src(lines.get(name) or [], segs, fps))
                 if sh:
                     shape[name] = sh
         else:
-            sh = _shape_of(p, src_path, 0.0, p, cache)
+            sh = _shape_of(p, src_path, 0.0, p, cache, None, line_curve_src(lines.get("original") or [], segs, fps))
             if sh:
                 shape["original"] = sh
         if shape:
@@ -664,7 +789,7 @@ def attach_shapes(live: List[Dict[str, Any]], groups: List[List[Any]], src_path:
 def music_shape(t: Dict[str, Any], total: float, cache: Optional[str]) -> str:
     """Filters (finished-video time) for a music track's Auto level / Even out and the gentle fades of its parts."""
     from .analysis import evenout
-    chain: List[str] = []
+    chain: List[str] = tone_filters(t.get("shape") or {})          # the whole song's tone, cuts, dynamics, clean
     auto = int(t.get("auto") or 0)
     dur = None
     for a, b, src, q in music_runs(t.get("parts"), float(t.get("start") or 0.0), total):
@@ -680,11 +805,15 @@ def music_shape(t: Dict[str, Any], total: float, cache: Optional[str]) -> str:
                     lo, hi = max(a, zero), min(b, zero + dur)
                     chain += evenout.filters(evenout.shifted(env, zero), lo, hi)
                     k += 1
+        if not q.get("mute"):
+            chain += [f"{x}:enable='between(t,{a:.3f},{b:.3f})'" for x in tone_filters(q, timeline=True)]
         fin, fout = float(q.get("fin") or 0), float(q.get("fout") or 0)
         if fin:
             chain.append(f"volume='clip((t-{a:.3f})/{fin:.3f},0,1)':eval=frame:enable='between(t,{a:.3f},{a + fin:.3f})'")
         if fout:
             chain.append(f"volume='clip(({b:.3f}-t)/{fout:.3f},0,1)':eval=frame:enable='between(t,{b - fout:.3f},{b:.3f})'")
+    if t.get("vline"):
+        chain += evenout.filters(line_curve_out(t["vline"], total), 0.0, total)
     return ",".join(chain)
 
 
@@ -1064,6 +1193,7 @@ def _layer_mix(st: Dict[str, Any], live: List[Dict[str, Any]], src_path: str, pl
         if layer in st["mute"] or (_solo_any(st) and layer not in st["solo"]):
             gains[layer] = 0.0
     own = any(piece_layer_gain(p) or any(clean_shape(v) for v in (p.get("mix") or {}).values()) for p in live)   # own loudness / even out / fades
+    own = own or any((st.get("vline") or {}).get(k) for k in STEM_KEYS)
     if not st["mix_split"] or (all(abs(g - 1.0) < 0.001 for g in gains.values()) and not own and not st.get("ducks")):
         return None
     from .splitter import SplitStore
@@ -1222,7 +1352,7 @@ def plan_project(project: Dict[str, Any], src_path: str, *, music_path: Optional
                         if under not in heard_src:
                             heard_src[under] = activity_ranges(project, src_path, under, media, stems_home, planner)
                     stem_ducks[name] = duck_curve(dk["by"], heard_src)
-        attach_shapes([p for p, g in pairs if g], groups, src_path, audio.mix, cache, stem_ducks)
+        attach_shapes([p for p, g in pairs if g], groups, src_path, audio.mix, cache, stem_ducks, st.get("vline") or {}, float(planner.F))
     audio.fade_in, audio.fade_out = float(st["fade_in"]), float(st["fade_out"])
     audio.fade_video = planner.has_video
     texts: List[TextOverlay] = []

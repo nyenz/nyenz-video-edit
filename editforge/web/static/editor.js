@@ -265,7 +265,7 @@ function dress(v, p) {
   if (p.color.saturation !== 1) f.push("saturate(" + p.color.saturation + ")");
   v.style.filter = f.join(" ");
   v.muted = S.mutedAll || p.mute || !ownSoundOn() || Layers.on();     // with the three layers on, they carry the sound
-  setVideoVol(v, p.volume);
+  setVideoVol(v, p.volume, p);
   v.playbackRate = clamp(p.speed, 0.0625, 16);
 }
 function badge(p) {
@@ -332,7 +332,7 @@ function tick() {
     badge(nx.p); prepNext(nx);
   }
   Layers.follow(active(), V.seg.p); musicGains(); musicFollow(); paintMeter();
-  if (!Layers.on() && V.seg.p) { const vv = active(), pp = V.seg.p; setVideoVol(vv, pp.volume * partShapeGain(pp, "original", vv.currentTime)); }
+  if (!Layers.on() && V.seg.p) { const vv = active(), pp = V.seg.p; setVideoVol(vv, pp.volume * partShapeGain(pp, "original", vv.currentTime), pp); }
   renderPlayhead(); renderOverlay();
   if (S.followPlay) scrollToPlayhead();
   V.raf = requestAnimationFrame(tick);
@@ -397,7 +397,7 @@ function musicPlayer(file) {
     a = new Audio(mediaUrl(file, false)); a.preload = "auto"; MUSIC.set(file, a);
     try {                                          // through Web Audio, so the viewer can play it louder than 100 %
       const C = window.AudioContext || window.webkitAudioContext;
-      if (C) { MCTX = MCTX || new C(); const g = MCTX.createGain(); MCTX.createMediaElementSource(a).connect(g); g.connect(soundOut(MCTX)); a._gain = g; }
+      if (C) { MCTX = MCTX || new C(); const g = MCTX.createGain(), tc = toneChain(MCTX); MCTX.createMediaElementSource(a).connect(tc.input); tc.output.connect(g); g.connect(soundOut(MCTX)); a._gain = g; a._tone = tc; }
     } catch (e) { a._gain = null; }
   }
   return a;
@@ -406,32 +406,40 @@ function setMusicGain(m, v) { v *= masterGain(); if (m._gain) { if (m.volume !==
 /** The Overall loudness chosen in Export, heard live in the player (Standard = 1): the whole sound a step quieter or louder. */
 function masterGain() { return S.mode === "final" && S.proj ? Math.pow(10, ((+S.proj.settings.loudness_step || 0) * 1.5) / 20) : 1; }
 /** The video's own sound. Louder than 100 % needs Web Audio, so a video is routed through it once that is wanted. */
-function setVideoVol(v, vol) {
-  const g = Math.max(0, vol) * masterGain();
-  if (!v._gain && g > 1.001) {
+function setVideoVol(v, vol, sh) {
+  const g = Math.max(0, vol) * masterGain() * (S.mode === "final" && S.proj ? lineAt((S.proj.settings.vline || {}).original, S.t) : 1);
+  if (!v._gain && (g > 1.001 || hasTone(sh))) {
     try {
       const C = window.AudioContext || window.webkitAudioContext;
-      if (C) { MCTX = MCTX || new C(); const n = MCTX.createGain(); MCTX.createMediaElementSource(v).connect(n); n.connect(soundOut(MCTX)); v._gain = n; if (MCTX.state === "suspended") MCTX.resume(); }
+      if (C) {
+        MCTX = MCTX || new C(); const n = MCTX.createGain(), tc = toneChain(MCTX);
+        MCTX.createMediaElementSource(v).connect(tc.input); tc.output.connect(n); n.connect(soundOut(MCTX));
+        v._gain = n; v._tone = tc; if (MCTX.state === "suspended") MCTX.resume();
+      }
     } catch (e) { v._gain = null; }
   }
+  if (v._tone) v._tone.set(sh);
   if (v._gain) { if (v.volume !== 1) v.volume = 1; v._gain.gain.value = g; } else v.volume = clamp(g, 0, 1);
 }
+function hasTone(sh) { return !!(sh && (sh.tone || sh.hp || sh.lp || sh.dyn)); }
 /** Hear a new Overall loudness right away: everything playing now follows it. */
 function applyMaster() {
   musicGains();
   if (typeof Layers !== "undefined" && Layers.apply) Layers.apply();
-  if (V.seg && V.seg.p) for (const v of [V.a, V.b]) setVideoVol(v, V.seg.p.volume);
+  if (V.seg && V.seg.p) for (const v of [V.a, V.b]) setVideoVol(v, V.seg.p.volume, V.seg.p);
 }
 /** How loud a music track is right now: the track, the part under the playhead, and going down under voices. */
-function musicLevel(x, t) { return Math.max(0, x.volume) * partGain(x, t) * duckGain(x, t) * musicShapeGain(x, t); }
-function musicGains() { for (const x of layers()) if (heard(x)) setMusicGain(musicPlayer(x.file), musicLevel(x, S.t)); }
+function musicLevel(x, t) { return Math.max(0, x.volume) * partGain(x, t) * duckGain(x, t) * musicShapeGain(x, t) * lineAt(x.vline, t); }
+/** The tone of a song right now: its own (whole song), with the part under the playhead on top. */
+function songTone(x, t) { let q = null; for (const r of mspans(x)) if (t >= r.a && t < r.b) q = r.q; return Object.assign({}, x.shape || {}, q && hasTone(q) ? { tone: q.tone, hp: q.hp, lp: q.lp } : {}); }
+function musicGains() { for (const x of layers()) if (heard(x)) { const m = musicPlayer(x.file); setMusicGain(m, musicLevel(x, S.t)); if (m._tone) m._tone.set(songTone(x, S.t)); } }
 function musicPlay() {
   const on = new Set();
   if (MCTX && MCTX.state === "suspended") MCTX.resume();
   for (const x of layers()) {
     if (!heard(x)) continue;
     const m = musicPlayer(x.file); on.add(x.file);
-    setMusicGain(m, musicLevel(x, S.t)); m.muted = S.mutedAll;
+    setMusicGain(m, musicLevel(x, S.t)); if (m._tone) m._tone.set(songTone(x, S.t)); m.muted = S.mutedAll;
     const st = songTime(x, m, S.t); if (st !== null) m.currentTime = st;
     const pr = m.play(); if (pr && pr.catch) pr.catch(() => {});
   }
@@ -706,7 +714,85 @@ function renderTimeline() {
   if (S.mode === "final") prefetchEnvs();
   if (S.mode === "final" && !S.playing) paintMeter();
   renderSoloChip();
+  renderLines();
   renderPlayhead();
+}
+// ---- volume lines: dots on a track's line that set its loudness at exact moments (100 % in the middle, 200 % at the top)
+function lineOf(key) {
+  if (key.startsWith("song:")) { const x = layers()[+key.slice(5)]; return (x && x.vline) || []; }
+  return ((S.proj.settings.vline || {})[key]) || [];
+}
+function setLine(key, pts) {
+  pts = pts.slice().sort((a, b) => a[0] - b[0]).map(([t, g]) => [+Math.max(0, t).toFixed(3), +clamp(g, 0, 2).toFixed(3)]);
+  if (key.startsWith("song:")) {
+    const i = +key.slice(5); if (musicLocked(i)) { toast(musicLocked(i), true); return false; }
+    change(() => setLayer(i, { vline: pts.length ? pts : undefined }), { keepVideo: true });
+  } else {
+    if (trackLocked(key === "original" ? "sound" : key) || trackLocked("sound")) { lockedNote("sound"); return false; }
+    change(() => { const v = Object.assign({}, S.proj.settings.vline || {}); if (pts.length) v[key] = pts; else delete v[key]; S.proj.settings.vline = v; }, { keepVideo: true });
+  }
+  if (typeof Layers !== "undefined" && Layers.apply) Layers.apply();
+  if (S.playing) musicGains();
+  renderLines(); return true;
+}
+S.lineShow = new Set();
+function lineItems(key, t) {
+  const L = lineOf(key), shown = L.length || S.lineShow.has(key);
+  return [
+    shown ? null : ["Show the volume line", "pulse", () => { S.lineShow.add(key); renderLines(); toast("Double-click the line to add a dot, then drag dots up or down. Right-click a dot to remove it."); }],
+    ["Add a dot here", "plus", () => { S.lineShow.add(key); setLine(key, L.concat([[t, lineAt(L, t)]])); }],
+    ["Dip here (down to 30% for 2 s)", "vol", () => { const a = Math.max(0, t - 1), b = t + 1, g0 = lineAt(L, a - 0.3), g1 = lineAt(L, b + 0.3);
+      setLine(key, L.filter(([x]) => x < a - 0.3 || x > b + 0.3).concat([[a - 0.3, g0], [a, 0.3], [b, 0.3], [b + 0.3, g1]])); }],
+    L.length ? ["Remove the volume line", "trash", () => { S.lineShow.delete(key); setLine(key, []); }, { danger: true }] : null,
+    shown && !L.length ? ["Hide the volume line", "x", () => { S.lineShow.delete(key); renderLines(); }] : null];
+}
+function renderLines() {
+  if (S.mode !== "final") { for (const v of document.querySelectorAll("#tlScroll svg.vline")) v.remove(); return; }
+  const lanes = [];
+  const la = $("laneA"); if (la && !la.hidden) lanes.push([la, "original"]);
+  for (const l of document.querySelectorAll("#laneStems .lane.stem")) if (!$("laneStems").hidden) lanes.push([l, l.dataset.layer]);
+  for (const r of document.querySelectorAll("#laneM .mrow")) lanes.push([r, "song:" + r.dataset.i]);
+  const keep = new Set();
+  for (const [lane, key] of lanes) {
+    const L = lineOf(key); if (!L.length && !S.lineShow.has(key)) { const o = lane.querySelector(":scope > svg.vline"); if (o) o.remove(); continue; }
+    keep.add(lane);
+    drawLine(lane, key, L);
+  }
+}
+function drawLine(lane, key, L) {
+  const NS = "http://www.w3.org/2000/svg", T = rawTotal(), x0 = px(0), W = Math.max(1, px(T) - x0), H = lane.clientHeight || 30;
+  let svg = lane.querySelector(":scope > svg.vline");
+  if (!svg) { svg = document.createElementNS(NS, "svg"); svg.setAttribute("class", "vline"); lane.append(svg); }
+  svg.style.left = x0 + "px"; svg.style.width = W + "px"; svg.style.height = H + "px"; svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+  const Y = (g) => 3 + (1 - g / 2) * (H - 6), G = (y) => clamp((1 - (y - 3) / (H - 6)) * 2, 0, 2), X = (t) => px(t) - x0;
+  const pts = L.length ? L : [[0, 1]];
+  const d = "M0," + Y(pts[0][1]) + pts.map(([t, g]) => " L" + X(t) + "," + Y(g)).join("") + " L" + W + "," + Y(pts[pts.length - 1][1]);
+  svg.replaceChildren();
+  const mid = document.createElementNS(NS, "line"); mid.setAttribute("class", "vl-mid"); mid.setAttribute("x1", "0"); mid.setAttribute("x2", String(W)); mid.setAttribute("y1", String(Y(1))); mid.setAttribute("y2", String(Y(1))); svg.append(mid);
+  const hit = document.createElementNS(NS, "path"); hit.setAttribute("d", d); hit.setAttribute("class", "vl-hit"); svg.append(hit);
+  const path = document.createElementNS(NS, "path"); path.setAttribute("d", d); path.setAttribute("class", "vl-path"); svg.append(path);
+  const tAt = (e) => { const r = svg.getBoundingClientRect(); return clamp(timeAt(e.clientX - r.left + x0), 0, T); };
+  const gAt = (e) => { const r = svg.getBoundingClientRect(); return G(e.clientY - r.top); };
+  hit.addEventListener("pointerdown", (e) => e.stopPropagation());
+  hit.addEventListener("dblclick", (e) => { e.stopPropagation(); setLine(key, L.concat([[tAt(e), gAt(e)]])); });
+  hit.addEventListener("contextmenu", (e) => { e.preventDefault(); e.stopPropagation(); ctxMenu(lineItems(key, tAt(e)), e.clientX, e.clientY); });
+  L.forEach(([t, g], i) => {
+    const c = document.createElementNS(NS, "circle"); c.setAttribute("cx", String(X(t))); c.setAttribute("cy", String(Y(g))); c.setAttribute("r", "4.5"); c.setAttribute("class", "vl-dot");
+    const tip = document.createElementNS(NS, "title"); tip.textContent = Math.round(g * 100) + "% at " + fmtTime(t, 2) + " · drag to change, right-click to remove"; c.append(tip);
+    c.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      e.stopPropagation(); e.preventDefault(); c.setPointerCapture(e.pointerId);
+      const lo = i > 0 ? L[i - 1][0] + 0.01 : 0, hi = i < L.length - 1 ? L[i + 1][0] - 0.01 : T;
+      let nt = t, ng = g;
+      const mv = (ev) => { nt = clamp(tAt(ev), lo, hi); ng = gAt(ev); c.setAttribute("cx", String(X(nt))); c.setAttribute("cy", String(Y(ng))); showTip(Math.round(ng * 100) + "% · " + fmtTime(nt, 2), ev.clientX, ev.clientY); };
+      const up = () => { c.removeEventListener("pointermove", mv); c.removeEventListener("pointerup", up); hideTip(); if (nt !== t || ng !== g) setLine(key, L.map((q, j) => (j === i ? [nt, ng] : q))); };
+      c.addEventListener("pointermove", mv); c.addEventListener("pointerup", up);
+    });
+    c.addEventListener("contextmenu", (e) => { e.preventDefault(); e.stopPropagation();
+      ctxMenu([["Remove this dot", "trash", () => setLine(key, L.filter((_, j) => j !== i))], ["Back to 100%", "restore", () => setLine(key, L.map((q, j) => (j === i ? [q[0], 1] : q)))],
+        "-", ...lineItems(key, t)], e.clientX, e.clientY); });
+    svg.append(c);
+  });
 }
 
 // ---- the sound of the video, drawn under each section (moves, speeds, mutes and turns around with it)
@@ -861,6 +947,54 @@ function fadeFields(fin, fout, onset, off, labels) {
   return el("div", { class: "fade-fields" }, one(L[0], fin, "fin"), one(L[1], fout, "fout"));
 }
 const same = (arr) => { const u = [...new Set(arr)]; return u.length === 1 ? u[0] : null; };
+// ---- Shape the sound: Tone, Cuts, Dynamics, Clean and Timing of a part, a group, a section or a whole song. In tabs, so the
+// panel never grows long; the same in the player and in the export (Clean only in the export: it cannot be done live).
+const SHAPE_KEYS = ["even", "fin", "fout", "tone", "hp", "lp", "dyn", "nr", "nudge"];
+const TONE_KEYS = ["tone", "hp", "lp", "dyn", "nr", "nudge"];
+let SHAPE_TAB = "tone";
+/** get(k): the value of the chosen parts (null when they differ); set(k, v): change them (0 / "" = off). */
+function shapeBox(get, set, off, opts) {
+  opts = opts || {};
+  const tabs = [["tone", "Tone"], ["cut", "Cuts"]].concat(opts.dyn === false ? [] : [["dyn", "Dynamics"]]).concat(opts.clean === false ? [] : [["clean", "Clean"]]).concat(opts.nudge ? [["time", "Timing"]] : []);
+  if (!tabs.some(([k]) => k === SHAPE_TAB)) SHAPE_TAB = "tone";
+  const on = (k) => { const v = get(k); return v !== null && v !== undefined && v !== 0 && v !== ""; };
+  const dot = { tone: on("tone"), cut: on("hp") || on("lp"), dyn: on("dyn"), clean: on("nr"), time: on("nudge") };
+  const body = el("div", { class: "shape-body" });
+  const bar = el("div", { class: "shape-tabs", role: "tablist" });
+  const seg = (k, choices) => { const sg = segmented(choices, get(k) === null ? "__mixed" : String(get(k) || 0), (v) => set(k, isNaN(+v) || v === "" ? v : +v)); if (off) for (const b of sg.children) b.disabled = true; return sg; };
+  const paint = () => {
+    for (const b of bar.children) b.classList.toggle("on", b.dataset.k === SHAPE_TAB);
+    body.replaceChildren();
+    if (SHAPE_TAB === "tone") {
+      const sg = segmented(TONE_NAMES.map(([k, l]) => [k, l]), get("tone") === null ? "__mixed" : get("tone") || "", (v) => set("tone", v));
+      sg.classList.add("wrap"); if (off) for (const b of sg.children) b.disabled = true;
+      body.append(el("p", { class: "note", text: "A sound colour for these parts. Clear voice suits talking." }), sg);
+    } else if (SHAPE_TAB === "cut") {
+      body.append(el("div", { class: "field" }, el("span", {}, el("b", { text: "Low cut" }), el("small", { class: "note", text: " rumble, wind, hum" })), seg("hp", [["0", "Off"], ["80", "80 Hz"], ["150", "150 Hz"], ["300", "300 Hz"]])),
+        el("div", { class: "field" }, el("span", {}, el("b", { text: "High cut" }), el("small", { class: "note", text: " hiss, harsh highs" })), seg("lp", [["0", "Off"], ["12000", "12k"], ["8000", "8k"], ["4000", "4k"]])));
+    } else if (SHAPE_TAB === "dyn") {
+      body.append(el("p", { class: "note", text: "Loud peaks come down and the sound gets fuller and steadier." }), seg("dyn", [["0", "Off"], ["1", "Gentle"], ["2", "Strong"]]));
+    } else if (SHAPE_TAB === "clean") {
+      body.append(el("p", { class: "note", text: "Takes out hiss and noise. Heard in the export and the Quick preview file (it cannot be done live)." }), seg("nr", [["0", "Off"], ["1", "Light"], ["2", "Medium"], ["3", "Strong"]]));
+    } else if (SHAPE_TAB === "time") {
+      const v = get("nudge"), inp = el("input", { class: "input short num", inputmode: "numeric", value: v === null ? "" : String(v || 0), "aria-label": "Nudge in milliseconds", placeholder: "mixed" });
+      inp.disabled = !!off;
+      const put = (x) => set("nudge", clamp(Math.round(x), -2000, 2000));
+      inp.addEventListener("change", () => { const x = parseFloat(inp.value); if (isFinite(x)) put(x); else inp.value = String(get("nudge") || 0); });
+      const step = (d) => btn((d > 0 ? "+" : "") + d, { cls: "sm ghost", onclick: () => put((+get("nudge") || 0) + d) });
+      body.append(el("p", { class: "note", text: "Move the sound a little later (+) or earlier (−) to fix lip sync. In milliseconds (1000 = 1 second)." }),
+        el("div", { class: "nudge-row" }, step(-40), step(-10), inp, el("small", { class: "note", text: "ms" }), step(10), step(40), btn("Reset", { cls: "sm ghost", onclick: () => set("nudge", 0) })));
+    }
+  };
+  for (const [k, l] of tabs) bar.append(el("button", { type: "button", role: "tab", class: "shape-tab", "data-k": k, onclick: () => { SHAPE_TAB = k; paint(); } },
+    el("span", { text: l }), dot[k] ? el("i", { class: "shape-dot" }) : null));
+  paint();
+  const any = Object.values(dot).some(Boolean);
+  return el("div", { class: "pad shape-box" },
+    el("div", { class: "field" }, el("span", {}, el("b", { text: opts.title || "Shape the sound" }), any ? el("small", { class: "note", text: " · changed" }) : null,
+      any && !off ? el("button", { type: "button", class: "link-btn", text: "Reset all", onclick: () => set("__all", 0) }) : null)),
+    bar, body);
+}
 
 // ---- Sound check: the whole mix, measured the way YouTube does, moment by moment. The strip under the tracks shows it
 // (green = right, yellow / red = too quiet / too loud next to YouTube's level), with one button to even out the problem spots.
@@ -983,10 +1117,10 @@ function mixPower(t, L) {
     if (stemsOn()) {
       const sp = Layers.split();
       for (const n of Layers.NAMES) {
-        const g = Layers.gainOf(n) * Layers.ownGain(p, n) * p.volume * partShapeGain(p, n, ts) * stemDuckGain(n, ts);
+        const g = Layers.gainOf(n) * Layers.ownGain(p, n) * p.volume * partShapeGain(p, n, ts) * stemDuckGain(n, ts) * lineAt((S.proj.settings.vline || {})[n], t);
         const a = pk((S.stemPeaks || {})[n], ts - sp.start) * g; pw += a * a;
       }
-    } else { const a = pk(S.peaks, ts) * p.volume * partShapeGain(p, "original", ts); pw += a * a; }
+    } else { const a = pk(S.peaks, ts) * p.volume * partShapeGain(p, "original", ts) * lineAt((S.proj.settings.vline || {}).original, t); pw += a * a; }
   }
   for (const x of layers()) {
     if (!heard(x)) continue;
@@ -1374,13 +1508,14 @@ function musicMenuItems(i, t) {
     ["Cut the music here", "split", () => cutMusic(i, t), { key: "S", off: lk }],
     n ? ["Delete and close the gap", "trash", () => deleteMusicParts(true), { key: "Shift+Del", off: lk }] : null,
     n ? [allMuted ? "Turn these parts on" : "Delete, leave a gap (mute)", allMuted ? "vol" : "mute", () => musicChange((c) => { c.mute = !allMuted; }), { key: "Del", off: lk }] : null,
-    n ? ["Same loudness", "sliders", () => normaliseMusic(false), { off: lk }] : null,
-    n > 1 ? ["Same loudness, keep balance", "sliders", () => normaliseMusic(true), { off: lk }] : null,
+    n ? ["Loudness", "sliders", null, { off: lk, sub: loudnessItems((v) => musicChange((c) => { c.volume = v; c.mute = false; }), () => normaliseMusic(false), n > 1 ? () => normaliseMusic(true) : null) }] : null,
     n > 1 ? ["Join these parts", "combine", () => joinMusicParts(), { off: lk }] : null,
-    n ? ["Even out these parts (gentle)", "pulse", () => musicChange((c) => { c.even = 1; }), { off: lk }] : null,
-    n ? ["Even out these parts (strong)", "pulse", () => musicChange((c) => { c.even = 2; }), { off: lk }] : null,
-    n ? ["Gentle fade in and out (1 s)", "sliders", () => musicChange((c) => { c.fin = 1; c.fout = 1; }), { off: lk }] : null,
-    n ? ["Full loudness again", "restore", () => musicChange((c) => { c.volume = 1; c.mute = false; }), { off: lk }] : null,
+    n ? ["Even out and fades", "pulse", null, { off: lk, sub: [
+      ["Even out: gentle", "pulse", () => musicChange((c) => { c.even = 1; })], ["Even out: strong", "pulse", () => musicChange((c) => { c.even = 2; })],
+      ["Even out: off", "x", () => musicChange((c) => { c.even = 0; })], "-",
+      ["Gentle fade in and out (1 s)", "sliders", () => musicChange((c) => { c.fin = 1; c.fout = 1; })], ["No fades", "x", () => musicChange((c) => { delete c.fin; delete c.fout; })]] }] : null,
+    ...(n ? shapeMenuItems((k) => same(list.map((q) => q.q[k] || 0)), (k, v) => musicChange((c) => { if (v) c[k] = v; else delete c[k]; }), lk, false) : []),
+    ["Volume line", "pulse", null, { sub: lineItems("song:" + i, t) }],
     "-",
     [ducksOn(x) ? "Stop going down under other tracks" : "Go down under voices", "vol", () => setDuck(i, ducksOn(x) ? {} : { voices: DUCK_LEVEL }), { off: lk }],
     [x.mute ? "Turn this music on" : "Mute this music", x.mute ? "vol" : "mute", () => set({ mute: !x.mute })],
@@ -1457,7 +1592,10 @@ function renderMusicInspector(R) {
       list.length > 1 ? btn("Join", { icon: "combine", cls: "ghost", title: "Make the chosen parts one part again", onclick: joinMusicParts }) : btn("Full loudness", { icon: "restore", cls: "ghost", onclick: () => musicChange((c) => { c.volume = 1; c.mute = false; }) })),
     list.length ? evenField(same(list.map((q) => (q.q.even === undefined ? x.auto || 0 : q.q.even))), (v) => musicChange((c) => { c.even = v; }), lk,
       "Only the chosen parts. Parts that are fine are not changed.") : null,
-    list.length ? fadeFields(same(list.map((q) => q.q.fin || 0)), same(list.map((q) => q.q.fout || 0)), (k, v) => musicChange((c) => { if (v > 0) c[k] = v; else delete c[k]; }), lk) : null));
+    list.length ? fadeFields(same(list.map((q) => q.q.fin || 0)), same(list.map((q) => q.q.fout || 0)), (k, v) => musicChange((c) => { if (v > 0) c[k] = v; else delete c[k]; }), lk) : null,
+    list.length ? shapeBox((k) => same(list.map((q) => q.q[k] || (k === "tone" ? "" : 0))),
+      (k, v) => musicChange((c) => { if (k === "__all") for (const x of TONE_KEYS) delete c[x]; else if (v) c[k] = v; else delete c[k]; }), lk,
+      { title: "Shape the chosen parts", dyn: false }) : null));
   const setTrack = (patch) => { if (musicLocked(i)) { toast(musicLocked(i), true); renderInspector(); return; } change(() => setLayer(i, patch), { keepVideo: true }); renderMusicLayers(); if (S.playing) musicPlay(); };
   const autoSeg = segmented([[0, "Off"], [1, "Gentle"], [2, "Strong"]], x.auto || 0, (v) => setTrack({ auto: +v }));
   if (lk) for (const b of autoSeg.children) b.disabled = true;
@@ -1467,7 +1605,10 @@ function renderMusicInspector(R) {
     rng("Loudness", x.volume, (v) => setTrack({ volume: v }), "Loudness of the whole music track"),
     songStartField(x, setTrack, lk),
     fadeFields(x.fade_in === undefined ? 0.5 : x.fade_in, x.fade_out === undefined ? 1.5 : x.fade_out, (k, v) => setTrack(k === "fin" ? { fade_in: v } : { fade_out: v }), lk,
-      ["Song fades in", "Song fades out"])));
+      ["Song fades in", "Song fades out"]),
+    shapeBox((k) => (x.shape || {})[k] || (k === "tone" ? "" : 0),
+      (k, v) => { const sh = Object.assign({}, x.shape || {}); if (k === "__all") for (const y of TONE_KEYS) delete sh[y]; else if (v) sh[k] = v; else delete sh[k]; setTrack({ shape: Object.keys(sh).length ? sh : undefined }); renderInspector(); }, lk,
+      { title: "Shape the whole song" })));
   R.append(duckEditor("Go down while other tracks are heard", null, "voices", dby, lk, (nb) => setDuck(i, nb), dhint));
   R.append(el("div", { class: "pad" },
     btn(x.locked ? "Unlock this music" : "Lock this music", { icon: x.locked ? "unlock" : "lock", cls: "ghost wide", onclick: () => { change(() => setLayer(i, { locked: !x.locked }), { any: true }); } }),
@@ -1604,8 +1745,8 @@ function stemChange(fn) {
     for (const { p, n } of list) {
       const m = Object.assign({}, p.mix || {}), cur = Object.assign({ volume: 1, mute: false }, m[n] || {});
       fn(cur, p, n);
-      if (!cur.even) delete cur.even; if (!cur.fin) delete cur.fin; if (!cur.fout) delete cur.fout;
-      if (!cur.mute && Math.abs(cur.volume - 1) < 0.001 && !cur.group && !cur.even && !cur.fin && !cur.fout) delete m[n]; else m[n] = cur;
+      for (const k of SHAPE_KEYS) if (!cur[k]) delete cur[k];
+      if (!cur.mute && Math.abs(cur.volume - 1) < 0.001 && !cur.group && !SHAPE_KEYS.some((k) => cur[k])) delete m[n]; else m[n] = cur;
       if (!cur.group) delete cur.group;
       if (Object.keys(m).length) p.mix = m; else delete p.mix;
     }
@@ -1615,33 +1756,117 @@ function stemChange(fn) {
 function stemMenu(e) {
   const lane = e.target.closest(".lane.stem"); if (!lane) return false;
   e.preventDefault();
-  const n = lane.dataset.layer;
-  if (!aselList().length || e.target.closest(".stem-head")) { S.sel.clear(); S.asel = new Map(); for (const p of kept()) aselSet(p, n, true); refreshAll({ keepVideo: true }); }
+  const n = lane.dataset.layer, sc = $("tlScroll"), rect = sc.getBoundingClientRect();
+  const t = clamp(timeAt(e.clientX - rect.left + sc.scrollLeft), 0, Math.max(0, rawTotal() - 0.01));
+  if (e.target.closest(".stem-head") || !aselList().length) { S.sel.clear(); S.asel = new Map(); for (const p of kept()) aselSet(p, n, true); refreshAll({ keepVideo: true }); }
+  else { const at = segAt(t); if (at && !aselHas(at.s.p, n)) { S.sel.clear(); S.asel = new Map(); aselSet(at.s.p, n, true); S.aAnchor = { p: at.s.p, n }; refreshAll({ keepVideo: true }); } }
   const list = aselList(), allMuted = list.every(({ p, n: k }) => Layers.ownGain(p, k) < 0.001), lk = list.every(({ p, n: k }) => partLocked(p, k));
-  const names = aselLayers().map((k) => Layers.TITLE[k]).join(" + ");
+  const val = (k) => same(list.map(({ p, n: q }) => (p.mix && p.mix[q] && p.mix[q][k]) || 0));
+  const put = (k, v) => stemChange((c) => { c[k] = v; });
   ctxMenu([
     [allMuted ? "Turn these parts on" : "Mute these parts", allMuted ? "vol" : "mute", () => stemChange((c) => { c.mute = !allMuted; }), { key: "Del", off: lk }],
-    ["Full loudness again", "restore", () => stemChange((c) => { c.mute = false; c.volume = 1; }), { off: lk }],
+    ["Loudness", "sliders", null, { off: lk, sub: loudnessItems((v) => stemChange((c) => { c.volume = v; c.mute = false; }), () => normaliseParts(false), () => normaliseParts(true)) }],
+    ["Even out and fades", "pulse", null, { off: lk, sub: [
+      ["Even out: gentle", "pulse", () => put("even", 1), { on: val("even") === 1 }], ["Even out: strong", "pulse", () => put("even", 2), { on: val("even") === 2 }],
+      ["Even out: off", "x", () => put("even", 0), { on: val("even") === 0 }], "-",
+      ["Gentle fade in and out (1 s)", "sliders", () => stemChange((c) => { c.fin = 1; c.fout = 1; })], ["No fades", "x", () => stemChange((c) => { c.fin = 0; c.fout = 0; })]] }],
+    ...shapeMenuItems(val, put, lk, true),
     "-",
-    ["Same loudness", "sliders", () => normaliseParts(false), { off: lk }],
-    ["Same loudness, keep balance", "sliders", () => normaliseParts(true), { off: lk }],
+    ["Group", "combine", null, { sub: groupItems() }],
+    ["Choose", "check", null, { sub: chooseItems(n, t) }],
+    ["Volume line", "pulse", null, { sub: lineItems(n, t) }],
     aselLayers().length === 1 && !aselLayers()[0].startsWith("found") ? ["Separate these parts again", "layers", () => separateAgain(), { off: lk }] : null,
-    ["Even out (gentle)", "pulse", () => stemChange((c) => { c.even = 1; }), { off: lk }],
-    ["Even out (strong)", "pulse", () => stemChange((c) => { c.even = 2; }), { off: lk }],
-    list.some(({ p, n: k }) => p.mix && p.mix[k] && p.mix[k].even) ? ["Stop evening out", "x", () => stemChange((c) => { c.even = 0; }), { off: lk }] : null,
-    ["Gentle fade in and out (1 s)", "sliders", () => stemChange((c) => { c.fin = 1; c.fout = 1; }), { off: lk }],
-    ["Group these parts", "combine", () => makeGroup()],
-    ...[...new Set(aselList().map(({ p, n: k }) => p.mix && p.mix[k] && p.mix[k].group).filter(Boolean))].slice(0, 3).map((gid) => {
-      const gr = soundGroups().find((x) => x.id === gid); return gr ? ["Choose the group '" + gr.name + "'", "check", () => chooseGroup(gid)] : null;
-    }),
     "-",
-    ["Choose the whole " + Layers.TITLE[n] + " track", "list", () => { S.asel = new Map(); for (const p of kept()) aselSet(p, n, true); refreshAll({ keepVideo: true }); }],
-    ["Also choose the other tracks here", "layers", () => { for (const { p } of aselList()) for (const k of Layers.NAMES) aselSet(p, k, true); refreshAll({ keepVideo: true }); }],
-    "-",
-    ["Split here (cuts the video section too)", "split", () => splitAtPlayhead(), { key: "S", off: locked() }],
+    ["Split here (cuts the video section too)", "split", () => { seek(t); splitAtPlayhead(); }, { key: "S", off: locked() }],
   ].filter(Boolean), e.clientX, e.clientY);
-  void names;
   return true;
+}
+/** Loudness choices for a menu: fixed steps, and the two "same loudness" ways. */
+function loudnessItems(setV, same1, same2) {
+  return [["Full loudness (100%)", "restore", () => setV(1)], ["Half (50%)", "vol", () => setV(0.5)], ["Louder (150%)", "vol", () => setV(1.5)],
+    ["Twice (200%)", "vol", () => setV(2)], ["Very loud (300%)", "vol", () => setV(3)], same1 ? "-" : null,
+    same1 ? ["Same loudness", "sliders", same1, { tip: "Each part goes up or down so they all sound equally loud" }] : null,
+    same2 ? ["Same loudness, keep balance", "sliders", same2, { tip: "They move together by the same amount" }] : null];
+}
+/** Tone, Cuts, Dynamics and Clean as sub-menus (the same as Shape the sound in the panel). */
+function shapeMenuItems(val, put, lk, dyn) {
+  const pick = (k, choices) => choices.map(([v, l]) => [l, null, () => put(k, v), { on: (val(k) || (k === "tone" ? "" : 0)) === v }]);
+  return [
+    ["Tone", "sparkles", null, { off: lk, sub: pick("tone", TONE_NAMES.map(([v, l]) => [v, l])) }],
+    ["Cuts", "scissors", null, { off: lk, sub: [...pick("hp", [[0, "Low cut: off"], [80, "Low cut: 80 Hz"], [150, "Low cut: 150 Hz"], [300, "Low cut: 300 Hz"]]), "-",
+      ...pick("lp", [[0, "High cut: off"], [12000, "High cut: 12k"], [8000, "High cut: 8k"], [4000, "High cut: 4k"]])] }],
+    dyn ? ["Dynamics", "gauge", null, { off: lk, sub: pick("dyn", [[0, "Off"], [1, "Gentle"], [2, "Strong"]]) }] : null,
+    ["Clean (noise)", "drop", null, { off: lk, sub: pick("nr", [[0, "Off"], [1, "Light"], [2, "Medium"], [3, "Strong"]]) }],
+  ];
+}
+/** Group menu: make a group, add the chosen parts to a group that is there, take them out, or choose a group. */
+function groupItems() {
+  const list = aselList(), gs = soundGroups();
+  const inG = [...new Set(list.map(({ p, n }) => p.mix && p.mix[n] && p.mix[n].group).filter(Boolean))];
+  return [["Make a new group…", "plus", () => makeGroup(), { off: !list.length }],
+    ...gs.map((g) => ["Add to '" + g.name + "'", "combine", () => addToGroup(g.id), { off: !list.length || g.locked, why: "The group '" + g.name + "' is locked." }]),
+    inG.length ? ["Take out of the group", "x", () => takeOutOfGroup()] : null,
+    gs.length ? "-" : null,
+    ...gs.map((g) => ["Choose all of '" + g.name + "'", "check", () => chooseGroup(g.id)])];
+}
+function addToGroup(id) {
+  const g = soundGroups().find((x) => x.id === id); if (!g) return;
+  const list = aselList(); if (!list.length) return;
+  change(() => { for (const { p, n } of list) { const m = Object.assign({}, p.mix || {}); m[n] = Object.assign({ volume: 1, mute: false }, m[n] || {}, { group: id }); p.mix = m; } }, { sound: true });
+  refreshAll({ keepVideo: true });
+  toast("Added " + list.length + " part" + (list.length > 1 ? "s" : "") + " to '" + g.name + "' (" + groupParts(id).length + " now). A part is in one group at a time.");
+}
+function takeOutOfGroup() {
+  const list = aselList();
+  stemChange((c) => { delete c.group; });
+  refreshAll({ keepVideo: true });
+  toast("Took " + list.length + " part" + (list.length > 1 ? "s" : "") + " out of the group. Their sound stays as it is.");
+}
+/** Loudness of each section's sound on a track, in dB, from its wave picture (fast, good enough to choose by). */
+function partDb(P, offset, p, rate) {
+  if (!P || !P.length) return null;
+  const R = rate || 50;
+  let sum = 0, k = 0;
+  for (let i = Math.max(0, Math.floor((p.start - offset) * R)); i < Math.min(P.length, Math.ceil((p.end - offset) * R)); i++) { const v = P[i] / 255; sum += v * v; k++; }
+  return k ? 10 * Math.log10(sum / k + 1e-12) : null;
+}
+/** Choose menu: the whole track, by loudness (loud / quiet / silent), the opposite, or by time. */
+function chooseItems(n, t) {
+  const sp = Layers.split(), P = (S.stemPeaks || {})[n], off = sp ? sp.start : 0;
+  const pick = (test, what) => {
+    const lv = kept().map((p) => [p, partDb(P, off, p)]).filter(([, d]) => d !== null);
+    if (!lv.length) { toast("The sound of this track is still loading. Try again in a moment.", true); return; }
+    const sorted = lv.map(([, d]) => d).filter((d) => d > -50).sort((a, b) => a - b), mid = sorted.length ? sorted[Math.floor(sorted.length / 2)] : -30;
+    S.sel.clear(); S.asel = new Map();
+    let k = 0; for (const [p, d] of lv) if (test(d, mid)) { aselSet(p, n, true); k++; }
+    refreshAll({ keepVideo: true });
+    toast(k ? "Chose " + k + " " + what + " part" + (k > 1 ? "s" : "") + " on " + Layers.TITLE[n] + "." : "No " + what + " parts on " + Layers.TITLE[n] + ".", !k);
+  };
+  return [["The whole " + Layers.TITLE[n] + " track", "list", () => { S.asel = new Map(); for (const p of kept()) aselSet(p, n, true); refreshAll({ keepVideo: true }); }],
+    ["Also the other tracks here", "layers", () => { for (const { p } of aselList()) for (const k of Layers.NAMES) aselSet(p, k, true); refreshAll({ keepVideo: true }); }],
+    "-",
+    ["All loud parts", "vol", () => pick((d, m) => d > -50 && d >= m + 5, "loud"), { tip: "Clearly louder than most parts of this track" }],
+    ["All quiet parts", "vol", () => pick((d, m) => d > -50 && d <= m - 6, "quiet"), { tip: "Clearly quieter than most parts, but not silent" }],
+    ["All silent parts", "mute", () => pick((d) => d <= -50, "silent")],
+    ["The opposite (invert)", "swap", () => { const was = new Set(aselList().filter((x) => x.n === n).map((x) => x.p)); S.asel = new Map(); for (const p of kept()) if (!was.has(p)) aselSet(p, n, true); refreshAll({ keepVideo: true }); }],
+    ["By time…", "clock", () => chooseByTime((a, b) => { S.sel.clear(); S.asel = new Map(); for (const r of layout()) if (r.out1 > a && r.out0 < b) aselSet(r.p, n, true); refreshAll({ keepVideo: true }); })]];
+}
+/** Choose video sections by how loud their own sound is (from the wave picture). */
+function chooseSections(test, what) {
+  const lv = kept().map((p) => [p, partDb(S.peaks, 0, p, S.peakRate || 50)]).filter(([, d]) => d !== null);
+  if (!lv.length) { toast("The sound is still loading. Try again in a moment.", true); return; }
+  const sorted = lv.map(([, d]) => d).filter((d) => d > -50).sort((a, b) => a - b), mid = sorted.length ? sorted[Math.floor(sorted.length / 2)] : -30;
+  S.asel = new Map(); S.sel = new Set(lv.filter(([, d]) => test(d, mid)).map(([p]) => p));
+  refreshAll({ keepVideo: true });
+  toast(S.sel.size ? "Chose " + S.sel.size + " " + what + " section" + (S.sel.size > 1 ? "s" : "") + "." : "No " + what + " sections.", !S.sel.size);
+}
+/** Ask for a stretch of time ("0:10 - 0:25") and hand it on. */
+async function chooseByTime(fn) {
+  const v = await askText("Choose by time", fmtTime(S.t, 1) + " - " + fmtTime(Math.min(rawTotal(), S.t + 10), 1), "From – to, for example 0:10 - 0:25");
+  if (v === null) return;
+  const m = String(v).split(/\s*[-–to]+\s*/).filter(Boolean).map(parseTime);
+  if (m.length !== 2 || m.some((x) => x === null || !isFinite(x)) || m[1] <= m[0]) { toast("Type two times, for example 0:10 - 0:25.", true); return; }
+  fn(m[0], m[1]);
 }
 // ---- groups of sound parts: name them, choose them in one click, lock them
 function soundGroups() { return (S.proj.settings.sound_groups = S.proj.settings.sound_groups || []); }
@@ -1787,6 +2012,8 @@ function renderStemInspector(R) {
     evenField(same(list.map(({ p, n }) => (p.mix && p.mix[n] && p.mix[n].even) || 0)), (v) => stemChange((c) => { c.even = v; }), lk),
     fadeFields(same(list.map(({ p, n }) => (p.mix && p.mix[n] && p.mix[n].fin) || 0)), same(list.map(({ p, n }) => (p.mix && p.mix[n] && p.mix[n].fout) || 0)),
       (k, v) => stemChange((c) => { c[k] = v; }), lk),
+    shapeBox((k) => same(list.map(({ p, n }) => (p.mix && p.mix[n] && p.mix[n][k]) || (k === "tone" ? "" : 0))),
+      (k, v) => stemChange((c) => { if (k === "__all") for (const x of TONE_KEYS) delete c[x]; else c[k] = v; }), lk, { nudge: true }),
     layersIn.length === 1 && !layersIn[0].startsWith("found") ? el("div", { class: "btns" }, btn("Separate again", { icon: "layers", title: "Split just these parts once more (for example voices left in the music)", onclick: () => separateAgain() }), el("span", { class: "note", id: "resplitNote" })) : null,
     oneGroup ? el("div", { class: "grp-now" }, dotFor(oneGroup.id), el("span", { text: "Group: " + oneGroup.name }),
       btn(oneGroup.locked ? "Unlock" : "Lock", { icon: oneGroup.locked ? "unlock" : "lock", cls: "sm ghost", onclick: () => groupEdit(oneGroup.id, "lock") }))
@@ -2034,6 +2261,24 @@ function timelineMenu(e) {
       ["Start here", "clock", () => { change(() => { tx.start = +t.toFixed(2); }, { keepVideo: true }); renderTexts(); renderOverlay(); }],
       ["End here", "clock", () => { change(() => { tx.end = +t.toFixed(2); }, { keepVideo: true }); renderTexts(); renderOverlay(); }],
       "-", ["Delete these words", "trash", () => { change(() => S.proj.texts.splice(i, 1), { keepVideo: true }); renderTexts(); renderOverlay(); }, { danger: true }]];
+  } else if (e.target.closest("#laneA") && S.mode === "final") {
+    const at = segAt(t), sp = at && at.s.p;
+    if (sp && !S.sel.has(sp)) { S.sel = new Set([sp]); S.anchor = sp; refreshAll({ keepVideo: true }); }
+    const sel = selList(), slk = trackLocked("sound"), m = keyMuted("original"), so = keySolo("original");
+    const onS = (fn) => { if (!change(() => { selList().forEach(fn); markHand(); }, { sound: true })) renderInspector(); };
+    items = [[m ? "Turn the sound on" : "Mute the sound track", m ? "vol" : "mute", () => flipKey("mute", "original"), { off: slk }],
+      [so ? "Stop solo" : "Solo the sound track", "target", () => flipKey("solo", "original")],
+      "-",
+      sel.length ? ["Loudness of " + (sel.length > 1 ? sel.length + " sections" : "this section"), "sliders", null, { off: slk, sub: loudnessItems((v) => onS((p) => { p.volume = v; p.mute = false; })) }] : null,
+      ...(sel.length ? shapeMenuItems((k) => same(sel.map((p) => p[k] || 0)), (k, v) => onS((p) => { if (v) p[k] = v; else delete p[k]; }), slk, true) : []),
+      ["Choose", "check", null, { sub: [
+        ["All loud sections", "vol", () => chooseSections((d, mm) => d > -50 && d >= mm + 5, "loud")],
+        ["All quiet sections", "vol", () => chooseSections((d, mm) => d > -50 && d <= mm - 6, "quiet")],
+        ["All silent sections", "mute", () => chooseSections((d) => d <= -50, "silent")],
+        ["The opposite (invert)", "swap", () => { S.sel = new Set(kept().filter((p) => !S.sel.has(p))); refreshAll({ keepVideo: true }); }],
+        ["By time…", "clock", () => chooseByTime((a, b) => { S.sel = new Set(layout().filter((r) => r.out1 > a && r.out0 < b).map((r) => r.p)); refreshAll({ keepVideo: true }); })]] }],
+      ["Volume line", "pulse", null, { sub: lineItems("original", t) }],
+      "-", ["Split here", "split", () => { seek(t); splitAtPlayhead(); }, { key: "S", off: lk, why }]];
   } else if (musicEl && musicEl.dataset.i !== undefined) {
     const i = +musicEl.dataset.i, pe = e.target.closest(".mpart");
     if (pe && S.mode === "final" && !(S.msel && S.msel.i === i && S.msel.ks.has(+pe.dataset.k))) { S.sel.clear(); S.asel = new Map(); S.msel = { i, ks: new Set([+pe.dataset.k]) }; refreshAll({ keepVideo: true }); }
@@ -2497,6 +2742,8 @@ function renderInspector() {
   vol.addEventListener("input", () => { volTxt.textContent = Math.round(vol.value * 100) + "%"; });
   if (S.mode === "final") basics.append(el("div", { class: "field" }, el("span", {}, "Loudness ", volTxt, el("small", { class: "note", text: " (up to 500%)" })), vol), el("label", { class: "swl" }, el("span", { text: "Mute" }), muteSw));
   if (S.mode === "final" && S.info.has_audio && !stemsOn()) basics.append(
+    shapeBox((k) => same(sel.map((p) => p[k] || (k === "tone" ? "" : 0))),
+      (k, v) => onSound((p) => { if (k === "__all") for (const x of TONE_KEYS) delete p[x]; else if (v) p[k] = v; else delete p[k]; }), trackLocked("sound"), { nudge: true }),
     evenField(same(sel.map((p) => p.even || 0)), (v) => onSound((p) => { if (v) p.even = v; else delete p.even; }), trackLocked("sound")),
     fadeFields(same(sel.map((p) => p.fin || 0)), same(sel.map((p) => p.fout || 0)), (k, v) => onSound((p) => { if (v > 0) p[k] = v; else delete p[k]; }), trackLocked("sound"), ["Sound fade in", "Sound fade out"]));
   if (sel.length === 1) basics.append(trimFields(sel[0]));

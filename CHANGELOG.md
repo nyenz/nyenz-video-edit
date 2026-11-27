@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.35.0 — parts, groups, volume lines, sub-menus
+* **Shape the sound** of any part, group, section or song, in one small card with tabs: **Tone** (Clear voice, Cut
+  bass, Bright, Warm, Phone), **Cuts** (low cut against rumble and wind, high cut against hiss), **Dynamics** (gentle or
+  strong: peaks down, fuller sound), **Clean** (noise removal) and **Timing** (move the sound a few milliseconds later or
+  earlier to fix lip sync). It works on one part only, a group, a whole track or a whole song. You hear it in the player
+  (Clean only in the export and the Quick preview file) and it is in the finished video.
+* **Volume lines**: on any sound track or song, add dots and drag them up or down to set the loudness at exact moments
+  (100 % in the middle, 200 % at the top). Double-click the line for a dot, right-click a dot to remove it, or use
+  **Dip here** for a quick 2-second dip.
+* **Groups grow**: add more parts to a group later (**Group → Add to 'Group A'**), or take parts out. A part is in one
+  group at a time; choosing a group and changing it changes all its parts.
+* **Choose parts** by loudness (all loud, all quiet, all silent), **the opposite**, or **by time** (0:10 - 0:25), on
+  split tracks and on the plain sound.
+* **Right-click menus have sub-menus** (Loudness, Tone, Cuts, Dynamics, Clean, Group, Choose, Volume line), so they
+  stay short. The plain Sound track has its own right-click menu now.
+
 ## 1.34.0 — every track: Mute, Solo, Lock; loudness to 500 %; Exports in tabs
 * **Loudness goes up to 500 %** on every sound: sections, the video's own sound, Voices / Music / Effects and every
   song. It still starts at 100 %. A soft limiter keeps very loud settings clean instead of crackling, in the player and

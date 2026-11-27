@@ -182,6 +182,59 @@ function parseTime(text) {
   return total;
 }
 function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+/** Sound shaping heard live (the same as the export, see project.py TONES): Tone presets, Low cut, High cut, Dynamics.
+ *  Clean (noise removal) is only in the export and Quick preview: it cannot be done live. */
+const TONES = {
+  voice: [["highpass", 90], ["peaking", 250, -3, 1], ["peaking", 3000, 4, 1.2]],
+  cutbass: [["lowshelf", 180, -10]],
+  bright: [["highshelf", 5000, 5]],
+  warm: [["lowshelf", 200, 3], ["highshelf", 8000, -3]],
+  phone: [["highpass", 400], ["lowpass", 3400]],
+};
+const TONE_NAMES = [["", "Off"], ["voice", "Clear voice"], ["cutbass", "Cut bass"], ["bright", "Bright"], ["warm", "Warm"], ["phone", "Phone"]];
+/** A chain of filters in an audio context whose settings change with the part being heard: input -> ... -> output. */
+function toneChain(ctx) {
+  const f = [], mk = () => { const b = ctx.createBiquadFilter(); b.type = "allpass"; return b; };
+  for (let i = 0; i < 5; i++) f.push(mk());
+  const comp = ctx.createDynamicsCompressor(), thru = ctx.createGain();
+  f.reduce((a, b) => { a.connect(b); return b; });
+  f[4].connect(thru);
+  let key = "", dynOn = false;
+  return {
+    input: f[0], output: thru,
+    set(sh) {
+      sh = sh || {};
+      const k = [sh.tone || "", sh.hp || 0, sh.lp || 0, sh.dyn || 0].join();
+      if (k === key) return; key = k;
+      const list = [];
+      if (sh.hp) list.push(["highpass", +sh.hp]);
+      if (sh.lp) list.push(["lowpass", +sh.lp]);
+      for (const x of TONES[sh.tone] || []) list.push(x);
+      f.forEach((b, i) => {
+        const x = list[i];
+        if (!x) { b.type = "allpass"; return; }
+        b.type = x[0]; b.frequency.value = x[1];
+        if (x[2] !== undefined) b.gain.value = x[2];
+        b.Q.value = x[3] !== undefined ? x[3] * 1.4 : 0.707;
+      });
+      const want = +sh.dyn || 0;
+      if (want && !dynOn) { f[4].disconnect(); f[4].connect(comp); comp.connect(thru); dynOn = true; }
+      if (!want && dynOn) { f[4].disconnect(); comp.disconnect(); f[4].connect(thru); dynOn = false; }
+      if (want) { comp.threshold.value = want === 2 ? -28 : -20; comp.ratio.value = want === 2 ? 6 : 3; comp.attack.value = 0.008; comp.release.value = 0.14; }
+      thru.gain.value = want ? Math.pow(10, (want === 2 ? 4 : 2) / 20) : 1;
+    },
+  };
+}
+/** A volume line (points [seconds, loudness]) at a time: straight between points, flat before the first and after the last. */
+function lineAt(line, t) {
+  if (!line || !line.length) return 1;
+  if (t <= line[0][0]) return +line[0][1];
+  for (let i = 1; i < line.length; i++) {
+    const [a, ga] = line[i - 1], [b, gb] = line[i];
+    if (t <= b) return b > a ? ga + (gb - ga) * (t - a) / (b - a) : gb;
+  }
+  return +line[line.length - 1][1];
+}
 /** Where live sound goes: through a soft limiter, so loudness up to 500 % stays clean instead of crackling (one per audio context). */
 function soundOut(ctx) {
   if (!ctx._out) {
@@ -706,13 +759,40 @@ function ctxMenu(items, x, y) {
   if (!list.length) return null;
   const m = el("div", { class: "menu ctx", role: "menu" });
   const rows = [];
+  let sub = null;
+  const closeSub = () => { if (sub) { sub.remove(); sub = null; m._sub = null; } for (const r of rows) r.classList.remove("open"); };
+  /** A sub-menu (a menu item with { sub: [...] }): opens beside its row, where there is room. */
+  const openSub = (row, items2) => {
+    closeSub(); row.classList.add("open");
+    sub = el("div", { class: "menu ctx sub", role: "menu" });
+    for (const it of items2.filter(Boolean)) {
+      if (it === "-") { sub.append(el("hr")); continue; }
+      const [l2, i2, f2, o2] = it, op = o2 || {};
+      const r2 = el("div", { role: "menuitem", class: (op.danger ? "danger" : "") + (op.off ? " off" : "") + (op.on ? " on" : ""), title: op.off && op.why ? op.why : (op.tip || "") },
+        i2 ? icon(i2, "s") : el("i", { class: "noic" }), el("span", { text: l2 }), op.on ? icon("check", "s") : null, op.key ? el("kbd", { text: op.key }) : null);
+      r2.addEventListener("mousedown", (e) => e.preventDefault());
+      r2.addEventListener("click", (e) => { e.stopPropagation(); if (op.off) { if (op.why) toast(op.why, true); return; } closeCtx(); f2(); });
+      sub.append(r2);
+    }
+    document.body.append(sub); m._sub = sub;
+    const rr = row.getBoundingClientRect(), sr = sub.getBoundingClientRect();
+    const right = rr.right + sr.width + 6 < window.innerWidth;
+    sub.style.left = (right ? rr.right + 2 : rr.left - sr.width - 2) + "px";
+    sub.style.top = Math.max(4, Math.min(rr.top - 5, window.innerHeight - sr.height - 6)) + "px";
+  };
   for (const it of list) {
     if (it === "-") { m.append(el("hr")); continue; }
     const [label, ic, fn, o] = it, opt = o || {};
-    const row = el("div", { role: "menuitem", class: (opt.danger ? "danger" : "") + (opt.off ? " off" : ""), title: opt.off && opt.why ? opt.why : "" },
-      ic ? icon(ic, "s") : el("i", { class: "noic" }), el("span", { text: label }), opt.key ? el("kbd", { text: opt.key }) : null);
+    const row = el("div", { role: "menuitem", class: (opt.danger ? "danger" : "") + (opt.off ? " off" : "") + (opt.sub ? " has-sub" : ""), title: opt.off && opt.why ? opt.why : (opt.tip || "") },
+      ic ? icon(ic, "s") : el("i", { class: "noic" }), el("span", { text: label }), opt.key ? el("kbd", { text: opt.key }) : null, opt.sub ? icon("chevr", "s") : null);
     row.addEventListener("mousedown", (e) => e.preventDefault());
-    row.addEventListener("click", (e) => { e.stopPropagation(); if (opt.off) { if (opt.why) toast(opt.why, true); return; } closeCtx(); fn(); });
+    if (opt.sub) {
+      row.addEventListener("mouseenter", () => { if (!opt.off) openSub(row, opt.sub); });
+      row.addEventListener("click", (e) => { e.stopPropagation(); if (opt.off) { if (opt.why) toast(opt.why, true); return; } openSub(row, opt.sub); });
+    } else {
+      row.addEventListener("mouseenter", closeSub);
+      row.addEventListener("click", (e) => { e.stopPropagation(); if (opt.off) { if (opt.why) toast(opt.why, true); return; } closeCtx(); fn(); });
+    }
     m.append(row); rows.push(row);
   }
   document.body.append(m);
@@ -724,9 +804,10 @@ function ctxMenu(items, x, y) {
   const key = (e) => {
     if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeCtx(); }
     else if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); e.stopPropagation(); hl = (hl + (e.key === "ArrowDown" ? 1 : rows.length - 1)) % rows.length; paint(); }
-    else if (e.key === "Enter" && hl >= 0) { e.preventDefault(); e.stopPropagation(); rows[hl].click(); }
+    else if ((e.key === "Enter" || e.key === "ArrowRight") && hl >= 0) { e.preventDefault(); e.stopPropagation(); if (e.key === "Enter" || rows[hl].classList.contains("has-sub")) rows[hl].click(); }
+    else if (e.key === "ArrowLeft") { e.preventDefault(); closeSub(); }
   };
-  const outside = (e) => { if (!m.contains(e.target)) closeCtx(); };
+  const outside = (e) => { if (!m.contains(e.target) && !(m._sub && m._sub.contains(e.target))) closeCtx(); };
   const away = () => closeCtx();
   setTimeout(() => { document.addEventListener("mousedown", outside, true); document.addEventListener("contextmenu", outside, true); }, 0);
   document.addEventListener("keydown", key, true);
@@ -739,7 +820,7 @@ function ctxMenu(items, x, y) {
   };
   return m;
 }
-function closeCtx() { if (Ctx.m) { Ctx.m.remove(); Ctx.m = null; Ctx.off(); } }
+function closeCtx() { if (Ctx.m) { if (Ctx.m._sub) Ctx.m._sub.remove(); Ctx.m.remove(); Ctx.m = null; Ctx.off(); } }
 /** Right-click on node (or a "..." button) opens the menu that items() gives. */
 function onRightClick(node, items) {
   node.addEventListener("contextmenu", (e) => { e.preventDefault(); e.stopPropagation(); ctxMenu(items(e), e.clientX, e.clientY); });

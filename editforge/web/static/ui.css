@@ -1092,3 +1092,32 @@ main.view { container-type: inline-size; }
 .ex-tab .note { font-size: 11px; }
 .ex-tab.busy .note { color: var(--amber); }
 .ex-find { flex: none; height: 30px; }
+/* Shape the sound: tabs inside one card, so the panel never grows long */
+.shape-box { display: flex; flex-direction: column; gap: 8px; }
+.shape-box > .field > span { display: flex; align-items: center; gap: 4px; }
+.shape-tabs { display: flex; flex-wrap: wrap; gap: 2px; padding: 2px; background: var(--sunk); border: 1px solid var(--line); border-radius: var(--r-s); }
+.shape-tab { flex: 1 1 auto; min-width: 0; height: 26px; display: flex; align-items: center; justify-content: center; gap: 4px; border: 0; border-radius: 5px; background: transparent;
+  color: var(--muted); cursor: pointer; font: 600 11.5px/1 inherit; padding: 0 8px; white-space: nowrap; transition: background .15s, color .15s; }
+.shape-tab:hover { color: var(--ink); }
+.shape-tab.on { background: var(--raised); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line); }
+.shape-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--amber); flex: none; }
+.shape-body { display: flex; flex-direction: column; gap: 8px; animation: shapeIn .16s ease-out; }
+@keyframes shapeIn { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
+.seg.wrap { flex-wrap: wrap; }
+.seg.wrap button { flex: 1 1 40%; }
+.nudge-row { display: flex; align-items: center; gap: 4px; }
+.nudge-row .input { width: 64px; text-align: center; }
+.link-btn { margin-left: auto; border: 0; background: transparent; color: var(--accent); font: 600 11.5px/1 inherit; cursor: pointer; padding: 2px 4px; border-radius: 4px; }
+.link-btn:hover { background: var(--sunk); }
+.menu.ctx.sub { position: fixed; z-index: 301; min-width: 200px; animation: shapeIn .12s ease-out; }
+.menu.ctx div.has-sub > .ic:last-child { margin-left: auto; color: var(--faint); }
+.menu.ctx div.has-sub.open { background: var(--sunk); }
+.menu.ctx div.on > .ic:nth-last-child(1), .menu.ctx div.on > .ic:nth-last-child(2) { color: var(--accent); }
+.menu.ctx div.on > .ic + span + .ic { margin-left: auto; }
+/* volume lines on the sound tracks */
+svg.vline { position: absolute; top: 0; z-index: 5; overflow: visible; pointer-events: none; }
+svg.vline .vl-mid { stroke: rgba(255, 255, 255, .08); stroke-dasharray: 3 4; }
+svg.vline .vl-path { fill: none; stroke: var(--amber); stroke-width: 1.6; filter: drop-shadow(0 0 3px rgba(255, 190, 90, .35)); }
+svg.vline .vl-hit { fill: none; stroke: transparent; stroke-width: 12; pointer-events: stroke; cursor: copy; }
+svg.vline .vl-dot { fill: var(--panel); stroke: var(--amber); stroke-width: 2; pointer-events: all; cursor: grab; transition: r .12s; }
+svg.vline .vl-dot:hover { r: 6; fill: var(--amber); }

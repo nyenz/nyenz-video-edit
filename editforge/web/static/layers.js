@@ -185,12 +185,12 @@ const Layers = (() => {
     if (L.els) return true;
     const Ctx = window.AudioContext || window.webkitAudioContext;
     if (!Ctx) return false;
-    L.ctx = new Ctx(); L.els = {}; L.gains = {};
+    L.ctx = new Ctx(); L.els = {}; L.gains = {}; L.tones = {};
     for (const n of NAMES) {
       const a = new Audio(); a.preload = "auto";
-      const g = L.ctx.createGain();
-      L.ctx.createMediaElementSource(a).connect(g); g.connect(soundOut(L.ctx));
-      L.els[n] = a; L.gains[n] = g;
+      const g = L.ctx.createGain(), tc = toneChain(L.ctx);
+      L.ctx.createMediaElementSource(a).connect(tc.input); tc.output.connect(g); g.connect(soundOut(L.ctx));   // tone, then loudness
+      L.els[n] = a; L.gains[n] = g; L.tones[n] = tc;
     }
     return true;
   }
@@ -202,7 +202,9 @@ const Layers = (() => {
     const duck = typeof stemDuckGain === "function" && typeof active === "function" ? stemDuckGain(n, active().currentTime) : 1;   // going down under another track
     const master = typeof masterGain === "function" ? masterGain() : 1;            // the Overall loudness chosen in Export
     const heard = typeof keyHeard === "function" && !keyHeard(n) ? 0 : 1;          // muted, or someone else is soloed
-    L.gains[n].gain.value = Math.max(0, v) * f * ownGain(p, n) * shape * duck * master * heard;
+    const line = lineAt((st().vline || {})[n], S.t);                                // the track's volume line
+    if (L.tones && L.tones[n]) L.tones[n].set(p && p.mix && p.mix[n]);             // the part's tone, cuts, dynamics
+    L.gains[n].gain.value = Math.max(0, v) * f * ownGain(p, n) * shape * duck * master * heard * line;
   }
   function gainsNow(p) { for (const n of NAMES) setGain(n, gainOf(n), p); }
   function on() { return usable(); }
@@ -221,10 +223,11 @@ const Layers = (() => {
     const now = performance.now();
     if (!force && now - L.last < 180) return;
     L.last = now;
-    const sp = L.info.split, target = v.currentTime - sp.start, rate = clamp(p ? p.speed : 1, 0.0625, 4);
+    const sp = L.info.split, rate = clamp(p ? p.speed : 1, 0.0625, 4);
     gainsNow(p);
     for (const n of NAMES) {
-      const a = L.els[n];
+      const a = L.els[n], nudge = (p && p.mix && p.mix[n] && +p.mix[n].nudge) || 0;
+      const target = v.currentTime - sp.start - nudge / 1000;                       // a nudged part is heard later (or earlier)
       if (target < 0 || target > sp.end - sp.start - 0.05) { a.pause(); continue; }          // outside the split part: silence
       if (Math.abs(a.currentTime - target) > 0.15 && a.readyState >= 1) a.currentTime = target;
       if (a.playbackRate !== rate) a.playbackRate = rate;
