@@ -142,3 +142,51 @@ def test_looking_harder_inside_a_part_uses_the_network(tmp_path):
         state.previews.shutdown()
         srv.shutdown()
         srv.server_close()
+
+
+def _wait(sf, path):
+    import time
+    for _ in range(1200):
+        st = sf.status(path)
+        if st["state"] in ("ready", "failed"):
+            return st
+        time.sleep(0.1)
+    return st
+
+
+def test_a_long_video_is_looked_at_in_parts_that_survive_a_restart(tmp_path):
+    """1.38: in parts (here 4 s, as if 5 minutes), each saved as it is done: the same scenes as one pass, on the same
+    frames, and a restart goes on from the saved parts."""
+    import time
+    from editforge import clipsets
+    path = _join(tmp_path, "five", [_clip(tmp_path / f"p{i}.mp4", SRC[i], 3.0) for i in range(5)])   # cuts at 3, 6, 9, 12
+    one = clipsets.SceneFinder(tmp_path / "one", lambda s: "fp", home=MODEL.parent.parent)
+    if one.version() != clipsets.NET_VERSION:
+        pytest.skip("the model file here is not the one the app expects")
+    one.start(path, 15.0, True)
+    whole = _wait(one, path)
+    parted = clipsets.SceneFinder(tmp_path / "parts", lambda s: "fp", home=MODEL.parent.parent)
+    parted.PART, parted.OVERLAP = 4.0, 1.0
+    parted.start(path, 15.0, True)
+    # stop it after the first parts are saved, as a power cut would
+    for _ in range(600):
+        if len(list((tmp_path / "parts" / "parts" / "fp").glob("0*.npz"))) >= 2:
+            break
+        time.sleep(0.05)
+    parted.stop(path)
+    saved = sorted(p.name for p in (tmp_path / "parts" / "parts" / "fp").glob("0*.npz"))
+    assert len(saved) >= 2
+    first_part = (tmp_path / "parts" / "parts" / "fp" / saved[0]).stat().st_mtime
+    time.sleep(0.2)
+    again = clipsets.SceneFinder(tmp_path / "parts", lambda s: "fp", home=MODEL.parent.parent)
+    again.PART, again.OVERLAP = 4.0, 1.0
+    again.start(path, 15.0, True)
+    st = _wait(again, path)
+    assert st["state"] == "ready", st
+    assert [round(t, 2) for t in st["scenes"]] == [round(t, 2) for t in whole["scenes"]]
+    assert [round(t) for t in st["scenes"]] == [3, 6, 9, 12]
+    a, ra = one.chances(path)
+    b, rb = again.chances(path)
+    assert ra == rb and len(a) == len(b) and float(np.abs(a - b)[30:-30].max()) < 0.25
+    assert not (tmp_path / "parts" / "parts" / "fp").exists()              # the parts go once the whole is saved
+    assert first_part                                                        # (the first part was not looked at again)

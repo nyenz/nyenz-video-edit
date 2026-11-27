@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.38.0 — Back, going on after a power cut, faster scene finding, titles by themselves
+* **Back** (next to Undo, and in every right-click menu): go back on one kind of change — Cuts, Loudness, Level and
+  fades, Shape the sound, Songs, Volume lines, Groups, Words, Picture, Export and more — up to **5 steps each**. Only
+  that kind comes back; everything you did since stays. The list is kept with the project, so it is still there after
+  the app (or the computer) is closed.
+* **Goes on after a power cut or a closed app**:
+  * scene finding in a long video is done in parts of 5 minutes, each kept as it is done, and goes on from the last part;
+  * the light copy for smooth playback of a long video is made in parts of 2 minutes, kept the same way;
+  * exports that were stopped start again by themselves, reusing every piece that was already finished.
+* **Scene finding about 40 % faster**: the scene model now uses every processor core (it used only half).
+* **Titles by themselves**: a new project or clip set is named from the file name, cleaned up
+  (`my_holiday-video.final.1080p` becomes *My holiday video*); exports take that name.
+
 ## 1.37.0 — Separate again: choose what to pull out
 * **Separate again now asks what to pull out**: on Music you pull out **voices** or **effects**, on Effects **voices** or
   **music**, on Voices **music** or **effects**. What is pulled out **joins its own track** (no extra track any more),

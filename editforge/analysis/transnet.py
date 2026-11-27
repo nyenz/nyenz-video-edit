@@ -16,6 +16,7 @@ cuts are then put on their exact frame by looking at the full pictures again (``
 from __future__ import annotations
 
 import subprocess
+import os
 import threading
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
@@ -57,6 +58,12 @@ def _session(path: Path) -> Any:
             import onnxruntime as ort
             opts = ort.SessionOptions()
             opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+            # every logical core (onnxruntime's own choice is the physical ones only: about half as fast here), and no
+            # busy-waiting, so the video reading next to it keeps its share
+            n = os.cpu_count() or 2
+            opts.intra_op_num_threads = n if n <= 4 else n - 1
+            opts.inter_op_num_threads = 1
+            opts.add_session_config_entry("session.intra_op.allow_spinning", "0")
             s = ort.InferenceSession(str(path), sess_options=opts, providers=["CPUExecutionProvider"])
             _SESSIONS[str(path)] = s
         return s

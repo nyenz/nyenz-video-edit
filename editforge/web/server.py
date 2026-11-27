@@ -87,7 +87,7 @@ MAX_RECIPES = 100
 MAX_CLIPS = 200
 MIN_CLIP_SECONDS = 0.04
 CLIP_QUALITIES = {"best": "best", "high": "high", "small": "medium"}
-MAX_JSON = 2 * 1024 * 1024
+MAX_JSON = 8 * 1024 * 1024
 MAX_UPLOAD = 20 * 1024 ** 3
 SAFE_NAME = re.compile(r"[^\w.\- ()\[\]]", re.UNICODE)
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self'; connect-src 'self'; "
@@ -219,6 +219,7 @@ class AppState:
             self.updater.check_in_background()
             threading.Thread(target=self.auto_clean, name="editforge-clean", daemon=True).start()
             threading.Thread(target=self.resume_tasks, name="editforge-tasks", daemon=True).start()
+            self.manager.resume_stopped()               # exports that were stopped by a closed app or a power cut go on by themselves
 
     # ---- linked files ------------------------------------------------------------------------------
     def _load_links(self) -> None:
@@ -1175,6 +1176,41 @@ class AppState:
                 freed += gone(f)
         return freed
 
+    HISTORY_MAX = 4_000_000            # bytes of Back history kept per project
+
+    def history_path(self, pid: str) -> Path:
+        return self.project_path(pid).with_suffix(".history.json")
+
+    def load_history(self, pid: str) -> Dict[str, Any]:
+        """The Back list of a project: for each kind of change, the last few versions before it (kept when the app closes)."""
+        self.project_path(pid)
+        try:
+            data = json.loads(self.history_path(pid).read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def save_history(self, pid: str, hist: Any) -> Dict[str, Any]:
+        if not self.project_path(pid).is_file():
+            raise EditForgeError("That project was not found.", "Open it from the list.")
+        clean: Dict[str, Any] = {}
+        if isinstance(hist, dict):
+            for label, items in list(hist.items())[:40]:
+                if not isinstance(items, list):
+                    continue
+                keep = [x for x in items[:5] if isinstance(x, dict) and isinstance(x.get("before"), str) and len(x["before"]) < 1_500_000]
+                if keep:
+                    clean[str(label)[:40]] = [{"when": float(x.get("when") or 0), "before": x["before"], "what": str(x.get("what") or "")[:120]} for x in keep]
+        text = json.dumps(clean)
+        while len(text) > self.HISTORY_MAX and clean:             # too big: drop the oldest entries first
+            label = min(clean, key=lambda k: clean[k][-1]["when"])
+            clean[label].pop()
+            if not clean[label]:
+                del clean[label]
+            text = json.dumps(clean)
+        atomic_write_json(self.history_path(pid), clean)
+        return {"ok": True, "size": len(text)}
+
     def delete_project(self, pid: str) -> bool:
         """Delete for good. A video copy that was sent in (not linked) and that no other project uses is deleted too."""
         try:
@@ -1186,6 +1222,10 @@ class AppState:
             self.project_path(pid).unlink()
         except OSError:
             return False
+        try:
+            self.history_path(pid).unlink()
+        except OSError:
+            pass
         self.drop_previews(pid)
         self.freed = self._drop_upload(str(proj.get("source") or "")) + self.drop_video_caches(fp)
         return True
@@ -2005,6 +2045,10 @@ class Handler(BaseHTTPRequestHandler):
                 if self._guard() is None:
                     return
                 self._json({"projects": self.state.list_projects()})
+            elif re.fullmatch(rf"/api/projects/{PROJECT_ID}/history", path):
+                if self._guard() is None:
+                    return
+                self._json({"history": self.state.load_history(path.split("/")[3])})
             elif re.fullmatch(rf"/api/projects/{PROJECT_ID}/resplit", path):
                 if self._guard() is None:
                     return
@@ -2335,7 +2379,9 @@ class Handler(BaseHTTPRequestHandler):
             data = self._read_json(allow_list=path == "/api/recipes")
             if data is None:
                 return
-            if re.fullmatch(rf"/api/projects/{PROJECT_ID}", path):
+            if re.fullmatch(rf"/api/projects/{PROJECT_ID}/history", path):
+                self._json(self.state.save_history(path.split("/")[3], data.get("history")))
+            elif re.fullmatch(rf"/api/projects/{PROJECT_ID}", path):
                 pid = path.rsplit("/", 1)[1]
                 with self.state._task_lock:
                     old = self.state.load_project(pid)
@@ -2498,7 +2544,7 @@ class Handler(BaseHTTPRequestHandler):
         info = probe_media(src)
         if info.duration < 0.5:
             raise EditForgeError("That file is too short to take clips from.", "Choose a longer video.")
-        name = " ".join(str(data.get("name") or Path(src).stem).split())[:80]
+        name = " ".join(str(data.get("name") or project_mod.nice_title(Path(src).stem)).split())[:80]
         cs = self.state.save_clipset(uuid.uuid4().hex[:12], {"name": name, "source": src_id, "clips": []})
         return self.state.clipset_view(cs)
 
@@ -2580,7 +2626,7 @@ class Handler(BaseHTTPRequestHandler):
         except (TypeError, ValueError):
             interval = 0.0
         pieces = project_mod.slice_pieces(info.duration, interval) if interval > 0 else project_mod.slice_pieces(info.duration, info.duration + 1)
-        name = str(data.get("name") or Path(src).stem)
+        name = str(data.get("name") or project_mod.nice_title(Path(src).stem))      # the title comes from the file name
         proj = self.state.save_project(uuid.uuid4().hex[:12], {"name": name, "source": src_id, "pieces": pieces, "settings": {},
                                                                "stage": "final" if data.get("stage") == "final" else "edit"})
         return self._project_view(proj)

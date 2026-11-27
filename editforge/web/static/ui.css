@@ -1146,3 +1146,5 @@ svg.vline .vl-dot:hover { r: 6; fill: var(--amber); }
 .sep-box { display: flex; flex-direction: column; gap: 8px; }
 .sep-pulls .btn { flex: 1; }
 .sep-last { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: var(--r-s); background: var(--sunk); border: 1px solid var(--line-soft); }
+.hist-btn { gap: 4px; padding: 0 8px; }
+.hist-btn > .ic:last-child { opacity: .6; }

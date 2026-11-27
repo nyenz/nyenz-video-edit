@@ -177,9 +177,108 @@ function saveNow() {
 function change(fn, opts) {
   if (opts && opts.sound && trackLocked("sound")) { lockedNote("sound"); return false; }
   if (locked() && !(opts && (opts.any || opts.keepVideo || (opts.sound && S.viewStep === null && !S.waiting)))) { lockedNote(); return false; }      // settings, words and music stay editable
-  remember(); fn(); refreshAll(opts); scheduleSave();
+  remember(); const before = S.undo[S.undo.length - 1];
+  fn(); refreshAll(opts); scheduleSave();
+  noteHistory(before);
   return true;
 }
+// ---- Back: for each kind of change, the last 5 versions before it, kept with the project (also after the app closes).
+// Going back changes only that kind of thing: going back on Loudness keeps the cuts, words and pictures you made since.
+const PIECE_GROUPS = {
+  "Loudness": ["volume", "mute"], "Level and fades": ["even", "fin", "fout"], "Shape the sound": ["tone", "hp", "lp", "dyn", "nr", "nudge"],
+  "Picture": ["fx", "color", "zoom", "follow", "place"],
+};
+const SETTING_GROUPS = {
+  "Songs": ["layers", "music", "music_volume", "duck"], "Volume lines": ["vline"], "Mute, solo and locks": ["mute", "solo", "locks"],
+  "Split tracks": ["mix_split", "mix_voices", "mix_music", "mix_effects", "mix_found", "mix_found_voices", "mix_found_music", "mix_found_effects", "ducks"],
+  "Groups": ["sound_groups"], "Picture": ["frame", "shape"], "Export": ["quality", "export_size", "loudness_step", "made_for"],
+  "Sound clean-up": ["noise", "vocals", "voice_boost", "compress", "bass", "treble", "original_sound"],
+};
+S.hist = {};
+const cutsOf = (ps) => JSON.stringify(ps.map((p) => [p.start, p.end, !!p.off, p.speed, !!p.reverse]));
+function mixPart(m, keys) { const o = {}; for (const [n, v] of Object.entries(m || {})) { const x = {}; for (const k of keys) if (v[k] !== undefined) x[k] = v[k]; if (Object.keys(x).length) o[n] = x; } return o; }
+/** Which kinds of things a change touched (labels of the Back menu). */
+function historyLabels(a, b) {
+  const out = new Set();
+  if (cutsOf(a.pieces) !== cutsOf(b.pieces)) out.add("Cuts");
+  else {
+    for (const [label, keys] of Object.entries(PIECE_GROUPS)) {
+      const pick = (ps) => JSON.stringify(ps.map((p) => [keys.map((k) => p[k] === undefined ? null : p[k]), mixPart(p.mix, label === "Picture" ? [] : keys.concat(label === "Loudness" ? ["group"] : []))]));
+      if (pick(a.pieces) !== pick(b.pieces)) out.add(label === "Loudness" && JSON.stringify(a.pieces.map((p) => mixPart(p.mix, ["group"]))) !== JSON.stringify(b.pieces.map((p) => mixPart(p.mix, ["group"]))) ? "Groups" : label);
+    }
+  }
+  for (const [label, keys] of Object.entries(SETTING_GROUPS)) if (keys.some((k) => JSON.stringify(a.settings[k]) !== JSON.stringify(b.settings[k]))) out.add(label);
+  if (JSON.stringify(a.texts || []) !== JSON.stringify(b.texts || [])) out.add("Words");
+  if (a.name !== b.name) out.add("Name");
+  return [...out];
+}
+function noteHistory(before) {
+  const a = JSON.parse(before), b = JSON.parse(snapshot()), now = Date.now();
+  const labels = historyLabels(a, b); if (!labels.length) return;
+  for (const label of labels) {
+    const list = S.hist[label] = S.hist[label] || [];
+    if (list.length && now - list[0].when < 1200) continue;          // one step for quick repeats (a drag, a typed number)
+    list.unshift({ when: now, before });
+    if (list.length > 5) list.length = 5;
+  }
+  clearTimeout(S.histTimer); S.histTimer = setTimeout(saveHistory, 1500);
+}
+async function saveHistory() {
+  if (!S.id) return;
+  try { await api("/api/projects/" + S.id + "/history", { method: "PUT", json: { history: S.hist } }); } catch (e) { /* kept in memory; tried again next time */ }
+}
+async function loadHistory() {
+  try { const r = await api("/api/projects/" + S.id + "/history"); S.hist = r.history || {}; } catch (e) { S.hist = {}; }
+}
+/** Go back on one kind of change: only that kind comes back as it was (the cuts come back whole). */
+function backTo(label, i) {
+  const e = (S.hist[label] || [])[i]; if (!e) return;
+  const old = JSON.parse(e.before), cur = JSON.parse(snapshot());
+  const sameCuts = cutsOf(old.pieces) === cutsOf(cur.pieces);
+  const ok = change(() => {
+    if (label === "Cuts") S.proj.pieces = old.pieces.map(fixPiece);
+    else if (PIECE_GROUPS[label] || label === "Groups") {
+      const keys = label === "Groups" ? [] : PIECE_GROUPS[label], mk = label === "Groups" ? ["group"] : keys.concat(label === "Loudness" ? ["group"] : []);
+      // each section takes the setting of the section it was part of then (a section cut in two since gets it on both halves)
+      const from = (p, j) => sameCuts ? old.pieces[j] : old.pieces.find((q) => !!q.off === !!p.off && q.start <= p.start + 1e-3 && q.end >= p.end - 1e-3)
+        || old.pieces.find((q) => q.start < p.end && q.end > p.start);
+      S.proj.pieces.forEach((p, j) => {
+        const q = from(p, j); if (!q) return;
+        for (const k of keys) { if (q[k] === undefined) delete p[k]; else p[k] = clone(q[k]); }
+        if (label !== "Picture") {
+          const m = Object.assign({}, p.mix || {});
+          for (const n of new Set(Object.keys(m).concat(Object.keys(q.mix || {})))) {
+            const c = Object.assign({ volume: 1, mute: false }, m[n] || {}), from = (q.mix || {})[n] || {};
+            for (const k of mk) { if (from[k] === undefined) delete c[k]; else c[k] = from[k]; }
+            if (!c.mute && Math.abs(c.volume - 1) < 0.001 && !c.group && !SHAPE_KEYS.some((k) => c[k])) delete m[n]; else m[n] = c;
+          }
+          if (Object.keys(m).length) p.mix = m; else delete p.mix;
+        }
+      });
+    }
+    if (SETTING_GROUPS[label]) for (const k of SETTING_GROUPS[label]) { if (old.settings[k] === undefined) delete S.proj.settings[k]; else S.proj.settings[k] = clone(old.settings[k]); }
+    if (label === "Groups") S.proj.settings.sound_groups = clone(old.settings.sound_groups || []);
+    if (label === "Words") S.proj.texts = clone(old.texts || []);
+    if (label === "Name") S.proj.name = old.name;
+  }, { any: true });
+  if (!ok) return;
+  if (typeof Layers !== "undefined") { S.stemFor = null; Layers.refresh(); }
+  refreshAll(); if (S.playing) musicPlay();
+  toast("Back: " + label + " as it was " + agoText(e.when) + ". Everything else stays as it is now. Ctrl + Z undoes this.");
+}
+function agoText(when) {
+  const s = Math.max(0, (Date.now() - when) / 1000);
+  if (s < 60) return "just now"; if (s < 3600) return Math.round(s / 60) + " min ago";
+  if (s < 86400) return Math.round(s / 3600) + " h ago"; return new Date(when).toLocaleDateString();
+}
+/** The Back menu items: one row per kind of change, each with its last steps. Only some kinds when ``only`` is given. */
+function backItems(only) {
+  const labels = Object.keys(S.hist).filter((l) => S.hist[l].length && (!only || only.includes(l)));
+  if (!labels.length) return [["Nothing to go back to yet", "info", () => {}, { off: true }]];
+  labels.sort((x, y) => S.hist[y][0].when - S.hist[x][0].when);
+  return labels.map((l) => [l, "restore", null, { sub: S.hist[l].map((e, i) => [(i === 0 ? "Before the last change · " : "Step " + (i + 1) + " back · ") + agoText(e.when), null, () => backTo(l, i)]) }]);
+}
+function backMenu(e) { const r = e.currentTarget.getBoundingClientRect(); ctxMenu(backItems(), r.left, r.bottom + 4); }
 function lockedNote(kind) {
   if (kind === "sound") { toast("The sound track is locked. Click its lock to change loudness or mute.", true); return; }
   if (S.viewStep === null && !S.waiting && trackLocked("video")) { toast("The video track is locked. Click its lock (next to Video) to change sections.", true); return; }
@@ -1583,6 +1682,7 @@ function musicMenuItems(i, t) {
       ["Gentle fade in and out (1 s)", "sliders", () => musicChange((c) => { c.fin = 1; c.fout = 1; })], ["No fades", "x", () => musicChange((c) => { delete c.fin; delete c.fout; })]] }] : null,
     ...(n ? shapeMenuItems((k) => same(list.map((q) => q.q[k] || 0)), (k, v) => musicChange((c) => { if (v) c[k] = v; else delete c[k]; }), lk, false) : []),
     ["Volume line", "pulse", null, { sub: lineItems("song:" + i, t) }],
+    ["Back", "restore", null, { sub: backItems(["Songs", "Volume lines"]) }],
     "-",
     [ducksOn(x) ? "Stop going down under other tracks" : "Go down under voices", "vol", () => setDuck(i, ducksOn(x) ? {} : { voices: DUCK_LEVEL }), { off: lk }],
     [x.mute ? "Turn this music on" : "Mute this music", x.mute ? "vol" : "mute", () => set({ mute: !x.mute })],
@@ -1845,6 +1945,7 @@ function stemMenu(e) {
     ["Volume line", "pulse", null, { sub: lineItems(n, t) }],
     aselLayers().length === 1 && !aselLayers()[0].startsWith("found") ? ["Separate again", "layers", null, { off: lk, sub: ["voices", "music", "effects"].filter((k) => k !== aselLayers()[0]).map((k) =>
       ["Pull out " + Layers.TITLE[k].toLowerCase(), Layers.ICON[k], () => startPull(aselLayers()[0], k)]) }] : null,
+    ["Back", "restore", null, { sub: backItems(["Loudness", "Level and fades", "Shape the sound", "Groups", "Volume lines", "Split tracks"]) }],
     "-",
     ["Split here (cuts the video section too)", "split", () => { seek(t); splitAtPlayhead(); }, { key: "S", off: locked() }],
   ].filter(Boolean), e.clientX, e.clientY);
@@ -2485,6 +2586,7 @@ function timelineMenu(e) {
         ["The opposite (invert)", "swap", () => { S.sel = new Set(kept().filter((p) => !S.sel.has(p))); refreshAll({ keepVideo: true }); }],
         ["By time…", "clock", () => chooseByTime((a, b) => { S.sel = new Set(layout().filter((r) => r.out1 > a && r.out0 < b).map((r) => r.p)); refreshAll({ keepVideo: true }); })]] }],
       ["Volume line", "pulse", null, { sub: lineItems("original", t) }],
+      ["Back", "restore", null, { sub: backItems(["Loudness", "Level and fades", "Shape the sound", "Volume lines", "Mute, solo and locks", "Cuts"]) }],
       "-", ["Split here", "split", () => { seek(t); splitAtPlayhead(); }, { key: "S", off: lk, why }]];
   } else if (musicEl && musicEl.dataset.i !== undefined) {
     const i = +musicEl.dataset.i, pe = e.target.closest(".mpart");
@@ -2520,12 +2622,14 @@ function timelineMenu(e) {
       "-",
       [n > 1 ? "Duplicate " + n + " sections" : "Duplicate", "copy", duplicateSelected, { key: "Ctrl+D", off: lk, why }],
       ["Select all", "grid", () => { S.sel = new Set(kept()); refreshAll({ keepVideo: true }); }, { key: "Ctrl+A" }],
+      ["Back", "restore", null, { sub: backItems(["Cuts", "Picture", "Loudness", "Level and fades", "Shape the sound", "Words"]) }],
       "-",
       [n > 1 ? "Remove " + n + " sections" : "Remove this section", "trash", removeSelected, { danger: true, key: "Del", off: lk, why }]];
   } else {
     items = [["Move the playhead here", "target", () => seek(t)], ["Play from here", "play", () => { seek(t); play(); }],
       "-", ["Select all", "grid", () => { S.sel = new Set(kept()); refreshAll({ keepVideo: true }); }, { key: "Ctrl+A" }],
       ["Undo", "undo", undo, { key: "Ctrl+Z", off: !S.undo.length }], ["Redo", "redo", redo, { key: "Ctrl+Y", off: !S.redo.length }],
+      ["Back", "restore", null, { sub: backItems() }],
       "-", ["Zoom in here", "zin", () => zoomTo(S.pps * 2, t)], ["Show the whole video", "widen", fitZoom]];
   }
   ctxMenu(items, e.clientX, e.clientY);
@@ -3353,6 +3457,7 @@ async function openProject() {
   try { r = await api("/api/projects/" + S.id); }
   catch (e) { location.replace("/?msg=" + encodeURIComponent(errText(e))); return; }
   S.proj = r.project; S.info = r.info;
+  loadHistory();
   const stage = S.proj.stage === "final" ? "final" : "edit";
   if (stage !== S.mode) { location.replace("/" + stage + "?p=" + S.id); return; }       // the project belongs to the other stage
   applyStage();
@@ -3665,6 +3770,7 @@ function wire() {
   $("bZoomOut").addEventListener("click", () => zoomTo(S.pps / 1.5));
   $("bFit").addEventListener("click", fitZoom);
   $("bUndo").addEventListener("click", undo); $("bRedo").addEventListener("click", redo);
+  $("bBack").addEventListener("click", backMenu);
   $("bSplit").addEventListener("click", splitAtPlayhead);
   $("bCombine").addEventListener("click", combineScenes);
   $("lockV").addEventListener("click", () => toggleLock("video")); $("lockA").addEventListener("click", () => toggleLock("sound"));

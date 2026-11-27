@@ -196,6 +196,24 @@ NR = {1: 6, 2: 12, 3: 20}              # Clean: noise taken out (dB)
 MAX_NUDGE_MS = 2000
 
 
+_JUNK = re.compile(r"\b(?:2160p|1080p|720p|480p|4k|uhd|hdr|x264|x265|h\.?264|h\.?265|hevc|aac\d?(?:\.\d)?|ac3|webrip|web-?dl|bluray|brrip|hdtv|"
+                   r"dvdrip|yify|rarbg|final|copy|edit(?:ed)?)\b", re.I)
+
+
+def nice_title(stem: str) -> str:
+    """A title from a file name, so nobody has to type one: 'my_holiday-video.final.1080p' -> 'My holiday video'."""
+    t = re.sub(r"[\[\(\{].*?[\]\)\}]", " ", str(stem or ""))           # [group] (2024) {tags}
+    t = re.sub(r"[_.]+", " ", t)
+    t = re.sub(r"(?<=[a-z])-(?=[a-z])|\s-\s|-+$|^-+", " ", t, flags=re.I)
+    t = _JUNK.sub(" ", t)
+    t = " ".join(t.split()).strip(" -")
+    if not t or not re.search(r"[A-Za-z]", t):
+        t = " ".join(re.sub(r"[_.]+", " ", str(stem or "")).split()) or "Video"
+    if t == t.lower():
+        t = t[0].upper() + t[1:]
+    return t[:80]
+
+
 def _level_ok(v: Any) -> bool:
     from .analysis.evenout import valid
     return valid(v)

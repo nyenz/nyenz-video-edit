@@ -43,8 +43,15 @@ class JobManager:
         self._lock = threading.Lock()
         self._thread = threading.Thread(target=self._loop, name="editforge-jobs", daemon=True)
         self._stopping = False
+        # jobs the app (or the computer) stopped mid-way; resume_stopped() goes on with them, reusing the finished pieces
+        self.stopped = [j["id"] for j in self.store.list(400) if j.get("status") in ("running", "queued")][::-1]
         self.store.mark_interrupted()
         self._thread.start()
+
+    def resume_stopped(self) -> int:
+        n = sum(1 for jid in self.stopped if self.resume(jid))
+        self.stopped = []
+        return n
 
     # ---- public --------------------------------------------------------------------------------
     def submit(self, script: str, input_path: str, output_path: str, options: Optional[Dict[str, Any]] = None) -> str:
