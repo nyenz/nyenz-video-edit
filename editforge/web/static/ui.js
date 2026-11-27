@@ -182,6 +182,17 @@ function parseTime(text) {
   return total;
 }
 function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+/** Where live sound goes: through a soft limiter, so loudness up to 500 % stays clean instead of crackling (one per audio context). */
+function soundOut(ctx) {
+  if (!ctx._out) {
+    try {
+      const c = ctx.createDynamicsCompressor();
+      c.threshold.value = -1.5; c.knee.value = 1; c.ratio.value = 20; c.attack.value = 0.003; c.release.value = 0.12;
+      c.connect(ctx.destination); ctx._out = c;
+    } catch (e) { ctx._out = ctx.destination; }
+  }
+  return ctx._out;
+}
 
 // ------------------------------------------------------------------ toasts
 function toast(text, bad, action) {
@@ -500,25 +511,37 @@ const Exports = {
     const full = document.fullscreenElement && body.contains(document.fullscreenElement);
     if (full || (playing && !force)) { this.later = true; return; }
     this.sig = sig; this.later = false;
+    const fa = document.activeElement, typing = fa && fa.classList && fa.classList.contains("ex-find") ? (fa.selectionStart || fa.value.length || 0.1) : 0;
     body.replaceChildren();
-    if (!data.jobs.length) body.append(el("p", { class: "hint", text: "Nothing yet. Videos you make appear here." }));
-    // grouped, so finished videos, clips and quick previews never mix
-    const busy = data.jobs.filter((j) => j.status === "running" || j.status === "queued");
-    const rest = data.jobs.filter((j) => !busy.includes(j));
-    const groups = [["Working now", busy], ["Finished videos", rest.filter((j) => j.group === "final" || !j.group)], ["Clips", rest.filter((j) => j.group === "clip")], ["Quick previews", rest.filter((j) => j.group === "preview")]];
-    this.shut = this.shut || new Set();
-    for (const [title, list] of groups) {
-      if (!list.length) continue;
-      const shut = this.shut.has(title) && title !== "Working now";
-      body.append(el("button", { type: "button", class: "ex-h" + (shut ? " shut" : ""), "aria-expanded": String(!shut),
-        onclick: () => { if (this.shut.has(title)) this.shut.delete(title); else this.shut.add(title); this.refresh(true); } },
-        el("b", { text: title }), el("span", { class: "note num", text: String(list.length) }), el("span", { class: "grow" }), icon(shut ? "chevr" : "chev", "s")));
-      if (!shut) for (const j of list) body.append(this.card(j));
+    // tabs, so finished videos, clips and previews never show at once; newest on top, and what is being made first
+    const TABS = [["final", "Finals", "film"], ["clip", "Clips", "scissors"], ["studio", "Studio", "edit"], ["preview", "Previews", "eye"]];
+    const groupOf = (j) => j.group || "final";
+    if (this.jump && data.jobs.length) { this.tab = groupOf(data.jobs[0]); this.jump = false; }
+    this.tab = this.tab || (() => { try { return localStorage.getItem("exTab") || "final"; } catch (e) { return "final"; } })();
+    const shown = TABS.filter(([g]) => g !== "studio" || data.jobs.some((j) => groupOf(j) === "studio"));
+    if (!shown.some(([g]) => g === this.tab)) this.tab = "final";
+    const bar = el("div", { class: "ex-tabs", role: "tablist" });
+    for (const [g, title, ic] of shown) {
+      const n = data.jobs.filter((j) => groupOf(j) === g).length, run = data.jobs.some((j) => groupOf(j) === g && (j.status === "running" || j.status === "queued"));
+      bar.append(el("button", { type: "button", role: "tab", class: "ex-tab" + (g === this.tab ? " on" : "") + (run ? " busy" : ""), "aria-selected": String(g === this.tab), "data-tab": g,
+        onclick: () => { this.tab = g; try { localStorage.setItem("exTab", g); } catch (e) {} this.refresh(true); } },
+        icon(ic, "s"), el("span", { text: title }), el("span", { class: "note num", text: String(n) })));
     }
+    const find = el("input", { class: "input ex-find", type: "text", placeholder: "Find by name", value: this.q || "", "aria-label": "Find an export by name" });
+    find.addEventListener("input", () => { this.q = find.value; this.refresh(true); });
+    body.append(bar, find);
+    if (typing) { find.focus(); try { find.setSelectionRange(typing, typing); } catch (e) {} }
+    const q = (this.q || "").trim().toLowerCase();
+    const list = data.jobs.filter((j) => groupOf(j) === this.tab && (!q || this.nameOf(j).toLowerCase().includes(q)));
+    const busy = list.filter((j) => j.status === "running" || j.status === "queued");
+    const rest = list.filter((j) => !busy.includes(j));
+    if (!list.length) body.append(el("p", { class: "hint", text: q ? "Nothing here matches '" + this.q + "'." : { final: "No finished videos yet. Export from Final and they appear here, newest on top.", clip: "No clips yet. Clips you make appear here, newest on top.", studio: "Nothing from Studio yet.", preview: "No quick previews yet." }[this.tab] }));
+    for (const j of busy.concat(rest)) body.append(this.card(j));
   },
+  nameOf(j) { return j.title || (j.output_path || "").split(/[\\/]/).pop() || "Waiting to start"; },
   card(j) {
     const pct = Math.round((j.progress || 0) * 100);
-    const name = (j.output_path || "").split(/[\\/]/).pop() || "Waiting to start";
+    const name = this.nameOf(j);
     const label = { queued: "Waiting", running: pct + "%", done: "Done", failed: "Failed", cancelled: "Stopped", interrupted: "Stopped" }[j.status] || j.status;
     const node = el("div", { class: "job" }, el("div", { class: "hd" }, icon(j.preview ? "eye" : "film", "s"), el("b", { text: name, title: name }), el("span", { class: "st " + j.status, text: label })));
     if (j.status === "running" || j.status === "queued") {
@@ -541,6 +564,14 @@ const Exports = {
         acts.append(btn("Edit", { icon: "layers", title: "Open this video in the Editor", onclick: () => openInEditor(j.file_id) }));
         acts.append(el("a", { class: "btn ghost", href: "/clips?open=" + encodeURIComponent(j.file_id), title: "Cut clips from this video" }, icon("scissors", "s")));
       }
+      acts.append(btn("", { icon: "edit", cls: "ghost", title: "Rename", onclick: async () => {
+        const v = await askText("Rename", name, "Name of this export"); if (v === null || !v.trim() || v.trim() === name) return;
+        try { await api("/api/jobs/" + j.id + "/rename", { method: "POST", json: { name: v.trim() } }); } catch (e) { toast(errText(e), true); return; }
+        this.refresh(true);
+      } }));
+      acts.append(btn("", { icon: "folder", cls: "ghost", title: "Show the file in its folder", onclick: async () => {
+        try { const r = await api("/api/jobs/" + j.id + "/reveal", { method: "POST", json: {} }); if (!r.ok) toast("The folder could not be opened here. Use Save instead.", true); } catch (e) { toast(errText(e), true); }
+      } }));
     }
     if (["done", "failed", "cancelled", "interrupted"].includes(j.status)) acts.append(btn("", { icon: "trash", cls: "ghost danger", title: "Remove", onclick: async () => {
       if (!(await askYes("Remove '" + name + "'? The file is deleted from the app (copies you saved are kept).", "Remove", true))) return;
@@ -553,7 +584,7 @@ const Exports = {
   },
   show() {
     if ($("exportsDrawer")) return;
-    this.visible = true; this.sig = "";
+    this.visible = true; this.sig = ""; this.jump = true;
     const close = () => { this.visible = false; scrim.remove(); drawer.remove(); };
     const scrim = el("div", { class: "scrim", onclick: close });
     const drawer = el("aside", { class: "drawer", id: "exportsDrawer", "aria-label": "Exports" },

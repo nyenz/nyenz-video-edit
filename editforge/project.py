@@ -105,6 +105,9 @@ NOISE_LEVELS = {"off": 0.0, "light": 10.0, "medium": 18.0, "strong": 28.0}
 VOCALS = ("keep", "remove", "voice")
 
 
+VOL_MAX = 5.0          # every loudness slider goes up to 500 %; a soft limiter keeps it clean
+
+
 def _num(value: Any, default: float, lo: float, hi: float) -> float:
     try:
         v = float(value)
@@ -164,7 +167,7 @@ def clean_piece(raw: Any, duration: float) -> Optional[Dict[str, Any]]:
     return {**extra,
         "start": round(start, 4), "end": round(end, 4), "off": bool(raw.get("off")),
         "speed": round(_num(raw.get("speed"), 1.0, 0.1, 16.0), 4), "reverse": bool(raw.get("reverse")),
-        "mute": bool(raw.get("mute")), "volume": round(_num(raw.get("volume"), 1.0, 0.0, 4.0), 3), "fx": fx,
+        "mute": bool(raw.get("mute")), "volume": round(_num(raw.get("volume"), 1.0, 0.0, VOL_MAX), 3), "fx": fx,
         "zoom": {"mode": mode, "amount": round(_num(zoom_raw.get("amount"), 1.3, 1.0, 4.0), 3)},
         "color": {"brightness": round(_num(color_raw.get("brightness"), 0.0, -1.0, 1.0), 3),
                   "contrast": round(_num(color_raw.get("contrast"), 1.0, 0.0, 3.0), 3),
@@ -205,7 +208,7 @@ def clean_piece_mix(raw: Any) -> Optional[Dict[str, Dict[str, Any]]]:
         v = raw.get(layer)
         if not isinstance(v, dict):
             continue
-        vol, mute = round(_num(v.get("volume"), 1.0, 0.0, 2.0), 3), bool(v.get("mute"))
+        vol, mute = round(_num(v.get("volume"), 1.0, 0.0, VOL_MAX), 3), bool(v.get("mute"))
         group = str(v.get("group") or "")
         shape = clean_shape(v)
         if mute or abs(vol - 1.0) > 0.001 or re.fullmatch(r"g[0-9a-z]{1,10}", group) or shape:
@@ -301,7 +304,7 @@ def clean_settings(raw: Any) -> Dict[str, Any]:
         s["transition"] = raw["transition"]
     s["transition_s"] = round(_num(raw.get("transition_s"), 0.3, 0.1, 3.0), 3)
     s["music"] = str(raw.get("music") or "")[:300]
-    s["music_volume"] = round(_num(raw.get("music_volume"), 0.25, 0.0, 2.0), 3)
+    s["music_volume"] = round(_num(raw.get("music_volume"), 0.25, 0.0, VOL_MAX), 3)
     for key in ("duck", "original_sound", "even_loudness"):
         if key in raw:
             s[key] = bool(raw[key])
@@ -332,7 +335,7 @@ def clean_settings(raw: Any) -> Dict[str, Any]:
     layers = []
     for x in (raw.get("layers") if isinstance(raw.get("layers"), list) else [])[:MAX_LAYERS]:
         if isinstance(x, dict) and str(x.get("file") or ""):
-            y = {"file": str(x["file"])[:300], "volume": round(_num(x.get("volume"), 0.5, 0.0, 2.0), 3),
+            y = {"file": str(x["file"])[:300], "volume": round(_num(x.get("volume"), 0.5, 0.0, VOL_MAX), 3),
                  "mute": bool(x.get("mute")), "solo": bool(x.get("solo"))}
             parts = clean_music_parts(x.get("parts"))
             if parts:
@@ -361,7 +364,7 @@ def clean_settings(raw: Any) -> Dict[str, Any]:
     sid = str(raw.get("mix_split") or "")
     s["mix_split"] = sid if SPLIT_ID.match(sid) else ""
     for layer in STEM_KEYS:
-        s["mix_" + layer] = round(_num(raw.get("mix_" + layer), 1.0, 0.0, 2.0), 3)
+        s["mix_" + layer] = round(_num(raw.get("mix_" + layer), 1.0, 0.0, VOL_MAX), 3)
     ducks: Dict[str, Dict[str, Any]] = {}                 # split tracks that go down while another one is heard
     rd = raw.get("ducks") if isinstance(raw.get("ducks"), dict) else {}
     for layer in STEM_KEYS:
@@ -400,7 +403,7 @@ def clean_music_parts(raw: Any) -> Optional[List[Dict[str, Any]]]:
         e = None if end is None else round(_num(end, 0.0, 0.0, 1e6), 3)
         if e is not None and e <= last + 0.02:
             continue
-        part = {"end": e, "volume": round(_num(x.get("volume"), 1.0, 0.0, 2.0), 3), "mute": bool(x.get("mute"))}
+        part = {"end": e, "volume": round(_num(x.get("volume"), 1.0, 0.0, VOL_MAX), 3), "mute": bool(x.get("mute"))}
         part.update(clean_shape(x))
         if x.get("even") == 0 and x.get("even") is not False:
             part["even"] = 0                   # Even out switched off here, also when the track has Auto level

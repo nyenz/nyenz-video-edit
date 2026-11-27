@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT / "tests"))
 def private_home(tmp_path_factory):
     home = tmp_path_factory.mktemp("ef_home")
     os.environ["EDITFORGE_HOME"] = str(home)
+    os.environ["EDITFORGE_NO_REVEAL"] = "1"
     yield home
 
 

@@ -345,13 +345,40 @@ function seek(t) {
 // music in the viewer: one player for every music layer that is heard (muted layers, and everything but soloed ones, are not)
 const MUSIC = new Map();
 function layers() { return S.proj.settings.layers || []; }
-function soloOn() { return layers().some((x) => x.solo); }
+/** Solo is on when any track is soloed: a music track, the video's own sound, or one of its split tracks. */
+function soloOn() { return layers().some((x) => x.solo) || (S.proj.settings.solo || []).length > 0; }
+const KEY_TITLE = { original: "Sound" };
+function keyName(k) { return KEY_TITLE[k] || (typeof Layers !== "undefined" && Layers.TITLE[k]) || k; }
+/** The video's own sound ('original') or a split track: muted, or left out by someone else's Solo. */
+function keyMuted(k) { return (S.proj.settings.mute || []).includes(k); }
+function keySolo(k) { return (S.proj.settings.solo || []).includes(k); }
+function keyHeard(k) { return !keyMuted(k) && (!soloOn() || keySolo(k)); }
+/** Mute or solo the video's own sound or one split track. Mute is a change (a lock stops it); Solo is only for listening. */
+function flipKey(list, k) {
+  if (list === "mute" && (trackLocked(k) || trackLocked("sound"))) { lockedNote("sound"); return; }
+  change(() => { const a = (S.proj.settings[list] || []).slice(), j = a.indexOf(k); if (j >= 0) a.splice(j, 1); else a.push(k); S.proj.settings[list] = a; }, { keepVideo: true });
+  soundFlipped();
+  const on = (S.proj.settings[list] || []).includes(k);
+  toast(keyName(k) + (list === "mute" ? (on ? " is muted." : " is heard again.") : (on ? " is soloed: only for listening, the export keeps every track." : " is no longer soloed.")));
+}
+function soundFlipped() {
+  if (typeof Layers !== "undefined" && Layers.apply) Layers.apply();
+  if (S.playing) { for (const v of [V.a, V.b]) if (V.seg && v === active()) dress(v, V.seg.p); musicPlay(); }
+  renderTimeline(); renderInspector();
+}
+/** The Mute and Solo buttons at the head of a sound track (the same look as on the music tracks). */
+function msBtns(k, name) {
+  const m = keyMuted(k), so = keySolo(k);
+  return [el("button", { type: "button", class: "lh-btn" + (m ? " on" : ""), title: m ? "Unmute" : "Mute", "aria-label": "Mute " + name, "aria-pressed": String(m), onclick: (e) => { e.stopPropagation(); flipKey("mute", k); } }, icon(m ? "mute" : "vol", "s")),
+    el("button", { type: "button", class: "lh-btn solo" + (so ? " on" : ""), title: so ? "Stop solo" : "Solo: hear only this (and other soloed tracks)", "aria-label": "Solo " + name, "aria-pressed": String(so), onclick: (e) => { e.stopPropagation(); flipKey("solo", k); }, text: "S" })];
+}
 /** Solo is easy to forget: while it is on, the player says so, with one click to hear everything again. */
 function renderSoloChip() {
   const c = $("soloChip"); if (!c) return;
   const stems = (S.proj.settings.solo || []).length, on = S.mode === "final" && (soloOn() || stems > 0);
   c.hidden = !on; if (!on) return;
-  const names = layers().filter((x) => x.solo).map((x) => ((S.files || []).find((f) => f.id === x.file) || { name: x.file.split("/").pop() }).name);
+  const names = layers().filter((x) => x.solo).map((x) => ((S.files || []).find((f) => f.id === x.file) || { name: x.file.split("/").pop() }).name)
+    .concat((S.proj.settings.solo || []).map(keyName));
   c.querySelector("span").textContent = "Solo on";
   c.title = "Solo: here you only hear " + (names.length ? names.join(", ") : "the chosen track") + ". It is only for listening: the export always has every track that is not muted. Click to hear everything again.";
 }
@@ -362,7 +389,7 @@ function stopSolo() {
   toast("Solo is off: you hear everything again.");
 }
 function heard(x) { return !x.mute && (!soloOn() || x.solo); }
-function ownSoundOn() { return S.proj.settings.original_sound && !soloOn(); }
+function ownSoundOn() { return S.proj.settings.original_sound && keyHeard("original"); }
 let MCTX = null;
 function musicPlayer(file) {
   let a = MUSIC.get(file);
@@ -370,7 +397,7 @@ function musicPlayer(file) {
     a = new Audio(mediaUrl(file, false)); a.preload = "auto"; MUSIC.set(file, a);
     try {                                          // through Web Audio, so the viewer can play it louder than 100 %
       const C = window.AudioContext || window.webkitAudioContext;
-      if (C) { MCTX = MCTX || new C(); const g = MCTX.createGain(); MCTX.createMediaElementSource(a).connect(g); g.connect(MCTX.destination); a._gain = g; }
+      if (C) { MCTX = MCTX || new C(); const g = MCTX.createGain(); MCTX.createMediaElementSource(a).connect(g); g.connect(soundOut(MCTX)); a._gain = g; }
     } catch (e) { a._gain = null; }
   }
   return a;
@@ -384,7 +411,7 @@ function setVideoVol(v, vol) {
   if (!v._gain && g > 1.001) {
     try {
       const C = window.AudioContext || window.webkitAudioContext;
-      if (C) { MCTX = MCTX || new C(); const n = MCTX.createGain(); MCTX.createMediaElementSource(v).connect(n); n.connect(MCTX.destination); v._gain = n; if (MCTX.state === "suspended") MCTX.resume(); }
+      if (C) { MCTX = MCTX || new C(); const n = MCTX.createGain(); MCTX.createMediaElementSource(v).connect(n); n.connect(soundOut(MCTX)); v._gain = n; if (MCTX.state === "suspended") MCTX.resume(); }
     } catch (e) { v._gain = null; }
   }
   if (v._gain) { if (v.volume !== 1) v.volume = 1; v._gain.gain.value = g; } else v.volume = clamp(g, 0, 1);
@@ -654,7 +681,7 @@ function renderTimeline() {
   if (S.msel && !layers()[S.msel.i]) S.msel = null;
   layers().forEach((x, i) => {
     const name = (S.files.find((f) => f.id === x.file) || { name: x.file.split("/").pop() }).name;
-    const flip = (k) => (e) => { e.stopPropagation(); change(() => { S.proj.settings.layers = layers().map((y, j) => (j === i ? Object.assign({}, y, { [k]: !y[k] }) : y)); }, { keepVideo: true }); renderMusicLayers(); if (S.playing) musicPlay(); };
+    const flip = (k) => (e) => { e.stopPropagation(); if (k === "mute" && (x.locked || trackLocked("sound"))) { lockedNote("sound"); return; } change(() => { S.proj.settings.layers = layers().map((y, j) => (j === i ? Object.assign({}, y, { [k]: !y[k] }) : y)); }, { keepVideo: true }); renderMusicLayers(); if (S.playing) musicPlay(); };
     const row = el("div", { class: "mrow" + (x.locked || trackLocked("sound") ? " track-locked" : ""), "data-i": String(i), title: "Right-click for more" });
     if (S.mode === "final") row.append(head("music", name,
       el("button", { type: "button", class: "lh-btn" + (x.mute ? " on" : ""), title: "Mute", "aria-label": "Mute " + name, onclick: flip("mute") }, icon(x.mute ? "mute" : "vol", "s")),
@@ -708,7 +735,14 @@ function renderAudioLane() {
     la.replaceChildren(cv);
   }
   la.classList.toggle("track-locked", trackLocked("sound"));
-  if (S.mode === "final") { const old = la.querySelector(".lane-head"); if (old) old.remove(); la.prepend(el("div", { class: "lane-head" }, icon("vol", "s"), el("span", { class: "ellip", text: "Sound" }), lockBtn("sound"))); }
+  if (S.mode === "final") {
+    const old = la.querySelector(".lane-head"), sig = [keyMuted("original"), keySolo("original"), trackLocked("sound")].join();
+    if (!old || old.dataset.sig !== sig) {         // rebuilt only when it changed, so a click is never lost to a redraw
+      if (old) old.remove();
+      la.prepend(el("div", { class: "lane-head", "data-sig": sig }, icon("vol", "s"), el("span", { class: "ellip", text: "Sound" }), ...msBtns("original", "the sound"), lockBtn("sound")));
+    }
+  }
+  la.classList.toggle("muted", !keyHeard("original"));
   const sc = $("tlScroll"), left = sc.scrollLeft, w = sc.clientWidth, H = 40, dpr = Math.min(2, window.devicePixelRatio || 1);
   if (cv.width !== Math.round(w * dpr) || cv.height !== H * dpr) { cv.width = Math.round(w * dpr); cv.height = H * dpr; }
   cv.style.left = left + "px"; cv.style.width = w + "px"; cv.style.height = H + "px";
@@ -1393,11 +1427,11 @@ function renderMusicInspector(R) {
   R.append(el("div", { class: "side-h" }, el("h2", { class: "ellip", text: name }), el("span", { class: "note num", text: list.length + (list.length === 1 ? " part" : " parts") + " chosen" })));
   const rng = (label, v, onset, aria) => {
     const val = el("b", { class: "num", text: v === null ? "—" : Math.round(v * 100) + "%" });
-    const r = el("input", { type: "range", class: "rng", min: "0", max: "200", step: "1", value: String(Math.round((v === null ? 1 : v) * 100)), "aria-label": aria });
+    const r = el("input", { type: "range", class: "rng", min: "0", max: "500", step: "1", value: String(Math.round((v === null ? 1 : v) * 100)), "aria-label": aria });
     r.addEventListener("input", () => { val.textContent = r.value + "%"; paintRange(r); });
     r.addEventListener("change", () => onset(r.value / 100));
     r.disabled = lk; setTimeout(() => paintRange(r), 0);
-    return el("div", { class: "field" }, el("span", {}, label + " ", val, el("small", { class: "note", text: " (up to 200%)" })), r);
+    return el("div", { class: "field" }, el("span", {}, label + " ", val, el("small", { class: "note", text: " (up to 500%)" })), r);
   };
   const vols = [...new Set(list.map((q) => +q.q.volume))], mutes = [...new Set(list.map((q) => !!q.q.mute))];
   const mute = el("input", { type: "checkbox", class: "sw", "aria-label": "Mute the chosen parts" });
@@ -1488,11 +1522,15 @@ function renderStemLanes() {
     const whole = kept().length && kept().every((p) => aselHas(p, n));
     const head = lane.querySelector(".stem-head");
     head.classList.toggle("on", whole);
-    const lb = head.querySelector(".lock-btn"); if (lb) lb.remove();
-    head.append(lockBtn(n));
+    const sig = [keyMuted(n), keySolo(n), trackLocked(n)].join();
+    if (head.dataset.sig !== sig) {                // rebuilt only when it changed, so a click is never lost to a redraw
+      head.dataset.sig = sig;
+      for (const b of head.querySelectorAll(".lock-btn, .lh-btn")) b.remove();
+      head.append(...msBtns(n, Layers.TITLE[n].toLowerCase()), lockBtn(n));
+    }
     lane.classList.toggle("track-locked", trackLocked(n) || trackLocked("sound"));
     const g0 = Layers.gainOf(n);
-    lane.classList.toggle("muted", g0 < 0.001);
+    lane.classList.toggle("muted", g0 < 0.001 || !keyHeard(n));
     if (cv.width !== Math.round(w * dpr) || cv.height !== H * dpr) { cv.width = Math.round(w * dpr); cv.height = H * dpr; }
     cv.style.left = left + "px"; cv.style.width = w + "px"; cv.style.height = H + "px";
     const g = cv.getContext("2d");
@@ -1528,7 +1566,7 @@ function renderStemLanes() {
 /** A click on a sound track: a part (Ctrl adds, Shift chooses all in between), or the track's name for the whole track. */
 function onStemDown(e) {
   const lane = e.target.closest(".lane.stem"); if (!lane) return false;
-  if (e.target.closest(".lock-btn")) return true;
+  if (e.target.closest(".lock-btn, .lh-btn")) return true;
   const n = lane.dataset.layer, add = e.ctrlKey || e.metaKey;
   S.sel.clear();
   if (e.target.closest(".stem-head")) {
@@ -1727,7 +1765,7 @@ function renderStemInspector(R) {
   const mutes = [...new Set(list.map(({ p, n }) => !!(p.mix && p.mix[n] && p.mix[n].mute)))];
   const lk = list.every(({ p, n }) => partLocked(p, n));
   const val = el("b", { class: "num", text: vols.length === 1 ? Math.round(vols[0] * 100) + "%" : "—" });
-  const vol = el("input", { type: "range", class: "rng", min: "0", max: "200", step: "1", value: String(Math.round((vols.length === 1 ? vols[0] : 1) * 100)), "aria-label": "Loudness of the chosen parts" });
+  const vol = el("input", { type: "range", class: "rng", min: "0", max: "500", step: "1", value: String(Math.round((vols.length === 1 ? vols[0] : 1) * 100)), "aria-label": "Loudness of the chosen parts" });
   vol.addEventListener("input", () => { val.textContent = vol.value + "%"; paintRange(vol); });
   vol.addEventListener("change", () => stemChange((c) => { c.volume = vol.value / 100; c.mute = false; }));
   const mute = el("input", { type: "checkbox", class: "sw", "aria-label": "Mute the chosen parts" });
@@ -1738,7 +1776,7 @@ function renderStemInspector(R) {
   const oneGroup = groupsIn.length === 1 && groupsIn[0] ? soundGroups().find((g) => g.id === groupsIn[0]) : null;
   const lockedN = list.filter(({ p, n }) => partLocked(p, n)).length;
   const pad = el("div", { class: "pad" },
-    el("div", { class: "field" }, el("span", {}, "Loudness ", val, el("small", { class: "note", text: " (up to 200%)" })), vol),
+    el("div", { class: "field" }, el("span", {}, "Loudness ", val, el("small", { class: "note", text: " (up to 500%)" })), vol),
     el("label", { class: "swl" }, el("span", { text: "Mute" }), mute),
     el("div", { class: "btns" },
       btn("Same loudness", { icon: "sliders", title: "Each chosen part as a whole goes up or down, so they all sound equally loud (up to 200%). Inside a part nothing changes: for that use Even out.", onclick: () => normaliseParts(false) }),
@@ -2270,7 +2308,7 @@ function renderMusicLayers() {
   const set = (i, patch, keepVideo) => { if (trackLocked("sound")) { lockedNote("sound"); renderMusicLayers(); return; } change(() => { S.proj.settings.layers = layers().map((x, k) => (k === i ? Object.assign({}, x, patch) : x)); }, { keepVideo: true }); if (keepVideo !== false) { renderMusicLayers(); if (S.playing) musicPlay(); } };
   layers().forEach((x, i) => {
     const name = (S.files.find((f) => f.id === x.file) || { name: x.file.split("/").pop() + " (missing)" }).name;
-    const slider = el("input", { type: "range", class: "rng", min: "0", max: "200", step: "1", value: String(Math.round(x.volume * 100)), "aria-label": "Loudness of " + name });
+    const slider = el("input", { type: "range", class: "rng", min: "0", max: "500", step: "1", value: String(Math.round(x.volume * 100)), "aria-label": "Loudness of " + name });
     const val = el("b", { class: "num ly-val", text: Math.round(x.volume * 100) + "%" });
     slider.addEventListener("input", () => { val.textContent = slider.value + "%"; paintRange(slider); const m = MUSIC.get(x.file); if (m) setMusicGain(m, slider.value / 100 * partGain(x, S.t) * duckGain(x, S.t)); });
     slider.addEventListener("change", () => set(i, { volume: slider.value / 100 }, false));
@@ -2448,7 +2486,7 @@ function renderInspector() {
   const cur = all((p) => p.speed === sel[0].speed) ? sel[0].speed : null;
   const chipsBox = el("div", { class: "chips" });
   for (const v of speeds) chipsBox.append(el("button", { class: "chip" + (cur === v ? " on" : ""), type: "button", text: v + "×", onclick: () => onSel((p) => { p.speed = v; }) }));
-  const vol = el("input", { type: "range", class: "rng", min: "0", max: "2", step: "0.01", value: String(sel[0].volume), "aria-label": "Loudness" });
+  const vol = el("input", { type: "range", class: "rng", min: "0", max: "5", step: "0.01", value: String(sel[0].volume), "aria-label": "Loudness" });
   const onSound = (fn) => { if (!change(() => { selList().forEach(fn); markHand(); }, { sound: true })) renderInspector(); };
   vol.addEventListener("change", () => onSound((p) => { p.volume = parseFloat(vol.value); p.mute = false; }));
   const muteSw = el("input", { type: "checkbox", class: "sw" }); muteSw.checked = all((p) => p.mute);
@@ -2457,7 +2495,7 @@ function renderInspector() {
   const basics = el("div", { class: "pad" }, el("div", { class: "field" }, el("span", { text: "Speed" }), chipsBox));
   const volTxt = el("b", { class: "num", text: Math.round(sel[0].volume * 100) + "%" });
   vol.addEventListener("input", () => { volTxt.textContent = Math.round(vol.value * 100) + "%"; });
-  if (S.mode === "final") basics.append(el("div", { class: "field" }, el("span", {}, "Loudness ", volTxt, el("small", { class: "note", text: " (up to 200%)" })), vol), el("label", { class: "swl" }, el("span", { text: "Mute" }), muteSw));
+  if (S.mode === "final") basics.append(el("div", { class: "field" }, el("span", {}, "Loudness ", volTxt, el("small", { class: "note", text: " (up to 500%)" })), vol), el("label", { class: "swl" }, el("span", { text: "Mute" }), muteSw));
   if (S.mode === "final" && S.info.has_audio && !stemsOn()) basics.append(
     evenField(same(sel.map((p) => p.even || 0)), (v) => onSound((p) => { if (v) p.even = v; else delete p.even; }), trackLocked("sound")),
     fadeFields(same(sel.map((p) => p.fin || 0)), same(sel.map((p) => p.fout || 0)), (k, v) => onSound((p) => { if (v > 0) p[k] = v; else delete p[k]; }), trackLocked("sound"), ["Sound fade in", "Sound fade out"]));

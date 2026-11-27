@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.34.0 — every track: Mute, Solo, Lock; loudness to 500 %; Exports in tabs
+* **Loudness goes up to 500 %** on every sound: sections, the video's own sound, Voices / Music / Effects and every
+  song. It still starts at 100 %. A soft limiter keeps very loud settings clean instead of crackling, in the player and
+  in the finished video.
+* **Mute, Solo and Lock on every sound track**: the video's own *Sound* track and each split track (Voices, Music,
+  Effects, Found again) now have Mute and Solo next to their lock, the same as songs. Mute keeps the track's loudness,
+  so unmuting brings it back as it was. Solo is only for listening. A locked track cannot be muted by mistake.
+* **Exports has tabs**: Finals, Clips and Previews (Studio later) never show at once. The newest is on top, and what is
+  being made comes first. Opening Exports after an export goes straight to its tab; otherwise the last tab you used.
+  Find by name, **Rename**, and **Show in folder** for each file.
+
 ## 1.33.0 — no quality lost on the way
 * **Clips are made almost lossless** (they are edited and made again later, so nothing is lost twice). A clip set to a
   smaller file keeps that.

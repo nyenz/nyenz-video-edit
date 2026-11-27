@@ -93,7 +93,8 @@ def audio_graph(tl: Timeline, sr: int, layout: str, speech: str, music_idx: List
             cur = g.add(cur, f"volume={len(mix_in)}", "mv")
     if loudnorm:
         cur = g.add(cur, loudnorm, "ln")
-    if guard and (loudnorm or tracks or a.voice):
+    loud = any(float(getattr(x, "volume", 1.0)) > 1.0 for x in tl.segments)
+    if guard and (loudnorm or tracks or a.voice or loud):   # loud sound (up to 500 %) is always kept clean
         cur = g.add(cur, LIMITER, "lm")
     if fades and a.fade_audio:
         if a.fade_in > 0:
