@@ -1,7 +1,7 @@
 // Made by tools/make_models_iss.py from editforge/modelpack.py. Do not edit by hand.
 function ModelCount(): Integer;
 begin
-  Result := 6;
+  Result := 7;
 end;
 
 function ModelUrl(I: Integer): String;
@@ -13,6 +13,7 @@ begin
     3: Result := 'https://github.com/nyenz/nyenz-video-edit/releases/download/caption-model-1/whisper-base-tokenizer.json';
     4: Result := 'https://github.com/nyenz/nyenz-video-edit/releases/download/caption-model-1/whisper-base-vocabulary.txt';
     5: Result := 'https://github.com/nyenz/nyenz-video-edit/releases/download/vision-model-1/transnetv2.onnx';
+    6: Result := 'https://github.com/nyenz/nyenz-video-edit/releases/download/voice-model-1/voice-split-1.onnx';
   else
     Result := '';
   end;
@@ -27,6 +28,7 @@ begin
     3: Result := 'model3-tokenizer.json';
     4: Result := 'model4-vocabulary.txt';
     5: Result := 'model5-transnetv2.onnx';
+    6: Result := 'model6-voice-split-1.onnx';
   else
     Result := '';
   end;
@@ -41,6 +43,7 @@ begin
     3: Result := 'models\whisper-base\tokenizer.json';
     4: Result := 'models\whisper-base\vocabulary.txt';
     5: Result := 'models\transnetv2.onnx';
+    6: Result := 'models\voice-split-1.onnx';
   else
     Result := '';
   end;
@@ -55,6 +58,7 @@ begin
     3: Result := 'fb7b63191e9bb045082c79fd742a3106a12c99513ab30df4a0d47fa6cb6fd0ab';
     4: Result := '34ce3fe1c5041027b3f8d42912270993f986dbc4bb34cf27f951e34a1e453913';
     5: Result := 'd7605e22428d583ec8d8b0c58085d124c57681f04f3d4faf4d76a8c53ef495b5';
+    6: Result := 'ce74ef3b6a6024ce44211a07be9cf8bc6d87728cc852a68ab34eb8e58cde9c8b';
   else
     Result := '';
   end;
@@ -69,6 +73,7 @@ begin
     3: Result := 2203239;
     4: Result := 459861;
     5: Result := 31261595;
+    6: Result := 66759214;
   else
     Result := 0;
   end;

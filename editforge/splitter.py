@@ -429,8 +429,13 @@ class SplitStore:
         meta = self._meta(d)
         if not meta or not all((d / (k + ".flac")).is_file() for k in LAYERS):
             return None
-        return {"id": split_id, "start": float(meta["start"]), "end": float(meta["end"]), "dir": str(d),
-                "files": layer_files(d), "found_from": [x for x in meta.get("found_from") or [] if x in LAYERS]}
+        out = {"id": split_id, "start": float(meta["start"]), "end": float(meta["end"]), "dir": str(d),
+               "files": layer_files(d), "found_from": [x for x in meta.get("found_from") or [] if x in LAYERS]}
+        if isinstance(meta.get("last"), dict):            # Separate again: what was pulled out of what (and the version before)
+            out["last"] = meta["last"]
+            if (d / "removed.flac").is_file():
+                out["removed"] = str(d / "removed.flac")
+        return out
 
     def delete(self, split_id: str) -> int:
         info = self.resolve(split_id)
@@ -502,7 +507,8 @@ class Splitter:
         hit = hit or self.store.find(fp, start, end)
         out: Dict[str, Any] = {"available": available(), "model": self.model_ready(), "model_mb": round(MODEL_SIZE / 1e6) if MODEL_SIZE else 76,
                                "split": hit and {"id": hit["id"], "start": hit["start"], "end": hit["end"], "quality": hit.get("quality"),
-                                         "layers": list(hit["files"]), "found_from": hit.get("found_from") or []},
+                                         "layers": list(hit["files"]), "found_from": hit.get("found_from") or [],
+                                         "last": hit.get("last"), "removed": bool(hit.get("removed"))},
                                "quality_note": QUALITY_NOTE, "job": self.status()}
         secs = max(0.0, end - start)
         out["estimate_s"] = int(round(secs / self.speed("fast")))

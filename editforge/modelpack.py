@@ -6,6 +6,7 @@ the part of the installer that downloads them). Every file has a size and a SHA-
 * **Sound splitting** (Voices, Music, Effects): one 76 MB file.
 * **Captions** (Whisper base): four files, about 148 MB.
 * **Scene changes** (TransNetV2, MIT licence): one 31 MB file. Without it the scene finder still works with its own picture checks.
+* **Voices** (Kim Vocal 2, for Separate again): one 67 MB file. Without it, it is downloaded the first time it is needed.
 """
 
 from __future__ import annotations
@@ -34,6 +35,8 @@ FILES: List[Dict[str, object]] = [
      "size": 459861, "sha256": "34ce3fe1c5041027b3f8d42912270993f986dbc4bb34cf27f951e34a1e453913"},
     {"model": "scenes", "dir": "", "name": "transnetv2.onnx", "url": RELEASES + "vision-model-1/transnetv2.onnx",
      "size": 31261595, "sha256": "d7605e22428d583ec8d8b0c58085d124c57681f04f3d4faf4d76a8c53ef495b5"},
+    {"model": "voices", "dir": "", "name": "voice-split-1.onnx", "url": RELEASES + "voice-model-1/voice-split-1.onnx",       # same as editforge/voicesplit.py
+     "size": 66759214, "sha256": "ce74ef3b6a6024ce44211a07be9cf8bc6d87728cc852a68ab34eb8e58cde9c8b"},
 ]
 
 

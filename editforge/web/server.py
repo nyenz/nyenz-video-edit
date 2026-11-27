@@ -384,6 +384,111 @@ class AppState:
             out.append({"rms": round(20 * np.log10(max(rms, 1e-6)), 2), "peak": round(float(np.max(np.abs(x))), 4)})
         return out
 
+    def start_pull(self, pid: str, layer: str, pull: str, ranges: List[List[float]], quality: str, strength: str) -> Dict[str, Any]:
+        """Separate again, choosing what to pull out: ``pull`` (voices / music / effects) is pulled out of the chosen parts of
+        ``layer`` and joins its own track; the chosen track keeps the rest. The project gets its own copy of the split; the
+        version before stays, so it can be heard again and gone back to."""
+        from .. import voicesplit as VS
+        from ..splitter import LAYERS
+        proj = self.load_project(pid)
+        sid = str(proj["settings"].get("mix_split") or "")
+        base = self.splitter.store.resolve(sid)
+        if not base or layer not in LAYERS or pull not in LAYERS or pull == layer:
+            raise EditForgeError("Split the sound first." if not base else "Choose what to pull out of this track.",
+                                 "Open Sound and press Split." if not base else "Pick Voices, Music or Effects (not the same track).")
+        rs = sorted([max(base["start"], float(a)), min(base["end"], float(b))] for a, b in ranges if float(b) - float(a) > 0.05)
+        if not rs:
+            raise EditForgeError("Choose the parts to separate again first.", "Click parts on a sound track.")
+        a = max(base["start"], rs[0][0] - 0.5)
+        b = min(base["end"], max(r[1] for r in rs) + 0.5)
+        if any(j.get("state") == "running" for j in getattr(self, "resplits", {}).values()):
+            raise EditForgeError("Another Separate again is still working.", "Wait until it is done (see Activity).")
+        quality = quality if quality in VS.QUALITIES else "balanced"
+        strength = strength if strength in VS.STRENGTHS else "gentle"
+        job = {"state": "running", "progress": 0.0, "error": "", "layer": layer, "pull": pull, "name": str(proj.get("name") or ""),
+               "since": time.time(), "message": "Starting"}
+        with self._task_lock:
+            if not hasattr(self, "resplits"):
+                self.resplits = {}
+            self.resplits[pid] = job
+        threading.Thread(target=self._pull_run, args=(pid, sid, base, layer, pull, rs, a, b, quality, strength, job),
+                         name="editforge-pull", daemon=True).start()
+        return dict(job)
+
+    def _pull_run(self, pid: str, sid: str, base: Dict[str, Any], layer: str, pull: str, rs: List[List[float]], a: float, b: float,
+                  quality: str, strength: str, job: Dict[str, Any]) -> None:
+        import subprocess
+        import tempfile
+        from .. import voicesplit as VS
+        from ..splitter import EXTRA, LAYERS, MODEL_ID
+        try:
+            S0 = base["start"]
+            voice = three = None
+            if pull == "voices":
+                make = getattr(self, "voice_engine_factory", None)
+                if make is None:
+                    if not VS.model_ready(self.home):
+                        job["message"] = "Downloading the voice model (66 MB, once)"
+                        VS.download_model(self.home, lambda f: job.update(progress=0.15 * f))
+                    make = VS.VoiceEngine
+                job["message"] = "Pulling the voices out"
+                voice = make(str(VS.model_path(self.home)))
+            else:
+                if not self.splitter.model_ready():
+                    raise EditForgeError("The sound splitter's model is missing.", "Split the sound once more first.")
+                job["message"] = "Pulling the " + pull + " out"
+                three = self.splitter.engine_factory(str(self.splitter.model_path))
+            p0 = float(job.get("progress") or 0.0)
+            work = Path(tempfile.mkdtemp(prefix="pull-", dir=str(self.home)))
+            got = VS.pull_out(base["files"][layer], a - S0, b - S0, work, pull, layer=layer, quality=quality, strength=strength,
+                              voice_engine=voice, three_engine=three, progress=lambda f: job.update(progress=p0 + (0.92 - p0) * f))
+            job["message"] = "Putting it on its track"
+            inside = "+".join(f"between(t,{r[0] - S0:.4f},{r[1] - S0:.4f})" for r in rs)
+            delay = int(round((a - S0) * 1000))
+            stamp = time.strftime("%Y%m%d%H%M%S")
+            d = Path(base["dir"]).parent / (Path(base["dir"]).name.split("~")[0] + "~" + stamp)
+            d.mkdir(parents=True, exist_ok=True)
+            norm = ":normalize=0" if get_tools().amix_normalize else ""
+
+            def run(fg: str, inputs: List[str], out: Path) -> None:
+                cmd = [get_tools().ffmpeg, "-nostdin", "-v", "error", "-y"]
+                for i in inputs:
+                    cmd += ["-i", i]
+                cmd += ["-filter_complex", fg, "-map", "[z]", "-ar", "44100", "-c:a", "flac", str(out)]
+                r = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                if r.returncode != 0:
+                    raise EditForgeError("The separated sound could not be saved.", (r.stderr or "")[-200:])
+
+            mixer = f"amix=inputs=2:duration=first:dropout_transition=0{norm}{'' if norm else ',volume=2'}"
+            # the chosen track: the rest inside the chosen parts, as it was everywhere else
+            run(f"[0:a]volume=volume=0:enable='{inside}'[o];[1:a]adelay={delay}:all=1,volume=volume=0:enable='not({inside})'[n];[o][n]{mixer}[z]",
+                [base["files"][layer], got["rest"]], d / (layer + ".flac"))
+            # its own track: what was pulled out joins it there
+            run(f"[0:a]anull[o];[1:a]adelay={delay}:all=1,volume=volume=0:enable='not({inside})'[n];[o][n]{mixer}[z]",
+                [base["files"][pull], got["pulled"]], d / (pull + ".flac"))
+            # what was taken out on its own, to listen to (not a track)
+            run(f"[0:a]volume=0[o];[1:a]adelay={delay}:all=1,volume=volume=0:enable='not({inside})'[n];[o][n]{mixer}[z]",
+                [base["files"][layer], got["pulled"]], d / "removed.flac")
+            for k in LAYERS:
+                if k not in (layer, pull):
+                    shutil.copyfile(base["files"][k], d / (k + ".flac"))
+            for k in EXTRA:
+                if base["files"].get(k):
+                    shutil.copyfile(base["files"][k], d / (k + ".flac"))
+            shutil.rmtree(work, ignore_errors=True)
+            last = {"layer": layer, "pull": pull, "ranges": rs, "quality": quality, "strength": strength, "from": sid}
+            atomic_write_json(d / "split.json", {"model": MODEL_ID, "start": base["start"], "end": base["end"], "seconds": 0, "mode": "best",
+                                                 "when": int(time.time()), "version": __version__, "derived": True, "from": sid,
+                                                 "quality": None, "found_from": base.get("found_from") or [], "last": last})
+            new_id = sid.split("/")[0] + "/" + d.name
+            with self._task_lock:
+                proj = self.load_project(pid)
+                proj["settings"]["mix_split"] = new_id
+                atomic_write_json(self.project_path(pid), proj)
+            job.update(state="done", progress=1.0, id=new_id, before=sid, when=time.time(), message="Done")
+        except Exception as exc:  # noqa: BLE001 - shown to the person
+            job.update(state="failed", error=getattr(exc, "message", None) or str(exc)[:200], when=time.time())
+
     def start_resplit(self, pid: str, layer: str, ranges: List[List[float]], move_found: bool) -> Dict[str, Any]:
         """Separate chosen parts of one split layer again (e.g. voices left in the music): the layer is split once more
         there, the clean part replaces it, and what was found goes to its own track (or away). The project gets its own
@@ -543,7 +648,7 @@ class AppState:
         if not job:
             return {"state": "none"}
         out = dict(job)
-        if out["state"] == "running":
+        if out["state"] == "running" and not out.get("pull"):
             sp = self.splitter.status()
             out["progress"] = round(0.9 * float(sp.get("progress") or 0), 3)
         return out
@@ -956,7 +1061,9 @@ class AppState:
             if rj["state"] == "running" or now - float(rj.get("when") or 0) < 900:
                 st_r = self.resplit_status(rp)
                 items.append({"kind": "split", "title": rj["name"] or "Sound", "state": st_r["state"] if st_r["state"] != "none" else "done",
-                              "what": {"running": "Separating the chosen " + rj["layer"] + " parts again", "done": "The chosen parts are separated again",
+                              "what": {"running": ("Pulling " + rj["pull"] + " out of the " + rj["layer"] + " (" + str(rj.get("message") or "") + ")") if rj.get("pull")
+                                       else "Separating the chosen " + rj["layer"] + " parts again",
+                                       "done": ("Pulled " + rj["pull"] + " out of the " + rj["layer"]) if rj.get("pull") else "The chosen parts are separated again",
                                        "failed": "Separating again failed"}.get(st_r["state"], ""), "progress": float(st_r.get("progress") or 0),
                               "since": float(rj.get("since") or 0), "link": "/final?p=" + rp, "project": rp})
         sp = self.splitter.status()
@@ -2023,8 +2130,12 @@ class Handler(BaseHTTPRequestHandler):
                 if data is None:
                     return
                 rng = [r for r in (data.get("ranges") or []) if isinstance(r, list) and len(r) == 2]
-                self._json(self.state.start_resplit(path.split("/")[3], str(data.get("layer") or ""),
-                                                    [[_float(r[0], 0.0), _float(r[1], 0.0)] for r in rng], bool(data.get("move_found", True))))
+                rng = [[_float(r[0], 0.0), _float(r[1], 0.0)] for r in rng]
+                if data.get("pull"):                       # 1.37: choose what to pull out; it joins its own track
+                    self._json(self.state.start_pull(path.split("/")[3], str(data.get("layer") or ""), str(data.get("pull") or ""), rng,
+                                                     str(data.get("quality") or "balanced"), str(data.get("strength") or "gentle")))
+                else:
+                    self._json(self.state.start_resplit(path.split("/")[3], str(data.get("layer") or ""), rng, bool(data.get("move_found", True))))
             elif re.fullmatch(rf"/api/projects/{PROJECT_ID}/(scenes|scenes-stop|task-seen)", path):
                 if self._read_json() is None:
                     return
@@ -2623,10 +2734,11 @@ class Handler(BaseHTTPRequestHandler):
         layer = (query.get("layer") or [""])[0]
         if layer:                                   # one sound layer (voices / music / effects) of a split video
             found = self.state.splitter.store.resolve((query.get("split") or [""])[0])
-            if not found or layer not in found["files"]:
+            files = dict(found["files"], **({"removed": found["removed"]} if found and found.get("removed") else {})) if found else {}
+            if not found or layer not in files:
                 self._error(404, "That sound layer was not found.", "Open Sound and press Split.")
                 return
-            src, path, kind = found["files"][layer], Path(found["files"][layer]), ""
+            src, path, kind = files[layer], Path(files[layer]), ""
         else:
             try:
                 src = self.state.resolve_input((query.get("id") or [""])[0])

@@ -1843,7 +1843,8 @@ function stemMenu(e) {
     ["Group", "combine", null, { sub: groupItems() }],
     ["Choose", "check", null, { sub: chooseItems(n, t) }],
     ["Volume line", "pulse", null, { sub: lineItems(n, t) }],
-    aselLayers().length === 1 && !aselLayers()[0].startsWith("found") ? ["Separate these parts again", "layers", () => separateAgain(), { off: lk }] : null,
+    aselLayers().length === 1 && !aselLayers()[0].startsWith("found") ? ["Separate again", "layers", null, { off: lk, sub: ["voices", "music", "effects"].filter((k) => k !== aselLayers()[0]).map((k) =>
+      ["Pull out " + Layers.TITLE[k].toLowerCase(), Layers.ICON[k], () => startPull(aselLayers()[0], k)]) }] : null,
     "-",
     ["Split here (cuts the video section too)", "split", () => { seek(t); splitAtPlayhead(); }, { key: "S", off: locked() }],
   ].filter(Boolean), e.clientX, e.clientY);
@@ -2106,25 +2107,6 @@ async function normaliseParts(together) {
   Layers.apply(); refreshAll({ keepVideo: true });
   toast("Same loudness for " + gains.size + " part" + (gains.size > 1 ? "s" : "") + (together ? ", balance kept." : "."));
 }
-/** Separate the chosen parts of one track again (e.g. voices left in the music). The app splits just those parts once more. */
-async function separateAgain() {
-  const list = aselList(), layers = aselLayers();
-  if (layers.length !== 1) { toast("Choose parts on one track only (for example the Music parts that still have voices).", true); return; }
-  const n = layers[0], locked = list.find(({ p, n: k }) => partLocked(p, k));
-  if (locked) { toast(partLocked(locked.p, locked.n), true); return; }
-  const move = await askYes("Separate the " + list.length + " chosen " + Layers.TITLE[n] + " part" + (list.length > 1 ? "s" : "") + " again? " +
-    "The app splits just these parts twice more, with its strongest setting. What does not belong on " + Layers.TITLE[n] + " (for example singing left in the music) is taken out and sorted onto its own tracks under the others: Voices found again, Music found again, Effects found again. " +
-    "There you can hear it, turn it up or down, mute it or lock it. Ctrl + Z goes back to the sound before.", "Separate again");
-  if (!move) return;
-  try {
-    await saved();
-    const before = snapshot();
-    S.resplitUndo = before;
-    const r = await api("/api/projects/" + S.id + "/resplit", { method: "POST", json: { layer: n, ranges: list.map(({ p }) => [p.start, p.end]), move_found: true } });
-    followResplit(r);
-    if (typeof Activity !== "undefined") Activity.refresh();
-  } catch (e) { toast(errText(e), true); }
-}
 function followResplit(r) {
   clearTimeout(S.resplitTimer);
   const n = $("resplitNote");
@@ -2137,9 +2119,74 @@ function followResplit(r) {
     const before = S.resplitUndo || snapshot();
     S.proj.settings.mix_split = r.id; S.undo.push(before); S.redo = [];
     S.stemFor = null; Layers.refresh();
-    toast("Done. What was taken out is sorted onto the 'found again' tracks under Effects (voices, music, effects). Ctrl + Z goes back to the sound before.");
+    toast(r.pull ? "Done: " + Layers.TITLE[r.pull] + " pulled out of " + Layers.TITLE[r.layer] + " and put on the " + Layers.TITLE[r.pull] + " track. Listen to what was taken out, or go back, under Separate again."
+      : "Done. What was taken out is sorted onto the 'found again' tracks under Effects (voices, music, effects). Ctrl + Z goes back to the sound before.");
+    renderInspector();
   } else if (r.state === "failed") toast(r.error || "Separating again failed.", true);
-  if (n) n.textContent = "";
+  if (n) n.textContent = r.state === "running" ? n.textContent : "";
+}
+// ---- Separate again, choosing what to pull out: it joins its own track, the chosen track keeps the rest
+S.sepOpts = { quality: "balanced", strength: "gentle" };
+async function startPull(n, pull, ranges, opts) {
+  const o = Object.assign({}, S.sepOpts, opts || {});
+  if (!ranges) {
+    const list = aselList().filter((x) => x.n === n);
+    const lockedOne = list.find(({ p, n: k }) => partLocked(p, k));
+    if (lockedOne) { toast(partLocked(lockedOne.p, lockedOne.n), true); return; }
+    ranges = list.map(({ p }) => [p.start, p.end]);
+  }
+  if (!ranges.length) { toast("Choose parts on the " + Layers.TITLE[n] + " track first.", true); return; }
+  if (trackLocked(n) || trackLocked(pull) || trackLocked("sound")) { lockedNote("sound"); return; }
+  try {
+    await saved();
+    S.resplitUndo = snapshot();
+    const r = await api("/api/projects/" + S.id + "/resplit", { method: "POST", json: { layer: n, pull, ranges, quality: o.quality, strength: o.strength } });
+    const note = $("resplitNote"); if (note) note.textContent = "Starting…";
+    followResplit(r);
+    toast("Pulling " + Layers.TITLE[pull].toLowerCase() + " out of the chosen " + Layers.TITLE[n] + " parts. It runs in the background (see Activity).");
+    if (typeof Activity !== "undefined") Activity.refresh();
+  } catch (e) { toast(errText(e), true); }
+}
+let REMOVED = null;
+function listenRemoved(btnEl) {
+  const sp = Layers.split(); if (!sp || !sp.removed) return;
+  if (REMOVED && !REMOVED.paused) { REMOVED.pause(); btnEl.replaceChildren(icon("play", "s"), el("span", { text: "Listen to what was taken out" })); return; }
+  if (S.playing) pause();
+  REMOVED = REMOVED || new Audio();
+  const src = "/media?split=" + encodeURIComponent(sp.id) + "&layer=removed&t=" + encodeURIComponent(TOKEN);
+  if (REMOVED.dataset.src !== src) { REMOVED.src = src; REMOVED.dataset.src = src; }
+  const rs = (sp.last && sp.last.ranges) || [[sp.start, sp.end]];
+  const at = segAt(S.t), now = at ? at.s.p.start + (S.t - at.s.out0) * at.s.p.speed : rs[0][0];
+  const from = rs.some(([a, b]) => now >= a && now < b) ? now : rs[0][0];
+  const go = () => { REMOVED.currentTime = Math.max(0, from - sp.start); REMOVED.play().catch(() => {}); };
+  if (REMOVED.readyState >= 1) go(); else REMOVED.addEventListener("loadedmetadata", go, { once: true });
+  btnEl.replaceChildren(icon("pause", "s"), el("span", { text: "Stop" }));
+  REMOVED.onended = () => btnEl.replaceChildren(icon("play", "s"), el("span", { text: "Listen to what was taken out" }));
+}
+function separateBox(n, lk) {
+  const sp = Layers.split(), last = sp && sp.last, others = ["voices", "music", "effects"].filter((k) => k !== n);
+  const qSeg = segmented([["fast", "Fast"], ["balanced", "Balanced"], ["thorough", "Thorough"]], S.sepOpts.quality, (v) => { S.sepOpts.quality = v; });
+  const sSeg = segmented([["gentle", "Gentle"], ["aggressive", "Aggressive"]], S.sepOpts.strength, (v) => { S.sepOpts.strength = v; });
+  const pulls = el("div", { class: "btns sep-pulls" }, ...others.map((k) => btn("Pull out " + Layers.TITLE[k].toLowerCase(), { icon: Layers.ICON[k], cls: k === "voices" ? "primary" : "",
+    title: "Take the " + Layers.TITLE[k].toLowerCase() + " out of the chosen " + Layers.TITLE[n] + " parts and put it on the " + Layers.TITLE[k] + " track", onclick: () => startPull(n, k) })));
+  if (lk) for (const b of pulls.children) b.disabled = true;
+  const box = el("div", { class: "pad sep-box" },
+    el("div", { class: "field" }, el("span", {}, el("b", { text: "Separate again" }), el("small", { class: "note", text: " what does not belong here goes to its own track" }))),
+    pulls,
+    el("div", { class: "field" }, el("span", { text: "Quality" }), qSeg),
+    el("div", { class: "field" }, el("span", { text: "Strength" }), sSeg),
+    el("p", { class: "note", text: "Voices use a model made only for voices. Aggressive goes over what is left once more; Thorough is slower but cleaner." }),
+    el("span", { class: "note", id: "resplitNote" }));
+  if (last && last.pull) {
+    const lb = btn("Listen to what was taken out", { icon: "play", cls: "sm ghost", onclick: (e) => listenRemoved(e.currentTarget) });
+    box.append(el("div", { class: "sep-last" },
+      el("small", { class: "note", text: "Last: " + Layers.TITLE[last.pull] + " pulled out of " + Layers.TITLE[last.layer] + " (" + last.quality + ", " + last.strength + ")" }),
+      el("div", { class: "btns" }, sp.removed ? lb : null,
+        btn("Back to the version before", { icon: "undo", cls: "sm ghost", title: "Use the sound as it was before this Separate again (it was kept)", onclick: () => {
+          change(() => { S.proj.settings.mix_split = last.from; }, { keepVideo: true }); S.stemFor = null; Layers.refresh(); toast("Back to the sound before. The newer one is kept too: Ctrl + Z goes to it again."); } }),
+        btn("Again, stronger", { icon: "layers", cls: "sm ghost", title: "Go over the same parts once more (Thorough, Aggressive)", onclick: () => startPull(last.layer, last.pull, last.ranges, { quality: "thorough", strength: "aggressive" }) }))));
+  }
+  return box;
 }
 function renderStemInspector(R) {
   const list = aselList(), layersIn = aselLayers();
@@ -2174,7 +2221,7 @@ function renderStemInspector(R) {
       (k, v) => stemChange((c) => { c[k] = v; }), lk),
     shapeBox((k) => same(list.map(({ p, n }) => (p.mix && p.mix[n] && p.mix[n][k]) || (k === "tone" ? "" : 0))),
       (k, v) => stemChange((c) => { if (k === "__all") for (const x of TONE_KEYS) delete c[x]; else c[k] = v; }), lk, { nudge: true }),
-    layersIn.length === 1 && !layersIn[0].startsWith("found") ? el("div", { class: "btns" }, btn("Separate again", { icon: "layers", title: "Split just these parts once more (for example voices left in the music)", onclick: () => separateAgain() }), el("span", { class: "note", id: "resplitNote" })) : null,
+    layersIn.length === 1 && !layersIn[0].startsWith("found") ? separateBox(layersIn[0], lk) : null,
     oneGroup ? el("div", { class: "grp-now" }, dotFor(oneGroup.id), el("span", { text: "Group: " + oneGroup.name }),
       btn(oneGroup.locked ? "Unlock" : "Lock", { icon: oneGroup.locked ? "unlock" : "lock", cls: "sm ghost", onclick: () => groupEdit(oneGroup.id, "lock") }))
       : btn("Group these parts", { icon: "combine", cls: "ghost wide", title: "Give the chosen parts a name, to choose, lock and change them together later", onclick: () => makeGroup() }),
