@@ -1,0 +1,44 @@
+# Copies the voice model (Kim Vocal 2, an MDX-Net vocal model by KimberleyJensen, from the public model repository of
+# Ultimate Vocal Remover) to a release file (tag voice-model-1), checked against its known fingerprint. Separate again uses
+# it to pull voices out of the music or effects track. The Windows installer downloads it during setup.
+name: Voice model
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/voice-model.yml
+
+permissions:
+  contents: write
+
+jobs:
+  copy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: voice-model-1
+      URL: https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/Kim_Vocal_2.onnx
+      MODEL_SHA256: ce74ef3b6a6024ce44211a07be9cf8bc6d87728cc852a68ab34eb8e58cde9c8b
+    steps:
+      - name: Is it already published?
+        id: have
+        run: |
+          n=$(gh release view "$TAG" --repo "${{ github.repository }}" --json assets --jq '.assets | length' 2>/dev/null || echo 0)
+          if [ "$n" -ge 1 ]; then echo "have=yes" >> "$GITHUB_OUTPUT"; else echo "have=no" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Download and check
+        if: steps.have.outputs.have == 'no'
+        run: |
+          curl -fsSL --retry 3 -o voice-split-1.onnx "$URL"
+          echo "$MODEL_SHA256  voice-split-1.onnx" | sha256sum -c -
+          ls -l voice-split-1.onnx
+
+      - name: Publish
+        if: steps.have.outputs.have == 'no'
+        run: |
+          notes="The voice model used by Separate again (pull voices out of music or effects): Kim Vocal 2, an MDX-Net model by KimberleyJensen, from the public model repository of Ultimate Vocal Remover (https://github.com/TRvlvr/model_repo). The Nyenz Edit installer downloads this file during setup and checks its fingerprint (SHA-256 $MODEL_SHA256). This is not an app version: there is nothing to install from here."
+          gh release create "$TAG" voice-split-1.onnx --repo "${{ github.repository }}" --target "${{ github.event.repository.default_branch }}" --prerelease --title "Voice model 1 (used by Nyenz Edit)" --notes "$notes"
+          echo "### Voice model published: $MODEL_SHA256" >> "$GITHUB_STEP_SUMMARY"

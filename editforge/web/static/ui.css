@@ -1142,3 +1142,7 @@ svg.vline .vl-dot:hover { r: 6; fill: var(--amber); }
 .level-custom .seg button { font-size: 11.5px; padding: 0 2px; }
 .ab-btn { margin-left: auto; height: 20px; padding: 0 8px; border-radius: 10px; border: 1px solid var(--line); background: var(--sunk); color: var(--muted); font: 700 10.5px/1 inherit; cursor: pointer; }
 .ab-btn.on { background: var(--amber); border-color: var(--amber); color: #2a1d00; }
+/* Separate again */
+.sep-box { display: flex; flex-direction: column; gap: 8px; }
+.sep-pulls .btn { flex: 1; }
+.sep-last { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: var(--r-s); background: var(--sunk); border: 1px solid var(--line-soft); }

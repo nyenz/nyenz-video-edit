@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.37.0 — Separate again: choose what to pull out
+* **Separate again now asks what to pull out**: on Music you pull out **voices** or **effects**, on Effects **voices** or
+  **music**, on Voices **music** or **effects**. What is pulled out **joins its own track** (no extra track any more),
+  and the chosen track keeps the rest. The two always add up to what was there.
+* **Voices use a model made only for voices** (Kim Vocal 2, from Ultimate Vocal Remover's public models), much more
+  thorough than the first split's three-way model. It is downloaded during setup (67 MB), or the first time it is needed.
+* **Quality**: Fast, Balanced (each moment heard twice, which takes out the model's own noise) or Thorough. **Strength**:
+  Gentle, or Aggressive (goes over what is left once more).
+* **After it**: listen to what was taken out, go **back to the version before** (it is kept), or go **again, stronger**.
+  It is also in the right-click menu (Separate again → Pull out …).
+
 ## 1.36.0 — Level, Find problems, quick fixes, song tools, Made for
 * **Level** (was Even out) has four strengths, **Light, Medium, Strong, Max**, and **Custom**: how fast it reacts, how far
   it may lift quiet moments (+3 to +24 dB) and lower loud ones (−6 to −36 dB). It works on any part, group, section, song
