@@ -72,7 +72,8 @@ def test_split_sound_tracks_can_be_chosen_and_changed(live, page, split_movie):
     assert page.evaluate("() => kept()[1].mix.effects.volume") == 0.5 and page.evaluate("() => kept()[2].mix.effects.volume") == 0.5
     # right-click a part
     page.mouse.click(tl["x"] + xs[0], lane["y"] + 16, button="right")
-    assert page.locator(".menu.ctx", has_text="Choose the whole Effects track").count() == 1
+    page.hover(".menu.ctx div[role=menuitem]:has-text('Choose')")
+    assert page.locator(".menu.ctx.sub", has_text="The whole Effects track").count() == 1
     page.keyboard.press("Escape")
     page.evaluate("() => saveNow()")
     saved = live.call("GET", f"/api/projects/{pid}")["project"]

@@ -2446,7 +2446,8 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 layers.append({"path": self.state.resolve_input(x["file"]), "volume": x["volume"], "mute": x["mute"], "solo": x["solo"],
                                "parts": x.get("parts"), "duck": x.get("duck"), "auto": x.get("auto"),
-                               "fade_in": x.get("fade_in"), "fade_out": x.get("fade_out"), "start": x.get("start")})
+                               "fade_in": x.get("fade_in"), "fade_out": x.get("fade_out"), "start": x.get("start"),
+                               "vline": x.get("vline"), "shape": x.get("shape")})
             except EditForgeError:
                 raise EditForgeError("A music file of this project is gone.", "Open Audio and remove that music, or add it again.")
         captions_path = None
