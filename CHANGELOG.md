@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.36.0 — Level, Find problems, quick fixes, song tools, Made for
+* **Level** (was Even out) has four strengths, **Light, Medium, Strong, Max**, and **Custom**: how fast it reacts, how far
+  it may lift quiet moments (+3 to +24 dB) and lower loud ones (−6 to −36 dB). It works on any part, group, section, song
+  or whole track. **A/B** lets you hear it without Level for a moment. Quiet pauses are never pulled up (no hiss).
+* **Find problems** (was Sound check) lists everything that is **too loud, too quiet, silent, noisy or clipped**, in
+  small tabs. Click one to go there, **Fix** it, or **Fix all**: Level for loudness, Clean for noise, a little lower and
+  Level for clipped spots. Silent stretches can be removed. All show in colour on the Loudness strip.
+* **Quick fixes**: **Make voice clear** (low cut, Clear voice, light cleaning, gentle Dynamics, Level on the voices) and
+  **Remove silence** (takes the pauses out of the video; you choose how quiet, how long, and how much to keep around
+  the words).
+* **Song tools**: **Ends with the video** (the song's own ending lands at the video's end) and **Cuts on the beat**
+  (every cut between sections moves by at most a quarter second onto a beat).
+* **Made for** in Export: YouTube, TikTok, Instagram (−14 LUFS), Podcast (−16) or TV (−23). The finished video is set
+  to that level.
+
 ## 1.35.0 — parts, groups, volume lines, sub-menus
 * **Shape the sound** of any part, group, section or song, in one small card with tabs: **Tone** (Clear voice, Cut
   bass, Bright, Warm, Phone), **Cuts** (low cut against rumble and wind, high cut against hiss), **Dynamics** (gentle or

@@ -71,7 +71,7 @@ EXPORT_SIZES: Dict[str, Optional[int]] = {"4k": 3840, "1440": 2560, "1080": 1920
 DEFAULT_SETTINGS: Dict[str, Any] = {
     "shape": "original", "transition": "none", "transition_s": 0.3, "music": "", "music_volume": 0.25, "duck": True,
     "original_sound": True, "even_loudness": False, "fade_in": 0.0, "fade_out": 0.0, "quality": "best",
-    "loudness_step": 0,
+    "loudness_step": 0, "made_for": "youtube",
     "captions": "off", "caption_style": "karaoke", "caption_position": "bottom", "caption_size": "medium",
     # sound clean-up
     "noise": "off", "vocals": "keep", "voice_boost": False, "compress": False, "bass": 0.0, "treble": 0.0,
@@ -196,6 +196,11 @@ NR = {1: 6, 2: 12, 3: 20}              # Clean: noise taken out (dB)
 MAX_NUDGE_MS = 2000
 
 
+def _level_ok(v: Any) -> bool:
+    from .analysis.evenout import valid
+    return valid(v)
+
+
 def clean_shape(raw: Any) -> Dict[str, Any]:
     """How a part's sound is shaped; only what is set: Even out (0 off, 1 gentle, 2 strong), gentle fade in / out
     (seconds), Tone (a preset), Low cut / High cut (Hz), Dynamics (1 gentle, 2 strong), Clean (1 to 3) and Nudge (ms,
@@ -209,7 +214,7 @@ def clean_shape(raw: Any) -> Dict[str, Any]:
         except (TypeError, ValueError):
             return 0
     ev = _int("even")
-    if ev in (1, 2):
+    if ev and _level_ok(ev):
         out["even"] = ev
     for k in ("fin", "fout"):
         v = round(_num(raw.get(k), 0.0, 0.0, MAX_FADE), 2)
@@ -400,11 +405,17 @@ def clean_duck(raw: Any, own: Optional[str], default_under: str) -> Optional[Dic
     return {"on": True, "by": by} if by else None
 
 
+#: Made for: where the video goes, and the loudness that place expects (LUFS, highest peak)
+MADE_FOR = {"youtube": (-14.0, -1.5), "tiktok": (-14.0, -1.5), "instagram": (-14.0, -1.5), "podcast": (-16.0, -1.5), "tv": (-23.0, -2.0)}
+
+
 def final_loudness(settings: Dict[str, Any]) -> Dict[str, float]:
-    """The loudness the finished video is set to: the standard, moved by the chosen Overall loudness step."""
+    """The loudness the finished video is set to: the level of the place it is made for, moved by the chosen Overall
+    loudness step."""
     step = int(settings.get("loudness_step") or 0)
     step = max(-LOUDNESS_STEPS, min(LOUDNESS_STEPS, step))
-    return dict(FINAL_LOUDNESS, target=FINAL_LOUDNESS["target"] + step * LOUDNESS_STEP_DB)
+    target, peak = MADE_FOR.get(str(settings.get("made_for") or "youtube"), MADE_FOR["youtube"])
+    return dict(FINAL_LOUDNESS, target=target + step * LOUDNESS_STEP_DB, true_peak=peak)
 
 
 def clean_settings(raw: Any) -> Dict[str, Any]:
@@ -425,6 +436,7 @@ def clean_settings(raw: Any) -> Dict[str, Any]:
     if raw.get("quality") in QUALITIES:
         s["quality"] = raw["quality"]
     s["loudness_step"] = int(round(_num(raw.get("loudness_step"), 0.0, -LOUDNESS_STEPS, LOUDNESS_STEPS)))
+    s["made_for"] = raw.get("made_for") if raw.get("made_for") in MADE_FOR else "youtube"
     s["export_size"] = raw.get("export_size") if raw.get("export_size") in EXPORT_SIZES else "4k"
     s["captions"] = str(raw.get("captions") or "off")[:300]          # "off", "auto" (listen to the speech) or a subtitle file id
     if raw.get("caption_style") in CAPTION_STYLES:
@@ -464,7 +476,7 @@ def clean_settings(raw: Any) -> Dict[str, Any]:
                 auto = int(x.get("auto") or 0)
             except (TypeError, ValueError):
                 auto = 0
-            if auto in (1, 2):
+            if auto and _level_ok(auto):
                 y["auto"] = auto              # Auto level: the song evened out by itself (gentle / strong)
             for k, d in (("fade_in", 0.5), ("fade_out", 1.5)):
                 if x.get(k) is not None:

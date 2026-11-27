@@ -74,13 +74,18 @@ def test_split_parts_get_tone_cuts_and_timing_from_the_panel_and_the_menu(live, 
     # the player hears it: the tone chain of voices is set while playing
     page.evaluate("() => { seek(1); play(); }")
     page.wait_for_function("() => Layers.state() && Layers.state().voices.gain > 0", timeout=20000)
-    page.evaluate("() => pause()")
+    page.evaluate("() => { pause(); seek(0); }")
     # right-click: Dynamics from a sub-menu, on one part only
     page.eval_on_selector("#laneStems .lane.stem[data-layer=effects]", "e => e.scrollIntoView({ block: 'nearest' })")
     lane = page.query_selector("#laneStems .lane.stem[data-layer=effects]").bounding_box()
     tl = page.query_selector("#tlScroll").bounding_box()
     x1 = page.evaluate("() => px((layout()[1].out0 + layout()[1].out1) / 2) - $('tlScroll').scrollLeft")
-    page.mouse.click(tl["x"] + x1, lane["y"] + 16, button="right")
+    page.wait_for_timeout(400)                                                   # the timeline has stopped following the play
+    for _ in range(3):                                                           # a menu closes when the timeline scrolls
+        page.mouse.click(tl["x"] + x1, lane["y"] + 16, button="right")
+        if page.query_selector(".menu.ctx"):
+            break
+        page.wait_for_timeout(300)
     menu_pick(page, "Dynamics", "Strong")
     assert page.evaluate("() => kept().map(p => (p.mix && p.mix.effects && p.mix.effects.dyn) || 0)")[:3] == [0, 2, 0]
     # Reset all
