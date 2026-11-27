@@ -1593,6 +1593,27 @@ class AppState:
 DAY_SECONDS = 24 * 3600
 
 
+def reveal_file(path: str) -> bool:
+    """Show a made file in its folder (Explorer on Windows). The app runs on the person's own computer, so this opens
+    their file manager. False when there is no file, or no file manager (for example on a test server)."""
+    if not path or not os.path.isfile(path) or os.environ.get("EDITFORGE_NO_REVEAL"):
+        return False
+    import subprocess
+    try:
+        if sys.platform.startswith("win"):
+            subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", "-R", path])
+        else:
+            opener = shutil.which("xdg-open")
+            if not opener:
+                return False
+            subprocess.Popen([opener, os.path.dirname(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except OSError:
+        return False
+
+
 def _jobs_busy(state: "AppState") -> bool:
     try:
         return any(j["status"] in ("queued", "running") for j in state.store.list(200))
@@ -1775,13 +1796,16 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/jobs":
                 if self._guard() is None:
                     return
-                jobs = self.state.store.list(60)
+                jobs = self.state.store.list(400)
                 for job in jobs:
                     job["file_id"] = self.state.output_id(job)
                     opts = job.pop("options", None) or {}
+                    if opts.get("title"):
+                        job["title"] = str(opts["title"])[:120]     # renamed in Exports
                     job["kind"] = opts.get("kind") or "script"
                     job["preview"] = bool(opts.get("preview"))
-                    job["group"] = "preview" if job["preview"] else "clip" if opts.get("clipset") else "final"   # Exports: grouped
+                    job["group"] = ("preview" if job["preview"] else "clip" if opts.get("clipset") else "studio" if opts.get("studio")
+                                    else "final")                    # Exports: one tab per group
                     job.pop("script", None)          # can be large, and the page does not need it
                     job.pop("plan", None)
                 self._json({"jobs": jobs})
@@ -2126,6 +2150,21 @@ class Handler(BaseHTTPRequestHandler):
             elif re.fullmatch(r"/api/jobs/[0-9a-f]{12}/cancel", path):
                 ok = self.state.manager.cancel(path.split("/")[3])
                 self._json({"ok": ok})
+            elif re.fullmatch(r"/api/jobs/[0-9a-f]{12}/rename", path):
+                data = self._read_json()
+                if data is None:
+                    return
+                job = self.state.store.get(path.split("/")[3])
+                name = re.sub(r"[\x00-\x1f]", "", str(data.get("name") or "")).strip()[:120]
+                if not job or not name:
+                    raise EditForgeError("That export could not be renamed.", "Type a name and try again.")
+                opts = job.get("options") if isinstance(job.get("options"), dict) else {}
+                opts["title"] = name
+                self.state.store.update(job["id"], options=opts)
+                self._json({"ok": True, "title": name})
+            elif re.fullmatch(r"/api/jobs/[0-9a-f]{12}/reveal", path):
+                job = self.state.store.get(path.split("/")[3])
+                self._json({"ok": bool(job) and reveal_file(job.get("output_path") or "")})
             elif re.fullmatch(r"/api/jobs/[0-9a-f]{12}/resume", path):
                 ok = self.state.manager.resume(path.split("/")[3])
                 self._json({"ok": ok})

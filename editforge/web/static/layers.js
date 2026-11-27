@@ -25,7 +25,7 @@ const Layers = (() => {
   /** A piece's own loudness of a layer (1 = as the slider says; 0 = muted). */
   const ownGain = (p, n) => { const m = p && p.mix && p.mix[n]; return m ? (m.mute ? 0 : +m.volume) : 1; };
   const changed = () => NAMES.some((n) => Math.abs(gainOf(n) - 1) > 0.001) || (S.proj && S.proj.pieces.some((p) => !p.off && p.mix && Object.keys(p.mix).length)) ||
-    (S.proj && Object.keys(st().ducks || {}).length > 0);
+    (S.proj && Object.keys(st().ducks || {}).length > 0) || (S.proj && NAMES.some((n) => (st().mute || []).includes(n) || (st().solo || []).includes(n)));
 
   /** The part of the video to split: what the pieces use (plus a little margin), or everything. */
   function range() {
@@ -50,7 +50,7 @@ const Layers = (() => {
   function build() {
     const box = $("lyRows"); box.replaceChildren();
     for (const n of NAMES) {
-      const slider = el("input", { type: "range", class: "rng", min: "0", max: "200", step: "1", "aria-label": TITLE[n] + " loudness" });
+      const slider = el("input", { type: "range", class: "rng", min: "0", max: "500", step: "1", "aria-label": TITLE[n] + " loudness" });
       const val = el("b", { class: "num ly-val", text: "100%" });
       const mute = el("button", { class: "ly-mute", type: "button", title: "Turn " + TITLE[n].toLowerCase() + " off or on", "aria-label": "Mute " + TITLE[n].toLowerCase() }, icon("vol", "s"));
       const row = el("div", { class: "ly-row", "data-layer": n },
@@ -61,10 +61,7 @@ const Layers = (() => {
         mute);
       slider.addEventListener("input", () => { val.textContent = pct(slider.value / 100); paintRange(slider); setGain(n, slider.value / 100); paintMute(n); });
       slider.addEventListener("change", () => commit(n, slider.value / 100));
-      mute.addEventListener("click", () => {
-        const now = gainOf(n);
-        if (now > 0) { mute.dataset.was = String(now); commit(n, 0); } else commit(n, +mute.dataset.was > 0 ? +mute.dataset.was : 1);
-      });
+      mute.addEventListener("click", () => { flipKey("mute", n); paint(); });
       L.rows[n] = { row, slider, val, mute };
       box.append(row);
     }
@@ -81,9 +78,10 @@ const Layers = (() => {
   function paintMute(n) {
     const r = L.rows[n], g = r ? +r.slider.value / 100 : gainOf(n);
     if (!r) return;
-    r.mute.classList.toggle("on", g === 0);
-    r.mute.replaceChildren(icon(g === 0 ? "mute" : "vol", "s"));
-    r.row.classList.toggle("off", g === 0);
+    const off = g === 0 || (st().mute || []).includes(n);
+    r.mute.classList.toggle("on", off);
+    r.mute.replaceChildren(icon(off ? "mute" : "vol", "s"));
+    r.row.classList.toggle("off", off);
   }
   /** An honest report of how clean the split is: how the sound is shared, how well the layers add back, and what an AI split cannot promise. */
   function paintQuality(info) {
@@ -191,7 +189,7 @@ const Layers = (() => {
     for (const n of NAMES) {
       const a = new Audio(); a.preload = "auto";
       const g = L.ctx.createGain();
-      L.ctx.createMediaElementSource(a).connect(g); g.connect(L.ctx.destination);
+      L.ctx.createMediaElementSource(a).connect(g); g.connect(soundOut(L.ctx));
       L.els[n] = a; L.gains[n] = g;
     }
     return true;
@@ -203,7 +201,8 @@ const Layers = (() => {
     const shape = p && typeof partShapeGain === "function" && typeof active === "function" ? partShapeGain(p, n, active().currentTime) : 1;   // even out, fades
     const duck = typeof stemDuckGain === "function" && typeof active === "function" ? stemDuckGain(n, active().currentTime) : 1;   // going down under another track
     const master = typeof masterGain === "function" ? masterGain() : 1;            // the Overall loudness chosen in Export
-    L.gains[n].gain.value = Math.max(0, v) * f * ownGain(p, n) * shape * duck * master;
+    const heard = typeof keyHeard === "function" && !keyHeard(n) ? 0 : 1;          // muted, or someone else is soloed
+    L.gains[n].gain.value = Math.max(0, v) * f * ownGain(p, n) * shape * duck * master * heard;
   }
   function gainsNow(p) { for (const n of NAMES) setGain(n, gainOf(n), p); }
   function on() { return usable(); }

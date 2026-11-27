@@ -218,7 +218,7 @@ def export(c, film, settings, pieces=None, preview=True):
 
 def test_layer_settings_are_cleaned():
     s = P.clean_settings({"mix_split": "../x", "mix_music": 9, "mix_voices": -3, "mix_effects": "loud"})
-    assert s["mix_split"] == "" and s["mix_music"] == 2.0 and s["mix_voices"] == 0.0 and s["mix_effects"] == 1.0
+    assert s["mix_split"] == "" and s["mix_music"] == 5.0 and s["mix_voices"] == 0.0 and s["mix_effects"] == 1.0
     good = "a" * 32 + "/000000000-000006000"
     assert P.clean_settings({"mix_split": good})["mix_split"] == good
 
@@ -529,10 +529,10 @@ def test_music_parts_and_ducking_are_cleaned_and_turned_into_filters():
     st = P.clean_settings({"layers": [{"file": "u/x/a.mp3", "volume": 1, "parts": [{"end": 2, "volume": 3}, {"end": 1}, {"end": 4, "mute": 1}, {"end": None, "volume": 0.5}],
                                        "duck": {"on": 1, "level": 9}, "locked": 1}, {"file": "u/x/b.mp3", "parts": [{"end": None}], "duck": {"on": 0}}]})
     a, b = st["layers"]
-    assert a["parts"] == [{"end": 2.0, "volume": 2.0, "mute": False}, {"end": 4.0, "volume": 1.0, "mute": True}, {"end": None, "volume": 0.5, "mute": False}]
+    assert a["parts"] == [{"end": 2.0, "volume": 3.0, "mute": False}, {"end": 4.0, "volume": 1.0, "mute": True}, {"end": None, "volume": 0.5, "mute": False}]
     assert a["duck"] == {"on": True, "by": {"voices": 1.0}} and a["locked"] is True     # an older project's one level reads the same
     assert "parts" not in b and "duck" not in b and "locked" not in b                       # nothing changed: nothing kept
-    assert P.music_parts_spans(a["parts"], 5.0) == [(0.0, 2.0, 2.0), (2.0, 4.0, 0.0), (4.0, 5.0, 0.5)]
+    assert P.music_parts_spans(a["parts"], 5.0) == [(0.0, 2.0, 3.0), (2.0, 4.0, 0.0), (4.0, 5.0, 0.5)]
     assert P.duck_spans([(1.0, 1.5), (1.9, 2.5), (8.0, 9.0)], 10.0) == [(0.65, 3.3), (7.65, 9.8)]
     f = P.music_envelope(a["parts"], {"on": True, "by": {"voices": 0.3}}, {"voices": [(1.0, 2.0)]}, 5.0)
     assert f.count("volume=") == 4 and "pow(10," in f and "-10.46" in f                      # 30 % is -10.46 dB

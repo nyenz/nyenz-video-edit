@@ -46,7 +46,7 @@ def test_loudness_is_parsed_and_judged():
 def test_settings_keep_layers_and_solo_and_ducking_is_gone():
     st = P.clean_settings({"layers": [{"file": "u/x/a.mp3", "volume": 9, "mute": 1, "solo": 0}, {"file": ""}, "bad"] + [{"file": "f"}] * 20,
                            "mute": ["voices", "evil"], "solo": ["music"]})
-    assert st["layers"][0] == {"file": "u/x/a.mp3", "volume": 2.0, "mute": True, "solo": False}
+    assert st["layers"][0] == {"file": "u/x/a.mp3", "volume": 5.0, "mute": True, "solo": False}
     assert 0 < len(st["layers"]) <= P.MAX_LAYERS
     assert st["mute"] == ["voices"] and st["solo"] == ["music"]
 
