@@ -1206,3 +1206,11 @@ svg.vline .vl-dot:hover { r: 6; fill: var(--amber); }
 .btn.busy { position: relative; }
 .btn.busy::after { content: ""; position: absolute; left: 10%; right: 10%; bottom: 3px; height: 2px; border-radius: 2px; background: rgba(255, 255, 255, .55); animation: actpulse 1s ease-in-out infinite; }
 @keyframes exspin { to { transform: rotate(360deg); } }
+/* Export window: the sound that goes in */
+.ex-sound { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.ex-sound-h { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--muted); }
+.ex-sound-h .ic { color: var(--amber); }
+.ex-sound .stat { display: flex; justify-content: space-between; gap: 14px; }
+.ex-sound-v { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; color: var(--ink); font-size: 12.5px; }
+.ex-sound .hint.warn { color: var(--amber); margin: 2px 0 0; }
+.job .facts.songs { color: var(--muted); }

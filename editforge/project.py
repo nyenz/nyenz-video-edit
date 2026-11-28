@@ -849,6 +849,44 @@ def attach_shapes(live: List[Dict[str, Any]], groups: List[List[Any]], src_path:
                 seg.shape = shape
 
 
+_SONG_LOCK = threading.Lock()
+
+
+def song_copy(path: str, home: Optional[str] = None) -> str:
+    """A clean copy of a song for mixing: only its sound (no cover picture, no tags), decoded once to lossless FLAC at
+    48 kHz stereo and kept. Songs from the internet are often not what their name says (an .mp3 that is really AAC or
+    Opus, a cover picture, odd sample rates, broken length headers); mixing the clean copy gives the same result for
+    every one of them. Falls back to the file itself if it can not be read that way (the old behaviour)."""
+    import hashlib
+    import subprocess
+    from .core.cache import home_dir
+    from .core.ffmpeg import get_tools
+    try:
+        st_ = os.stat(path)
+    except OSError:
+        return path
+    key = hashlib.sha1(f"{os.path.abspath(path)}|{st_.st_size}|{int(st_.st_mtime)}|song1".encode()).hexdigest()[:24]
+    root = (Path(home) if home else home_dir()) / "songs"
+    out = root / f"{key}.flac"
+    if out.exists() and out.stat().st_size > 0:
+        return str(out)
+    with _SONG_LOCK:
+        if out.exists() and out.stat().st_size > 0:
+            return str(out)
+        root.mkdir(parents=True, exist_ok=True)
+        tmp = root / f"{key}.{os.getpid()}.part.flac"
+        r = subprocess.run([get_tools().ffmpeg, "-nostdin", "-v", "error", "-y", "-i", path, "-map", "0:a:0", "-vn", "-sn", "-dn",
+                            "-map_metadata", "-1", "-ac", "2", "-ar", "48000", "-c:a", "flac", str(tmp)], capture_output=True, check=False)
+        if r.returncode != 0 or not tmp.exists() or tmp.stat().st_size < 100:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            return path
+        os.replace(tmp, out)
+    return str(out)
+
+
 def music_shape(t: Dict[str, Any], total: float, cache: Optional[str]) -> str:
     """Filters (finished-video time) for a music track's Auto level / Even out and the gentle fades of its parts."""
     from .analysis import evenout
@@ -1377,6 +1415,9 @@ def plan_project(project: Dict[str, Any], src_path: str, *, music_path: Optional
             continue
         if not probe_media(t["path"]).has_audio:
             raise ScriptError("A music file has no sound.", "Choose an audio file (mp3, wav, m4a ...).")
+        t = dict(t, path=song_copy(t["path"], stems_home))      # mixed from a clean copy of the song (any format plays the same)
+        if not probe_media(t["path"]).has_audio:
+            raise ScriptError("A music file has no sound.", "Choose an audio file (mp3, wav, m4a ...).")
         # the music's loudness is whatever you set: the track, its parts, and (when switched on) lower while people talk
         fi = t.get("fade_in")
         fo = t.get("fade_out")
@@ -1459,6 +1500,17 @@ def plan_project(project: Dict[str, Any], src_path: str, *, music_path: Optional
     out_path = output_path or default_output_path(src_path, out.container)
     return Plan(tl, media, planner.script, out_path, list(planner.warnings), notes + list(planner.notes), list(analyzer.notes),
                 source_identity(src_path), analyzer, {"fast_cuts": False, "preview": preview})
+
+
+def joined_name(stem: str, name: str) -> str:
+    """'<movie>_<clip name>', without saying the movie twice when the clip name already starts with it
+    ('Film (2019)' + 'Film (2019) - Clip 01' -> 'Film (2019) - Clip 01')."""
+    norm = lambda x: re.sub(r"[\s_.]+", " ", x).strip().lower()
+    if not stem:
+        return name
+    if norm(name).startswith(norm(stem)):
+        return name
+    return f"{stem}_{name}"
 
 
 def output_stem(project: Dict[str, Any], src_path: str, preview: bool) -> str:

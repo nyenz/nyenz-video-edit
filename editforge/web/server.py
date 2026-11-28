@@ -1446,7 +1446,7 @@ class AppState:
                 continue
             proj = clip_mod.clip_project(cs, clip, dur)
             project_mod.plan_project(proj, src, stems_home=str(self.home))          # a clear message before anything starts
-            name = clean_filename(f"{stem}_{clip['name']}").rsplit(".", 1)[0][:80]
+            name = clean_filename(project_mod.joined_name(stem, clip["name"])).rsplit(".", 1)[0][:80]
             job = self.manager.submit(json.dumps(proj), src, "", {"kind": "project", "preview": False, "music_path": None,
                                                                  "output_dir": str(self.outputs), "stems_home": str(self.home),
                                                                  "output_name": name, "clipset": cid, "clip": clip["id"],
@@ -2049,6 +2049,7 @@ class Handler(BaseHTTPRequestHandler):
                     job["kind"] = opts.get("kind") or "script"
                     job["preview"] = bool(opts.get("preview"))
                     job["project_id"] = str(opts.get("project_id") or "")
+                    job["songs"] = [str(x)[:120] for x in (opts.get("songs") or [])][:8]
                     job["group"] = ("preview" if job["preview"] else "clip" if opts.get("clipset") else "studio" if opts.get("studio")
                                     else "final")                    # Exports: one tab per group
                     job.pop("script", None)          # can be large, and the page does not need it
@@ -2737,7 +2738,8 @@ class Handler(BaseHTTPRequestHandler):
                                      stems_home=str(self.state.home))
         opts = {"kind": "project", "preview": preview, "music_path": music_path, "layers": layers, "captions_path": captions_path, "project_id": pid,
                 "output_dir": str(self.state.outputs), "stems_home": str(self.state.home),
-                "output_name": project_mod.output_stem(proj, src, preview), "studio": proj.get("stage") == "studio"}
+                "output_name": project_mod.output_stem(proj, src, preview), "studio": proj.get("stage") == "studio",
+                "songs": [os.path.basename(x["path"]) for x in layers if not x.get("mute")][:8]}        # shown on the finished export
         return self.state.manager.submit(json.dumps(proj), src, "", opts)
 
     def _beats(self, ident: str) -> Dict[str, Any]:
@@ -2839,7 +2841,7 @@ class Handler(BaseHTTPRequestHandler):
             project_mod.plan_project(proj, src)
             return [self.state.manager.submit(json.dumps(proj), src, "", {"kind": "project", "preview": False, "music_path": None,
                                                                          "output_dir": str(self.state.outputs), "output_name": f"{stem}_joined"})]
-        return [self.state.manager.submit(f"keep {a:.3f}-{b:.3f}", src, "", dict(base, output_name=f"{stem}_{name}"))
+        return [self.state.manager.submit(f"keep {a:.3f}-{b:.3f}", src, "", dict(base, output_name=project_mod.joined_name(stem, name)))
                 for a, b, name in clips]
 
     def _media(self) -> None:

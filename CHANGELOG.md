@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.40.4
+* **Songs are mixed from a clean copy**: each song is first turned into a plain lossless sound file (no cover picture,
+  no tags, one sample rate), so songs from the internet that are not what their name says (an .mp3 that is really AAC
+  or Opus, cover pictures, odd rates) go into previews and exports the same as in the player.
+* **Export window shows the sound that goes in**: the video sound (and its split mix), every song with its loudness,
+  and a note when a song is muted or Solo is on.
+* **Finished exports say which song is in them** ("With song: …").
+* **"Watch" on the finished message**: when an export or preview is done, one click plays it.
+* **Clip file names no longer say the movie twice** ("Film (2019) - Clip 01" instead of
+  "Film (2019)_Film (2019) - Clip 01").
+
 ## 1.40.3
 * **Exports list scrolls again** (1.40.2 squeezed the cards so the list could not scroll and cards were cut).
 * **Export shows what it is doing at once**: the button and a line in the window say "Saving your edit…", then
