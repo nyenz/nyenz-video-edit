@@ -154,10 +154,12 @@ def test_followed_object_stays_in_the_middle_of_the_finished_video(moving, out):
 
 
 @needs_cv
-def test_follow_is_left_out_with_a_tall_shape_and_says_so(moving, out):
+def test_follow_is_kept_with_a_tall_shape_since_1_39(moving, out):
     pieces = [{"start": 0.0, "end": 2.0, "follow": {"mode": "object", "zoom": 2.0, "path": [[0, 0.2, 0.3], [2, 0.4, 0.5]]}}]
     plan = plan_project(project(pieces, shape="vertical"), moving, output_path=out())
-    assert any("original shape" in w for w in plan.warnings) and all(s.camera is None for s in plan.timeline.segments)
+    assert not any("original shape" in w for w in plan.warnings)
+    assert all(s.camera is not None or (s.reframe is not None and s.reframe.mode == "path") for s in plan.timeline.segments), \
+        [(s.camera, s.reframe) for s in plan.timeline.segments]
 
 
 def _face_photo():

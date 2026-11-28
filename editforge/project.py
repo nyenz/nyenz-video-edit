@@ -176,7 +176,8 @@ def clean_piece(raw: Any, duration: float) -> Optional[Dict[str, Any]]:
         "zoom": {"mode": mode, "amount": round(_num(zoom_raw.get("amount"), 1.3, 1.0, 4.0), 3)},
         "color": {"brightness": round(_num(color_raw.get("brightness"), 0.0, -1.0, 1.0), 3),
                   "contrast": round(_num(color_raw.get("contrast"), 1.0, 0.0, 3.0), 3),
-                  "saturation": round(_num(color_raw.get("saturation"), 1.0, 0.0, 3.0), 3)},
+                  "saturation": round(_num(color_raw.get("saturation"), 1.0, 0.0, 3.0), 3),
+                  "warmth": round(_num(color_raw.get("warmth"), 0.0, -1.0, 1.0), 3)},
         "follow": {"mode": follow_mode, "zoom": round(_num(follow_raw.get("zoom"), 1.6, 1.1, 4.0), 3),
                    "path": points if follow_mode == "object" else []},
     }
@@ -443,6 +444,27 @@ def final_loudness(settings: Dict[str, Any]) -> Dict[str, float]:
     return dict(FINAL_LOUDNESS, target=target + step * LOUDNESS_STEP_DB, true_peak=peak)
 
 
+MARKERS_MAX = 200
+
+
+def clean_markers(raw: Any) -> List[Dict[str, Any]]:
+    """Studio markers: a time on the finished video and a short note, sorted by time."""
+    out: List[Dict[str, Any]] = []
+    for m in raw if isinstance(raw, list) else []:
+        if not isinstance(m, dict):
+            continue
+        try:
+            t = float(m.get("t"))
+        except (TypeError, ValueError):
+            continue
+        if not (t >= 0 and t < 1e6):
+            continue
+        out.append({"t": round(t, 3), "note": str(m.get("note") or "")[:80]})
+        if len(out) >= MARKERS_MAX:
+            break
+    return sorted(out, key=lambda m: m["t"])
+
+
 def clean_settings(raw: Any) -> Dict[str, Any]:
     raw = raw if isinstance(raw, dict) else {}
     s = dict(DEFAULT_SETTINGS)
@@ -451,6 +473,7 @@ def clean_settings(raw: Any) -> Dict[str, Any]:
     s["follow_who"] = raw.get("follow_who") if raw.get("follow_who") in FOLLOW_WHO else "auto"
     s["follow_feel"] = raw.get("follow_feel") if raw.get("follow_feel") in FOLLOW_FEELS else "steady"
     s["follow_room"] = bool(raw.get("follow_room", False))
+    s["markers"] = clean_markers(raw.get("markers"))
     if raw.get("transition") == "none" or raw.get("transition") in XFADE:
         s["transition"] = raw["transition"]
     s["transition_s"] = round(_num(raw.get("transition_s"), 0.3, 0.1, 3.0), 3)
@@ -934,7 +957,7 @@ def clean_project(raw: Any, duration: float) -> Dict[str, Any]:
     return out
 
 
-STAGES = ("edit", "final")
+STAGES = ("edit", "final", "studio")      # studio: outside the pipeline, any video, every tool
 _PARENT = re.compile(r"^[0-9a-f]{12}$")
 META_KEYS = ("stage", "parent", "version", "task", "task_done")     # task: work the app does for it in the background
 
@@ -1163,8 +1186,8 @@ class _ProjectPlanner(Planner):
                 z0, z1 = {"in": (1.0, amount), "out": (amount, 1.0), "hold": (amount, amount)}[zoom]
                 seg.camera = CameraSpec(z0, z1, 0.5, 0.5, 0.5, 0.5, "ease_in_out", a / self.F, b / self.F)
             c = piece["color"]
-            if (c["brightness"], c["contrast"], c["saturation"]) != (0.0, 1.0, 1.0):
-                seg.color = ColorSpec(c["brightness"], c["contrast"], c["saturation"])
+            if (c["brightness"], c["contrast"], c["saturation"], c.get("warmth", 0.0)) != (0.0, 1.0, 1.0, 0.0):
+                seg.color = ColorSpec(c["brightness"], c["contrast"], c["saturation"], warmth=c.get("warmth", 0.0))
             if reframe is not None:
                 seg.reframe = ReframeSpec(reframe.aspect, reframe.mode, reframe.smooth, reframe.path)
         if not piece["reverse"]:

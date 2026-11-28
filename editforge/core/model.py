@@ -74,6 +74,7 @@ class ColorSpec:
     saturation: float = 1.0
     gamma: float = 1.0
     hue: float = 0.0
+    warmth: float = 0.0        # -1 cool (blue) .. +1 warm (orange)
 
 
 @dataclass

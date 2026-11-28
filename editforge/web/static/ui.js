@@ -262,7 +262,7 @@ const APP_NAME = "Nyenz Edit";
 const PAGES = [["/", "Home", "home"], ["/clips", "Clips", "scissors"], ["/edit", "Edit", "layers"], ["/final", "Final", "check"]];
 /** Back: to the page you came from inside the app, or else to Home at this stage. */
 function goBack(active) {
-  const home = "/?phase=" + ({ "/clips": "clips", "/edit": "edit", "/final": "final" }[active] || "clips");
+  const home = "/?phase=" + ({ "/clips": "clips", "/edit": "edit", "/final": "final", "/studio": "studio" }[active] || "clips");
   let inApp = false;
   try { inApp = !!document.referrer && new URL(document.referrer).origin === location.origin && new URL(document.referrer).pathname !== location.pathname; } catch (e) { /* no referrer */ }
   if (inApp && history.length > 1) history.back(); else location.href = home;
@@ -271,11 +271,14 @@ function topBar(active, extra) {
   const nav = el("nav", { class: "nav", "aria-label": "Pages" });
   PAGES.slice(1, 4).forEach(([href, name, ic], i) => nav.append(el("a", { href, class: active === href ? "on" : "", title: ["Stage 1: take clips out of a movie", "Stage 2: sections, versions and scenes", "Stage 3: sound, picture and export"][i] },
     el("span", { class: "n", text: String(i + 1) }), icon(ic, "s"), el("span", { text: name }))));
+  // Studio: not a stage (no number), set apart: open any video and change anything
+  const studio = el("a", { href: "/?phase=studio", class: "studio-link" + (active === "/studio" ? " on" : ""), title: "Studio: open any video, also a finished one, and change anything (not one of the stages)" },
+    icon("sparkles", "s"), el("span", { text: "Studio" }));
   const back = el("button", { type: "button", class: "btn ghost back-btn", id: "backBtn", title: "Back (Alt + Left arrow)", onclick: () => goBack(active) }, icon("chevl", "s"), el("span", { text: "Back" }));
   document.addEventListener("keydown", (e) => { if (e.altKey && e.key === "ArrowLeft") { e.preventDefault(); goBack(active); } });
   const bar = el("header", { class: "top" }, back,
     el("a", { class: "brand", href: "/", title: "Home" }, el("img", { src: "/static/logo.svg", alt: "" }), el("span", { text: APP_NAME })),
-    nav, el("div", { class: "grow" }), Update.pill());
+    nav, studio, el("div", { class: "grow" }), Update.pill());
   for (const x of extra || []) bar.append(x);
   bar.append(activityButton(), exportsButton());
   Exports.start(); Activity.start();
@@ -617,6 +620,7 @@ const Exports = {
         acts.append(btn("Edit", { icon: "layers", title: "Open this video in the Editor", onclick: () => openInEditor(j.file_id) }));
         acts.append(el("a", { class: "btn ghost", href: "/clips?open=" + encodeURIComponent(j.file_id), title: "Cut clips from this video" }, icon("scissors", "s")));
       }
+      if (j.file_id && !j.preview) acts.append(btn("", { icon: "sparkles", cls: "ghost", title: "Open in Studio (change anything)", onclick: () => openInStudio(j.file_id) }));
       acts.append(btn("", { icon: "edit", cls: "ghost", title: "Rename", onclick: async () => {
         const v = await askText("Rename", name, "Name of this export"); if (v === null || !v.trim() || v.trim() === name) return;
         try { await api("/api/jobs/" + j.id + "/rename", { method: "POST", json: { name: v.trim() } }); } catch (e) { toast(errText(e), true); return; }
@@ -971,6 +975,13 @@ function miniPlayer(url, opts) {
 }
 
 /** Make a project from a video and open it in the Editor. */
+/** Open a video (a file, or one of the exports) in Studio: outside the stages, every tool on one page. */
+async function openInStudio(fileId) {
+  try {
+    const r = await api("/api/projects", { method: "POST", json: { source: fileId, interval: 0, stage: "studio" } });
+    window.location.href = "/studio?p=" + r.project.id;
+  } catch (e) { toast(errText(e), true); }
+}
 async function openInEditor(fileId, interval) {
   try {
     const r = await api("/api/projects", { method: "POST", json: { source: fileId, interval: interval || 2 } });
