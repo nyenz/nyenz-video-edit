@@ -19,6 +19,7 @@ def private_home(tmp_path_factory):
     home = tmp_path_factory.mktemp("ef_home")
     os.environ["EDITFORGE_HOME"] = str(home)
     os.environ["EDITFORGE_NO_REVEAL"] = "1"
+    os.environ["EDITFORGE_NO_DOWNLOAD"] = "1"          # the tests never download models (the ones that need one copy it in)
     yield home
 
 

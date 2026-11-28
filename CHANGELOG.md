@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.39.0 — tracking that works for 9:16 (and 4:5, 1:1)
+* **Track every section** (Picture → Tracking, or *Make it 9:16 and track*): every section of a tall frame follows the
+  most visible person or thing of its shots, by itself. The picture is zoomed to fill the frame, the view moves so the
+  subject stays in the middle, and it never shows the picture's edge. When the subject leaves, it moves on to the next
+  most visible one. Each shot (between scene changes) looks for its own subject and the view jumps at the cut instead of
+  gliding across. Sections tracked by hand (Track something here…) are kept.
+* **Choices**: Follow **Auto / People / Faces / Biggest thing**, Feel **Steady / Lively** (smoothed both ways, so it never
+  trails behind), and **Space in front**.
+* **It uses a detector of people and things** (YOLOX-S from OpenCV's model zoo, Apache-2.0; 36 MB, downloaded during
+  setup or the first time). Before, tall shapes only looked for frontal faces and lost everyone else. What it finds is
+  saved per video, so a second export does not look again.
+* The quick shapes without a frame track too (Tall, the new **Portrait 4:5**, Square → *Tracking*), with a live preview
+  in the player, and a section's own Track now works in them (it was left out before).
+* Plain tall or square crops no longer run face detection for nothing.
+
 ## 1.38.0 — Back, going on after a power cut, faster scene finding, titles by themselves
 * **Back** (next to Undo, and in every right-click menu): go back on one kind of change — Cuts, Loudness, Level and
   fades, Shape the sound, Songs, Volume lines, Groups, Words, Picture, Export and more — up to **5 steps each**. Only

@@ -61,7 +61,12 @@ SHAPES: Dict[str, tuple] = {
     "square": ("instagram_square", "1:1", False, None),
     "square_follow": ("instagram_square", "1:1", True, None),
     "square_blur": ("instagram_square", None, False, "blur"),
+    "portrait": ("instagram_portrait", "4:5", False, None),
+    "portrait_follow": ("instagram_portrait", "4:5", True, None),
+    "portrait_blur": ("instagram_portrait", None, False, "blur"),
 }
+FOLLOW_WHO = ("auto", "people", "faces", "biggest")      # who a follow shape follows (see analysis/subjects.py)
+FOLLOW_FEELS = ("steady", "lively")
 #: quality name -> (CRF, x264 preset). Lower CRF is better; "medium" squeezes more quality into each megabyte than "veryfast".
 QUALITIES: Dict[str, tuple] = {"best": (17, "medium"), "high": (20, "veryfast"), "small": (23, "veryfast"),
                                # clips, made to be edited again: so fine that a second making cannot be told apart
@@ -382,6 +387,8 @@ def clean_place(raw: Any) -> Optional[Dict[str, float]]:
         if len(pts) >= 2:
             out["track"] = {"path": pts, "found": round(_num(tr.get("found"), 1.0, 0.0, 1.0), 3),
                             "axes": tr.get("axes") if tr.get("axes") in ("x", "xy") else "x"}
+            if tr.get("auto"):
+                out["track"]["auto"] = True          # made by Tracking (Track every section), not by a box drawn by hand
     return out
 
 
@@ -441,6 +448,9 @@ def clean_settings(raw: Any) -> Dict[str, Any]:
     s = dict(DEFAULT_SETTINGS)
     if raw.get("shape") in SHAPES:
         s["shape"] = raw["shape"]
+    s["follow_who"] = raw.get("follow_who") if raw.get("follow_who") in FOLLOW_WHO else "auto"
+    s["follow_feel"] = raw.get("follow_feel") if raw.get("follow_feel") in FOLLOW_FEELS else "steady"
+    s["follow_room"] = bool(raw.get("follow_room", False))
     if raw.get("transition") == "none" or raw.get("transition") in XFADE:
         s["transition"] = raw["transition"]
     s["transition_s"] = round(_num(raw.get("transition_s"), 0.3, 0.1, 3.0), 3)
@@ -1156,7 +1166,7 @@ class _ProjectPlanner(Planner):
             if (c["brightness"], c["contrast"], c["saturation"]) != (0.0, 1.0, 1.0):
                 seg.color = ColorSpec(c["brightness"], c["contrast"], c["saturation"])
             if reframe is not None:
-                seg.reframe = ReframeSpec(reframe.aspect, reframe.mode, reframe.smooth)
+                seg.reframe = ReframeSpec(reframe.aspect, reframe.mode, reframe.smooth, reframe.path)
         if not piece["reverse"]:
             return [seg]
         chunk = self._chunk_frames()          # reversing holds frames in memory, so it is done in small chunks
@@ -1165,7 +1175,7 @@ class _ProjectPlanner(Planner):
         for p in parts:
             p.reverse = True
             if p.reframe is not None:
-                p.reframe = ReframeSpec(reframe.aspect, reframe.mode, reframe.smooth)
+                p.reframe = ReframeSpec(reframe.aspect, reframe.mode, reframe.smooth, reframe.path)
         return list(reversed(parts))
 
     def join(self, a: Segment, b: Segment, kind: str, seconds: float) -> bool:
@@ -1285,7 +1295,8 @@ def plan_project(project: Dict[str, Any], src_path: str, *, music_path: Optional
         out.fps = Fraction(100)
     analyzer = Analyzer(media, None, cancel, log)
     planner = _ProjectPlanner(load_script(""), media, analyzer, out, FileResolver(), face_provider=make_face_provider(analyzer))
-    reframe = ReframeSpec(aspect, "face" if follow else "center") if aspect and planner.has_video else None
+    reframe = ReframeSpec(aspect, "subject" if follow else "center") if aspect and planner.has_video else None
+    planner.follow_opts = {"who": st.get("follow_who") or "auto", "feel": st.get("follow_feel") or "steady", "room": bool(st.get("follow_room"))}
     layers = list(layers or [])
     solo = _solo_any(st, layers)
     # the video's own sound is silent when switched off, muted, or when something else is soloed
@@ -1300,9 +1311,7 @@ def plan_project(project: Dict[str, Any], src_path: str, *, music_path: Optional
         face_path = follow_mod.face_points(analyzer.faces(min(p["start"] for p in wants_face), max(p["end"] for p in wants_face), 640))
         if not face_path:
             planner.warn("No faces were found, so the pieces set to follow a face are shown without following.")
-    if reframe is not None and any(p["follow"]["mode"] != "none" for p in live):
-        planner.warn("'Follow' on single pieces only works with the original shape, so it was left out. "
-                     "For a tall or square video choose a 'follow faces' shape instead.")
+
 
     def path_for(p: Dict[str, Any]) -> Optional[List[follow_mod.Point]]:
         if p["follow"]["mode"] == "face":
@@ -1311,7 +1320,17 @@ def plan_project(project: Dict[str, Any], src_path: str, *, music_path: Optional
             return [tuple(pt) for pt in p["follow"]["path"]]
         return None
 
-    pairs = [(p, planner.piece_segments(p, reframe, silent, path_for(p))) for p in live]
+    def piece_reframe(p: Dict[str, Any]) -> Optional[ReframeSpec]:
+        """In a tall or square shape, a section with its own Track keeps the tracked thing in the frame; Face follows faces."""
+        if reframe is None:
+            return None
+        if p["follow"]["mode"] == "object" and p["follow"]["path"]:
+            return ReframeSpec(reframe.aspect, "path", reframe.smooth, [(float(t), float(x)) for t, x, _y in p["follow"]["path"]])
+        if p["follow"]["mode"] == "face":
+            return ReframeSpec(reframe.aspect, "subject:faces", reframe.smooth)
+        return reframe
+
+    pairs = [(p, planner.piece_segments(p, piece_reframe(p), silent, path_for(p) if reframe is None else None)) for p in live]
     groups = [g for _, g in pairs if g]
     if not groups:
         raise ScriptError("The pieces that are left are empty.", "Put a piece back, or make a piece longer.")

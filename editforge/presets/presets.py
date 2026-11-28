@@ -44,6 +44,8 @@ PRESETS: List[Preset] = [
            aliases=("reels", "tiktok", "youtube_shorts", "vertical", "instagram_reels", "story"), max_fps=60),
     Preset("instagram_square", "Instagram square (1:1)", "1080x1080 square video with a blurred background.", 1080, 1080,
            None, 20, "veryfast", "160k", fit="blur", aliases=("square", "instagram", "1x1"), max_fps=60),
+    Preset("instagram_portrait", "Instagram portrait (4:5)", "1080x1350 portrait video with a blurred background.", 1080, 1350,
+           None, 20, "veryfast", "160k", fit="blur", aliases=("portrait", "4x5", "4:5"), max_fps=60),
     Preset("preview_480p", "480p preview", "Small and fast to make. Use it to check an edit quickly.", None, 480, None, 30,
            "ultrafast", "96k", aliases=("preview", "draft", "480p", "proxy_preview"), max_fps=30),
     Preset("podcast_audio", "Podcast audio (M4A)", "Sound only: mono AAC at 96 kbps, 44.1 kHz.", crf=0, audio_bitrate="96k",

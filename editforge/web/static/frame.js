@@ -352,7 +352,7 @@ const Frame = (function () {
   }
 
   // ---------------------------------------------------------------- the panel
-  function change(fn) { const fr = full(F.get()); fn(fr); F.set(fr); renderPanel(); show(); }
+  function change(fn) { const fr = full(F.get()); fn(fr); F.set(fr); renderPanel(); show(); if (typeof renderTrackPanel === "function") renderTrackPanel(); }
   function slider(label, min, max, step, val, fmt, onv) {
     const r = el("input", { type: "range", class: "rng", min: String(min), max: String(max), step: String(step), value: String(val), "aria-label": label });
     const b = el("b", { class: "num", text: fmt(val) });

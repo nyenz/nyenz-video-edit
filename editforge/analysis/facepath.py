@@ -327,7 +327,7 @@ def detect_faces(path: str, start: float, end: float, src_w: int, src_h: int, sa
 
 def fill_reframe_paths(segs: Sequence[Any], planner: Any, analyzer: Any) -> None:
     """Planner hook: give every face-following reframe segment a smooth crop path."""
-    wanted = [s for s in segs if s.reframe is not None and s.kind == "clip"]
+    wanted = [s for s in segs if s.reframe is not None and s.kind == "clip" and s.reframe.mode not in ("path", "center") and not s.reframe.mode.startswith("subject")]
     if not wanted:
         return
     F = planner.F

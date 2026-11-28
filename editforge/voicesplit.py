@@ -66,6 +66,8 @@ def download_model(home: Optional[Path] = None, progress: Optional[Callable[[flo
     dest = model_path(home)
     if model_ready(home):
         return dest
+    if os.environ.get("EDITFORGE_NO_DOWNLOAD"):
+        raise EditForgeError("The voice model is not here and downloads are switched off.", "Put voice-split-1.onnx in the models folder.")
     tmp = dest.with_suffix(".part")
     h = hashlib.sha256()
     try:

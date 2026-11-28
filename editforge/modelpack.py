@@ -7,6 +7,7 @@ the part of the installer that downloads them). Every file has a size and a SHA-
 * **Captions** (Whisper base): four files, about 148 MB.
 * **Scene changes** (TransNetV2, MIT licence): one 31 MB file. Without it the scene finder still works with its own picture checks.
 * **Voices** (Kim Vocal 2, for Separate again): one 67 MB file. Without it, it is downloaded the first time it is needed.
+* **Tracking** (YOLOX-S, Apache-2.0, for tall and square videos that follow people and things): one 36 MB file, the same.
 """
 
 from __future__ import annotations
@@ -37,6 +38,8 @@ FILES: List[Dict[str, object]] = [
      "size": 31261595, "sha256": "d7605e22428d583ec8d8b0c58085d124c57681f04f3d4faf4d76a8c53ef495b5"},
     {"model": "voices", "dir": "", "name": "voice-split-1.onnx", "url": RELEASES + "voice-model-1/voice-split-1.onnx",       # same as editforge/voicesplit.py
      "size": 66759214, "sha256": "ce74ef3b6a6024ce44211a07be9cf8bc6d87728cc852a68ab34eb8e58cde9c8b"},
+    {"model": "subjects", "dir": "", "name": "subjects-yolox.onnx", "url": RELEASES + "subject-model-1/subjects-yolox.onnx",   # same as analysis/subjects.py
+     "size": 35858002, "sha256": "c5c2d13e59ae883e6af3b45daea64af4833a4951c92d116ec270d9ddbe998063"},
 ]
 
 

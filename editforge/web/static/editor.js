@@ -21,7 +21,7 @@ const MIN_PIECE = 0.1;
 const LOOKS = [["hflip", "Flip", "fliph"], ["mirror", "Mirror", "mirror"], ["vflip", "Upside down", "flipv"], ["grayscale", "Black & white", "drop"],
   ["invert", "Invert", "palette"], ["sepia", "Sepia", "palette"], ["blur", "Blur", "drop"], ["sharpen", "Sharpen", "sparkles"], ["vignette", "Dark corners", "eye"]];
 const LOOK_NAME = Object.fromEntries(LOOKS.map(([k, n]) => [k, n]));
-const SHAPES = { original: null, vertical: 9 / 16, square: 1 };
+const SHAPES = { original: null, vertical: 9 / 16, square: 1, portrait: 4 / 5 };
 const TEXT_SIZES = { small: 40, medium: 64, large: 96, huge: 140 };
 const TEXT_COLORS = { white: "#ffffff", black: "#000000", yellow: "#ffe600", red: "#ff3030", blue: "#3090ff", green: "#30d060" };
 
@@ -215,6 +215,7 @@ function historyLabels(a, b) {
 function noteHistory(before) {
   const a = JSON.parse(before), b = JSON.parse(snapshot()), now = Date.now();
   const labels = historyLabels(a, b); if (!labels.length) return;
+  if (S.mode === "final" && (labels.includes("Cuts") || labels.includes("Picture"))) followChanged();
   for (const label of labels) {
     const list = S.hist[label] = S.hist[label] || [];
     if (list.length && now - list[0].when < 1200) continue;          // one step for quick repeats (a drag, a typed number)
@@ -343,7 +344,9 @@ function sizeFrame() {
   const fr = Frame.active(S.proj.settings.frame) ? Frame.full(S.proj.settings.frame) : null;
   if (fr) { $("shapeTag").textContent = "Frame " + (fr.ratio === "original" ? "original shape" : fr.ratio) + (fr.mask.shape !== "none" ? " · mask" : ""); renderOverlay(); Frame.show(); return; }
   Frame.show();
-  $("shapeTag").textContent = { original: "Original shape", vertical: "Tall 9:16", vertical_follow: "Tall 9:16 · follows faces", vertical_blur: "Tall 9:16 · blurred edges", square: "Square", square_follow: "Square · follows faces", square_blur: "Square · blurred edges" }[sh] || "";
+  $("shapeTag").textContent = { original: "Original shape", vertical: "Tall 9:16", vertical_follow: "Tall 9:16 · tracking", vertical_blur: "Tall 9:16 · blurred edges", square: "Square", square_follow: "Square · tracking", square_blur: "Square · blurred edges",
+    portrait: "Portrait 4:5", portrait_follow: "Portrait 4:5 · tracking", portrait_blur: "Portrait 4:5 · blurred edges" }[sh] || "";
+  for (const v of [V.a, V.b]) v.style.objectPosition = "";
   renderOverlay();
 }
 /** Show a piece's look on a video element with CSS (the export draws it properly). */
@@ -430,7 +433,7 @@ function tick() {
     } else { dress(v, nx.p); v.currentTime = nx.p.start; }
     badge(nx.p); prepNext(nx);
   }
-  Layers.follow(active(), V.seg.p); musicGains(); musicFollow(); paintMeter();
+  Layers.follow(active(), V.seg.p); musicGains(); musicFollow(); paintMeter(); followView(active(), V.seg.p);
   if (!Layers.on() && V.seg.p) { const vv = active(), pp = V.seg.p; setVideoVol(vv, pp.volume * partShapeGain(pp, "original", vv.currentTime), pp); }
   renderPlayhead(); renderOverlay();
   if (S.followPlay) scrollToPlayhead();
@@ -2978,7 +2981,111 @@ async function beatCut() {
 }
 
 // --- Format
-const SHAPE_CARDS = [["original", "Original", null], ["vertical", "Tall 9:16", 9 / 16], ["square", "Square", 1]];
+const SHAPE_CARDS = [["original", "Original", null], ["vertical", "Tall 9:16", 9 / 16], ["portrait", "Portrait 4:5", 4 / 5], ["square", "Square", 1]];
+// ---- tracking: a tall, portrait or square shape that follows the most visible person or thing of each shot
+S.subj = null;
+function following() { const sh = S.proj.settings.shape || ""; return sh.endsWith("_follow") && !Frame.active(S.proj.settings.frame); }
+/** Where the view is at a moment of a section: the crop slides along the section's path (0 = left edge, 1 = right edge). */
+function followView(v, p) {
+  if (!v || !p) return;
+  if (!following() || !S.subj || !S.subj.paths) { if (v.style.objectPosition) v.style.objectPosition = ""; return; }
+  const path = S.subj.paths[S.proj.pieces.indexOf(p)];
+  if (!path || !path.length) { v.style.objectPosition = ""; return; }
+  const va = S.info.width / S.info.height, cw = frameAspect() / va;
+  if (cw >= 1) { v.style.objectPosition = ""; return; }
+  const cx = lineAt(path, v.currentTime), off = clamp((cx - cw / 2) / (1 - cw), 0, 1);
+  v.style.objectPosition = (off * 100).toFixed(2) + "% 50%";
+}
+async function startFollow(force) {
+  if (!following()) return;
+  try {
+    await saved();
+    const r = await api("/api/projects/" + S.id + "/subjects", { method: "POST", json: {} });
+    S.subj = Object.assign(S.subj || {}, r); renderShape(); pollFollow();
+  } catch (e) { toast(errText(e), true); }
+}
+function pollFollow() {
+  clearTimeout(S.subjTimer);
+  S.subjTimer = setTimeout(async () => {
+    try {
+      const r = await api("/api/projects/" + S.id + "/subjects");
+      S.subj = r;
+      if (r.state === "running") pollFollow();
+      if (r.state === "done" || r.state === "failed") { renderShape(); if (!S.playing) { const v = active(); if (V.seg) followView(v, V.seg.p); } }
+      else updateFollowNote();
+    } catch (e) { pollFollow(); }
+  }, 800);
+}
+function updateFollowNote() { const n = $("followNote"); if (n && S.subj && S.subj.state === "running") n.textContent = (S.subj.message || "Finding who to follow") + "… " + Math.round((S.subj.progress || 0) * 100) + "%"; }
+/** Tracking with a frame (Picture panel, e.g. 9:16): every section follows the most visible person or thing of its shots,
+ *  done for you (the same finder as the Tracking shapes); a section can still be tracked by hand with a box. */
+function frameTrackBox() {
+  const st = S.proj.settings, sj = S.subj || {};
+  const f = Frame.full(st.frame), sh0 = pictureShare(f);
+  const n = kept().filter((p) => p.place && p.place.track && p.place.track.auto).length;
+  const set = (k, v) => { change(() => { st[k] = v; }, { keepVideo: true }); renderShape(); };
+  return el("div", { class: "follow-box" },
+    el("div", { class: "row between" }, el("b", { text: "Tracking" }), el("span", { class: "note num", text: n ? n + " of " + kept().length + " sections" : "off" })),
+    el("p", { class: "note", text: "Each section follows whoever (or whatever) stands out most in its shots; when they leave, the next one." + (sh0.w <= 1.001 ? " The picture is zoomed to fill the frame first." : "") }),
+    el("div", { class: "field" }, el("span", { text: "Follow" }), segmented([["auto", "Auto"], ["people", "People"], ["faces", "Faces"], ["biggest", "Biggest thing"]], st.follow_who || "auto", (v) => set("follow_who", v))),
+    el("div", { class: "field" }, el("span", { text: "Feel" }), segmented([["steady", "Steady"], ["lively", "Lively"]], st.follow_feel || "steady", (v) => set("follow_feel", v))),
+    el("div", { class: "field" }, el("span", { text: "Space in front" }), segmented([["0", "Off"], ["1", "On"]], st.follow_room ? "1" : "0", (v) => set("follow_room", v === "1"))),
+    el("span", { class: "note", id: "followNote", text: sj.state === "running" ? (sj.message || "Finding who to follow") + "… " + Math.round((sj.progress || 0) * 100) + "%" : "" }),
+    el("div", { class: "btns" },
+      btn(n ? "Track again" : "Track every section", { icon: "target", cls: "sm primary", onclick: () => autoTrackFrame() }),
+      n ? btn("Stop tracking", { icon: "x", cls: "sm ghost", onclick: () => stopTrack(kept().filter((p) => p.place && p.place.track)) }) : null));
+}
+/** The Tracking card of the Picture panel: with a tall (or narrower) frame, Track every section; else how to start. */
+function renderTrackPanel() {
+  const box = $("trackPanel"); if (!box || !S.proj || !S.info || !S.info.has_video) return;
+  box.replaceChildren();
+  const fr = Frame.full(S.proj.settings.frame);
+  const RAT = { "9:16": 9 / 16, "16:9": 16 / 9, "4:3": 4 / 3, "3:4": 3 / 4, "1:1": 1, "4:5": 4 / 5, "2.35:1": 2.35, "2:1": 2, "1.85:1": 1.85, "5.8in": 9 / 19.5 };
+  const va = S.info.width / S.info.height, ca = RAT[fr.ratio] || va;
+  if (Frame.active(S.proj.settings.frame) && ca < va - 0.01) { box.append(frameTrackBox()); return; }
+  if (following()) { box.append(el("p", { class: "hint", text: "Tracking is on in the shape below (" + (S.proj.settings.shape || "").split("_")[0] + ")." })); return; }
+  box.append(el("p", { class: "hint", text: "Choose a tall shape above (for example 9:16). Then the picture can follow people and things here, by itself." }),
+    btn("Make it 9:16 and track", { icon: "target", cls: "sm", onclick: async () => {
+      if (typeof Frame.setRatio === "function") Frame.setRatio("9:16");
+      else { change(() => { S.proj.settings.frame = Object.assign({}, S.proj.settings.frame || {}, { ratio: "9:16" }); }, { keepVideo: true }); Frame.refresh && Frame.refresh(); }
+      sizeFrame(); renderTrackPanel(); autoTrackFrame();
+    } }));
+}
+async function autoTrackFrame() {
+  if (trackLocked("video")) { lockedNote("video"); return; }
+  const f0 = Frame.full(S.proj.settings.frame);
+  if (Math.abs(f0.rotate) > 0.5) { toast("Turn the picture back to straight (Rotate 0) first, then track.", true); return; }
+  try {
+    await saved();
+    let r = await api("/api/projects/" + S.id + "/subjects", { method: "POST", json: {} });
+    S.subj = r; renderShape();
+    while (r.state === "running") { await new Promise((ok) => setTimeout(ok, 800)); r = await api("/api/projects/" + S.id + "/subjects"); S.subj = r; updateFollowNote(); }
+    if (r.state !== "done") { toast(r.error || "Tracking could not look at the video.", true); renderShape(); return; }
+    const RAT = { "9:16": 9 / 16, "16:9": 16 / 9, "4:3": 4 / 3, "3:4": 3 / 4, "1:1": 1, "4:5": 4 / 5, "2.35:1": 2.35, "2:1": 2, "1.85:1": 1.85, "5.8in": 9 / 19.5 };
+    const va = S.info.width / S.info.height, ca = RAT[f0.ratio] || va;
+    let zoomed = false, n = 0;
+    change(() => {
+      const base = Frame.full(S.proj.settings.frame);
+      if (va > ca && base.scale < va / ca - 1e-3) { S.proj.settings.frame = Object.assign({}, S.proj.settings.frame, { scale: +(va / ca).toFixed(4) }); zoomed = true; }
+      const fr = Frame.full(S.proj.settings.frame), sh = pictureShare(fr), lim = Math.max(0, sh.w - 1);
+      S.proj.pieces.forEach((p, i) => {
+        const path = r.paths[i];
+        if (p.off || !path || !path.length) return;
+        if (p.place && p.place.track && !p.place.track.auto) return;           // tracked by hand: kept
+        const own = Object.assign({ x: fr.x, y: fr.y, scale: fr.scale, rotate: fr.rotate }, p.place || {});
+        own.scale = fr.scale;
+        const pts = path.map(([t, cx]) => [t, +clamp(-(cx - 0.5) * sh.w * 2 - own.x, -lim - own.x, lim - own.x).toFixed(5), 0]);
+        own.track = { path: pts.length > 1 ? pts : pts.concat([[p.end, pts[0][1], 0]]), found: 1, axes: "x", auto: true };
+        p.place = own; n++;
+      });
+    }, { keepVideo: true });
+    Frame.refresh && Frame.refresh();
+    renderShape(); if (typeof Frame.renderPanel === "function") Frame.renderPanel();
+    toast(n ? "Tracking on in " + n + " section" + (n > 1 ? "s" : "") + (zoomed ? " (the picture was zoomed to fill the frame)" : "") + ". Play it to see. Sections tracked by hand were kept." : "Nothing to follow was found in these sections.", !n);
+  } catch (e) { toast(errText(e), true); }
+}
+/** After an edit in a tracking shape: find what is missing (only new parts are looked at) and refresh the paths. */
+function followChanged() { if (!following()) return; clearTimeout(S.subjAgain); S.subjAgain = setTimeout(() => startFollow(), 1200); }
 function renderShape() {
   const sh = S.proj.settings.shape || "original", base = sh.split("_")[0], fill = sh.includes("_") ? sh.split("_")[1] : "middle";
   const box = $("shapeCards"); box.replaceChildren();
@@ -2988,9 +3095,27 @@ function renderShape() {
     box.append(el("button", { type: "button", class: "mode" + (base === k ? " on" : ""), onclick: () => setShape(k, fill) }, el("span", { class: "pic-box" }, pic), el("b", { text: name })));
   }
   const fb = $("shapeFill"); fb.replaceChildren();
-  if (Frame.active(S.proj.settings.frame)) { fb.append(el("p", { class: "hint", text: "The Frame panel sets the shape now (" + Frame.full(S.proj.settings.frame).ratio + "). Reset the frame there to use these." })); return; }
-  if (base !== "original") fb.append(segmented([["middle", "Crop"], ["blur", "Whole + blur"], ["follow", "Follow face"]], fill, (v) => setShape(base, v)));
+  renderTrackPanel();
+  if (Frame.active(S.proj.settings.frame)) {
+    fb.append(el("p", { class: "hint", text: "The Frame panel sets the shape now (" + Frame.full(S.proj.settings.frame).ratio + "). Reset the frame there to use these." }));
+    return;
+  }
+  if (base !== "original") fb.append(segmented([["middle", "Crop"], ["blur", "Whole + blur"], ["follow", "Tracking"]], fill, (v) => setShape(base, v)));
   else fb.append(el("p", { class: "hint", text: "The original keeps the whole picture." }));
+  if (base !== "original" && fill === "follow") {
+    const st = S.proj.settings, set = (k, v) => { change(() => { st[k] = v; }, { keepVideo: true }); renderShape(); startFollow(); };
+    const sj = S.subj || {};
+    fb.append(el("div", { class: "follow-box" },
+      el("p", { class: "note", text: "In every shot the frame follows whoever (or whatever) stands out most. When they leave, it moves on to the next one." }),
+      el("div", { class: "field" }, el("span", { text: "Follow" }), segmented([["auto", "Auto"], ["people", "People"], ["faces", "Faces"], ["biggest", "Biggest thing"]], st.follow_who || "auto", (v) => set("follow_who", v))),
+      el("div", { class: "field" }, el("span", { text: "Feel" }), segmented([["steady", "Steady"], ["lively", "Lively"]], st.follow_feel || "steady", (v) => set("follow_feel", v))),
+      el("div", { class: "field" }, el("span", { text: "Space in front" }), segmented([["0", "Off"], ["1", "On"]], st.follow_room ? "1" : "0", (v) => set("follow_room", v === "1"))),
+      el("p", { class: "note", id: "followNote", text: sj.state === "running" ? (sj.message || "Finding who to follow") + "… " + Math.round((sj.progress || 0) * 100) + "%"
+        : sj.state === "done" ? "Ready: play to see the frame follow. Right-click a section → Track something here… to choose who to follow in it."
+        : sj.state === "failed" ? "Could not look: " + (sj.error || "") : "" }),
+      sj.state === "failed" ? btn("Try again", { icon: "restore", cls: "sm ghost", onclick: () => startFollow(true) }) : null));
+    if (!sj.state || sj.state === "none") startFollow();
+  }
 }
 function setShape(base, fill) {
   const v = base === "original" ? "original" : fill === "middle" ? base : base + "_" + fill;
