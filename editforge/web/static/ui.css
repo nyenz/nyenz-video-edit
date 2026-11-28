@@ -1191,3 +1191,5 @@ svg.vline .vl-dot:hover { r: 6; fill: var(--amber); }
 }
 .home-link.studio-side { margin-top: 6px; border-top: 1px solid var(--line-soft); border-top-left-radius: 0; border-top-right-radius: 0; padding-top: 10px; }
 .home-link.studio-side .ic { color: var(--amber); }
+.mrow canvas.mwave { position: absolute; top: 0; z-index: 2; pointer-events: none; }
+.lane-item.music > span { position: relative; z-index: 3; text-shadow: 0 0 4px #1d1630, 0 0 2px #1d1630; }

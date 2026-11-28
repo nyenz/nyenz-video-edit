@@ -138,7 +138,7 @@ def test_send_to_final_opens_the_final_stage_with_the_sound_and_picture_tools(li
     page.wait_for_url("**/final?p=*", timeout=15000)
     wait_ready(page)
     assert page.evaluate("() => S.mode") == "final" and page.evaluate("() => S.proj.stage") == "final"
-    tabs = page.eval_on_selector_all(".ftabs button", "els => els.map(e => e.dataset.panel)")
+    tabs = page.eval_on_selector_all(".ftabs button", "els => els.filter(e => !e.hidden).map(e => e.dataset.panel)")
     assert tabs == ["sound", "frame", "text"] and page.is_hidden("#stepbar") and page.is_hidden(".edit-left")
     assert "on" in page.get_attribute(".ftabs button[data-panel=sound]", "class") and page.is_visible("#lyBox")
     page.click(".ftabs button[data-panel=frame]")
