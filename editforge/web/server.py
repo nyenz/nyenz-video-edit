@@ -2048,6 +2048,7 @@ class Handler(BaseHTTPRequestHandler):
                         job["title"] = str(opts["title"])[:120]     # renamed in Exports
                     job["kind"] = opts.get("kind") or "script"
                     job["preview"] = bool(opts.get("preview"))
+                    job["project_id"] = str(opts.get("project_id") or "")
                     job["group"] = ("preview" if job["preview"] else "clip" if opts.get("clipset") else "studio" if opts.get("studio")
                                     else "final")                    # Exports: one tab per group
                     job.pop("script", None)          # can be large, and the page does not need it

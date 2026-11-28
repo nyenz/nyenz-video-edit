@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.40.3
+* **Exports list scrolls again** (1.40.2 squeezed the cards so the list could not scroll and cards were cut).
+* **Export shows what it is doing at once**: the button and a line in the window say "Saving your edit…", then
+  "Checking the edit…" for long videos, then "Starting…"; the buttons can not be pressed again meanwhile.
+* **A second export of the same project asks first** ("already exporting, start another?"), and pressing Export twice
+  opens one window.
+* One odd export record can no longer empty the Exports list.
+
 ## 1.40.2 — smoother exporting and removing
 * **Exports panel no longer jumps**: a running export only changes its bar, percentage and message, so the list keeps its
   place, the bar moves smoothly and a click on Stop is never lost. The list also keeps its scroll place when it changes.
