@@ -151,6 +151,9 @@
     <!-- Picture: ratio, background, position, mask, then joins and fades -->
     <section data-for="frame" data-stage="final" hidden>
       <div class="pad" id="framePanel"></div>
+      <details class="sec" id="secTrack" open><summary><i data-ic="target"></i><span>Tracking</span><i data-ic="chev" class="chev"></i></summary>
+        <div class="pad" id="trackPanel"></div>
+      </details>
       <details class="sec"><summary><i data-ic="film"></i><span>Between pieces and fades</span><i data-ic="chev" class="chev"></i></summary>
         <div class="pad">
           <div class="field"><span>Between pieces</span><select id="sTrans">
@@ -164,9 +167,9 @@
           </div>
         </div>
       </details>
-      <details class="sec"><summary><i data-ic="face"></i><span>Tall or square that follows faces</span><i data-ic="chev" class="chev"></i></summary>
+      <details class="sec"><summary><i data-ic="face"></i><span>Tall, portrait or square without the frame</span><i data-ic="chev" class="chev"></i></summary>
         <div class="pad">
-          <p class="hint">An automatic tall or square video that keeps faces in the picture. Used when the frame above is at its start (Reset the frame).</p>
+          <p class="hint">A quick tall, portrait or square video, cropped or tracking people and things. Used when the frame above is at its start (Reset the frame).</p>
           <div class="field"><div id="shapeCards" class="shapes"></div></div>
           <div class="field"><span>Fill the frame</span><div id="shapeFill"></div></div>
         </div>

@@ -1148,3 +1148,6 @@ svg.vline .vl-dot:hover { r: 6; fill: var(--amber); }
 .sep-last { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: var(--r-s); background: var(--sunk); border: 1px solid var(--line-soft); }
 .hist-btn { gap: 4px; padding: 0 8px; }
 .hist-btn > .ic:last-child { opacity: .6; }
+/* tracking options */
+.follow-box { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding: 10px; border-radius: var(--r-s); background: var(--sunk); border: 1px solid var(--line-soft); animation: shapeIn .16s ease-out; }
+.follow-box .seg button { font-size: 11.5px; padding: 0 3px; }

@@ -1176,6 +1176,65 @@ class AppState:
                 freed += gone(f)
         return freed
 
+    def start_subjects(self, pid: str) -> Dict[str, Any]:
+        """Find who to follow in a project's sections (for the tall / square preview), in the background. Saved per video,
+        so the export uses the same finds."""
+        from ..analysis import subjects as SU
+        proj = project_mod.clean_project(self.load_project(pid), 1e9)
+        src = self.resolve_input(str(proj["source"]))
+        info = probe_media(src)
+        if not info.has_video:
+            raise EditForgeError("This file has no picture to follow anything in.", "Choose a video.")
+        ranges = [(p["start"], p["end"]) for p in proj["pieces"] if not p["off"]]
+        if not hasattr(self, "subject_jobs"):
+            self.subject_jobs = {}
+        job = self.subject_jobs.get(pid)
+        if job and job["state"] == "running":
+            return {k: v for k, v in job.items() if k != "samples"}
+        job = {"state": "running", "progress": 0.0, "error": "", "name": str(proj.get("name") or ""), "since": time.time(),
+               "message": "Finding who to follow" if SU.ready(self.home) else "Downloading the tracking model (36 MB, once)"}
+        self.subject_jobs[pid] = job
+
+        def run() -> None:
+            try:
+                if not SU.ready(self.home):
+                    SU.download(self.home, lambda f: job.update(progress=0.2 * f))
+                job["message"] = "Finding who to follow"
+                p0 = float(job["progress"])
+                fp = self.fingerprint(src)
+                samples = SU.Finder(self.home / "subjects", self.home).find(src, fp, ranges, info.width, info.height,
+                                                                           progress=lambda f: job.update(progress=p0 + (1 - p0) * 0.99 * f))
+                job.update(state="done", progress=1.0, samples=samples, fp=fp, when=time.time())
+            except Exception as exc:  # noqa: BLE001 - shown to the person
+                job.update(state="failed", error=getattr(exc, "message", None) or str(exc)[:200], when=time.time())
+        threading.Thread(target=run, name="editforge-subjects", daemon=True).start()
+        return {k: v for k, v in job.items() if k != "samples"}
+
+    def subjects_status(self, pid: str) -> Dict[str, Any]:
+        """The state of Find who to follow, and when done the path of every section (source time, centre x) with the
+        project's own choices (who, feel, space in front)."""
+        from ..analysis import subjects as SU
+        job = getattr(self, "subject_jobs", {}).get(pid)
+        if not job:
+            return {"state": "none"}
+        out = {k: v for k, v in job.items() if k not in ("samples", "fp")}
+        if job["state"] == "done":
+            proj = project_mod.clean_project(self.load_project(pid), 1e9)
+            st = proj["settings"]
+            cuts = SU._scene_cuts(self.home / "scenes", job["fp"])
+            paths = []
+            for p in proj["pieces"]:
+                if p["off"]:
+                    paths.append(None)
+                    continue
+                if p["follow"]["mode"] == "object" and p["follow"]["path"]:
+                    paths.append([[t, x] for t, x, _y in p["follow"]["path"]])
+                    continue
+                who = "faces" if p["follow"]["mode"] == "face" else st["follow_who"]
+                paths.append([list(q) for q in SU.range_path(job["samples"], p["start"], p["end"], cuts, who, st["follow_feel"], st["follow_room"])])
+            out["paths"] = paths
+        return out
+
     HISTORY_MAX = 4_000_000            # bytes of Back history kept per project
 
     def history_path(self, pid: str) -> Path:
@@ -2045,6 +2104,10 @@ class Handler(BaseHTTPRequestHandler):
                 if self._guard() is None:
                     return
                 self._json({"projects": self.state.list_projects()})
+            elif re.fullmatch(rf"/api/projects/{PROJECT_ID}/subjects", path):
+                if self._guard() is None:
+                    return
+                self._json(self.state.subjects_status(path.split("/")[3]))
             elif re.fullmatch(rf"/api/projects/{PROJECT_ID}/history", path):
                 if self._guard() is None:
                     return
@@ -2343,6 +2406,10 @@ class Handler(BaseHTTPRequestHandler):
             elif re.fullmatch(r"/api/jobs/[0-9a-f]{12}/cancel", path):
                 ok = self.state.manager.cancel(path.split("/")[3])
                 self._json({"ok": ok})
+            elif re.fullmatch(rf"/api/projects/{PROJECT_ID}/subjects", path):
+                if self._read_json() is None:
+                    return
+                self._json(self.state.start_subjects(path.split("/")[3]))
             elif re.fullmatch(rf"/api/projects/{PROJECT_ID}/silences", path):
                 data = self._read_json()
                 if data is None:

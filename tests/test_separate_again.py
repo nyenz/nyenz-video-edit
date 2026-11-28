@@ -97,11 +97,14 @@ def test_passes_and_the_voice_transform():
     assert np.abs(y[:, 5000:-5000] - x[:, 5000:-5000]).max() < 1e-3          # what the model sees turns back into the same sound
 
 
-@pytest.mark.skipif(not VS.model_ready(), reason="the voice model is not on this computer")
+REAL = __import__("pathlib").Path.home() / ".editforge" / "models" / VS.MODEL_FILE
+
+
+@pytest.mark.skipif(not REAL.is_file(), reason="the voice model is not on this computer")
 def test_the_real_voice_model_leaves_a_plain_tone_alone(tmp_path):
     from tools.make_samples import run
     src = tmp_path / "tone.wav"
     run(["-f", "lavfi", "-i", "sine=frequency=220:duration=8", "-ac", "2", "-ar", "44100", str(src)])
-    out = VS.pull_out(str(src), 0.5, 7.5, tmp_path / "o", "voices", layer="music", quality="fast", voice_engine=VS.VoiceEngine(str(VS.model_path())))
+    out = VS.pull_out(str(src), 0.5, 7.5, tmp_path / "o", "voices", layer="music", quality="fast", voice_engine=VS.VoiceEngine(str(REAL)))
     pulled, rest = decode(out["pulled"]), decode(out["rest"])
     assert level(pulled, 220) < 0.1 * level(rest, 220)

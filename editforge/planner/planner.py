@@ -906,6 +906,11 @@ class Planner:
 
     def _resolve_reframes(self) -> None:
         wanted = [s for s in self.segs if s.reframe is not None]
+        subj = [s for s in wanted if s.reframe.mode.startswith("subject")]
+        if subj and self.has_video:                     # tall / square shapes that follow: the most visible person or thing per shot
+            from ..analysis.subjects import fill_subject_paths
+            fill_subject_paths(subj, self)
+        wanted = [s for s in wanted if s.reframe.mode not in ("path", "subject") and not s.reframe.mode.startswith("subject")]
         if not wanted:
             return
         if self.face_provider is None:
