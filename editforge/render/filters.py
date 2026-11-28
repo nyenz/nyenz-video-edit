@@ -267,6 +267,10 @@ class ItemBuilder:
             return g.add(cur, f"unsharp=luma_msize_x=5:luma_msize_y=5:luma_amount={0.5 + s * 2.5:.2f}", "sp")
         if name == "sepia":
             return g.add(cur, "colorchannelmixer=.393:.769:.189:0:.349:.686:.168:0:.272:.534:.131:0", "se")
+        if name == "denoise":            # less grain and noise (night and phone footage)
+            return g.add(cur, f"hqdn3d={1.5 + s * 5:.2f}:{1.2 + s * 4:.2f}:{2 + s * 6:.2f}:{2 + s * 5:.2f}", "dn")
+        if name == "stabilize":          # calm a shaky hand-held shot: follow the shake, edges filled from the picture
+            return g.add(cur, "deshake=rx=32:ry=32:edge=mirror", "ds")
         if name == "vignette":
             return g.add(cur, f"vignette=angle=PI/{2 + (1 - s) * 4:.2f}", "vg")
         if name == "mirror":
@@ -624,6 +628,9 @@ class ItemBuilder:
                 parts.append(f"eq=brightness={c.brightness:.4f}:contrast={c.contrast:.4f}:saturation={c.saturation:.4f}:gamma={c.gamma:.4f}")
             if c.hue:
                 parts.append(f"hue=h={c.hue:.2f}")
+            if getattr(c, "warmth", 0.0):
+                w = max(-1.0, min(1.0, c.warmth))
+                parts.append(f"colorbalance=rs={w * .08:.4f}:bs={-w * .08:.4f}:rm={w * .14:.4f}:bm={-w * .14:.4f}:rh={w * .08:.4f}:bh={-w * .08:.4f}")
             if parts:
                 cur = g.add(cur, ",".join(parts), "co")
         secs = it.n / self.Ff

@@ -7,7 +7,8 @@
 
 const S = {
   id: new URLSearchParams(location.search).get("p") || "",
-  mode: location.pathname.startsWith("/final") ? "final" : "edit",      // /edit: the Edit stage (sections), /final: the Final stage (sound, picture)
+  mode: location.pathname.startsWith("/final") || location.pathname.startsWith("/studio") ? "final" : "edit",
+  studio: location.pathname.startsWith("/studio"),                     // /studio: the Final tools plus the precision tools, for any video      // /edit: the Edit stage (sections), /final: the Final stage (sound, picture)
   proj: null, info: null, files: [], recipes: [],
   sel: new Set(), anchor: null,             // selected piece objects
   undo: [], redo: [], saveTimer: null, saving: Promise.resolve(),
@@ -19,7 +20,24 @@ const S = {
 };
 const MIN_PIECE = 0.1;
 const LOOKS = [["hflip", "Flip", "fliph"], ["mirror", "Mirror", "mirror"], ["vflip", "Upside down", "flipv"], ["grayscale", "Black & white", "drop"],
-  ["invert", "Invert", "palette"], ["sepia", "Sepia", "palette"], ["blur", "Blur", "drop"], ["sharpen", "Sharpen", "sparkles"], ["vignette", "Dark corners", "eye"]];
+  ["invert", "Invert", "palette"], ["sepia", "Sepia", "palette"], ["blur", "Blur", "drop"], ["sharpen", "Sharpen", "sparkles"], ["vignette", "Dark corners", "eye"],
+  ["denoise", "Less grain", "sliders"], ["stabilize", "Steady shaky", "fit"]];
+const COLOR_ZERO = { brightness: 0, contrast: 1, saturation: 1, warmth: 0 };
+const COLOR_KEYS = Object.keys(COLOR_ZERO);
+/** Finished colour looks: pick one, then fine-tune with the sliders if wanted. */
+const COLOR_PRESETS = [["Natural", {}], ["Warm", { warmth: 0.45, saturation: 1.08 }], ["Cool", { warmth: -0.45 }], ["Vivid", { saturation: 1.45, contrast: 1.1 }],
+  ["Muted", { saturation: 0.6, contrast: 0.95 }], ["Film", { contrast: 1.15, saturation: 0.85, warmth: 0.2 }], ["Bright", { brightness: 0.08, contrast: 1.05 }], ["B&W", { saturation: 0, contrast: 1.12 }]];
+/** The colour settings as a CSS filter for the live view (warmth is shown close to what the export does). */
+function colorCss(c) {
+  const f = [];
+  if (c.brightness) f.push("brightness(" + (1 + c.brightness) + ")");
+  if (c.contrast !== undefined && c.contrast !== 1) f.push("contrast(" + c.contrast + ")");
+  if (c.saturation !== undefined && c.saturation !== 1) f.push("saturate(" + c.saturation + ")");
+  const w = c.warmth || 0;
+  if (w > 0) f.push("sepia(" + (w * 0.35).toFixed(3) + ")", "saturate(" + (1 + w * 0.15).toFixed(3) + ")");
+  else if (w < 0) f.push("hue-rotate(" + (w * 14).toFixed(1) + "deg)", "saturate(" + (1 + w * 0.12).toFixed(3) + ")");
+  return f.join(" ");
+}
 const LOOK_NAME = Object.fromEntries(LOOKS.map(([k, n]) => [k, n]));
 const SHAPES = { original: null, vertical: 9 / 16, square: 1, portrait: 4 / 5 };
 const TEXT_SIZES = { small: 40, medium: 64, large: 96, huge: 140 };
@@ -34,6 +52,7 @@ function fixPiece(p) {
   if (!p.follow) p.follow = { mode: "none", zoom: 1.6, path: [] };
   if (!p.zoom) p.zoom = { mode: "none", amount: 1.3 };
   if (!p.color) p.color = { brightness: 0, contrast: 1, saturation: 1 };
+  if (p.color.warmth === undefined) p.color.warmth = 0;
   if (!p.fx) p.fx = [];
   return p;
 }
@@ -290,6 +309,7 @@ function refreshAll(opts) {
   S.sel = new Set([...S.sel].filter((p) => !p.off && cur().includes(p)));
   renderTimeline(); renderInspector(); renderLengths(); renderSteps(); renderStepbar(); if (S.mode === "edit") renderChoose();
   if (S.check) renderCheck();
+  if (S.studio && $("stMarksN")) $("stMarksN").textContent = String((S.proj.settings.markers || []).length);
   if (S.mode === "final" && Frame.editing) { const sig = selList().length + ":" + placeScopeKey(); if (sig !== S.panelSig) { S.panelSig = sig; Frame.renderPanel(); } }
   if (!(opts && opts.keepVideo)) showFrame();
 }
@@ -362,9 +382,7 @@ function dress(v, p) {
   if (p.fx.includes("sepia")) f.push("sepia(.9)");
   if (p.fx.includes("blur")) f.push("blur(4px)");
   if (p.fx.includes("sharpen")) f.push("contrast(1.08)");
-  if (p.color.brightness) f.push("brightness(" + (1 + p.color.brightness) + ")");
-  if (p.color.contrast !== 1) f.push("contrast(" + p.color.contrast + ")");
-  if (p.color.saturation !== 1) f.push("saturate(" + p.color.saturation + ")");
+  const cc = colorCss(p.color); if (cc) f.push(cc);
   v.style.filter = f.join(" ");
   v.muted = S.mutedAll || p.mute || !ownSoundOn() || Layers.on();     // with the three layers on, they carry the sound
   setVideoVol(v, p.volume, p);
@@ -709,6 +727,7 @@ function renderRuler(total) {
     const d = el("button", { type: "button", class: "scut", title: "Scene change at " + fmtTime(m, 2) + " (click to go there; [ and ] jump between them)", onclick: (e) => { e.stopPropagation(); seek(m); } });
     d.style.left = px(m) + "px"; r.append(d);
   }
+  if (S.studio) Studio.ruler(r);
 }
 function tagsOf(p) {
   const t = [];
@@ -3205,12 +3224,19 @@ function renderInspector() {
   R.append(sec("Effects", "sparkles", open.has("Effects"), looks, el("label", { class: "swl" }, el("span", { text: "Play backwards" }), back)));
   const c0 = sel[0].color;
   const slider = (label, key, min, max, step) => {
-    const r = el("input", { type: "range", class: "rng", min: String(min), max: String(max), step: String(step), value: String(c0[key]), "aria-label": label });
+    const r = el("input", { type: "range", class: "rng", min: String(min), max: String(max), step: String(step), value: String(c0[key] || 0), "aria-label": label });
     r.addEventListener("change", () => onSel((p) => { p.color = Object.assign({}, p.color, { [key]: parseFloat(r.value) }); }));
     return el("div", { class: "field" }, el("span", { text: label }), r);
   };
-  R.append(sec("Colour", "palette", open.has("Colour"), slider("Brightness", "brightness", -0.5, 0.5, 0.05), slider("Contrast", "contrast", 0.5, 2, 0.05), slider("Colour strength", "saturation", 0, 2, 0.05),
-    btn("Reset colour", { cls: "ghost", onclick: () => onSel((p) => { p.color = { brightness: 0, contrast: 1, saturation: 1 }; }) })));
+  const presets = el("div", { class: "looks color-presets" });
+  for (const [name, c] of COLOR_PRESETS) {
+    const on = all((p) => COLOR_KEYS.every((k) => Math.abs((p.color[k] || 0) - (c[k] === undefined ? COLOR_ZERO[k] : c[k])) < 1e-3));
+    const sw = el("i", { class: "cp-sw" }); sw.style.filter = colorCss(Object.assign({}, COLOR_ZERO, c));
+    presets.append(el("button", { type: "button", class: "btn" + (on ? " on" : ""), title: "Colour look: " + name, onclick: () => onSel((p) => { p.color = Object.assign({}, COLOR_ZERO, c); }) }, sw, el("span", { text: name })));
+  }
+  R.append(sec("Colour", "palette", open.has("Colour"), presets, slider("Brightness", "brightness", -0.5, 0.5, 0.05), slider("Contrast", "contrast", 0.5, 2, 0.05), slider("Colour strength", "saturation", 0, 2, 0.05),
+    slider("Warm or cool", "warmth", -1, 1, 0.05),
+    btn("Reset colour", { cls: "ghost", onclick: () => onSel((p) => { p.color = Object.assign({}, COLOR_ZERO); }) })));
   const z = sel[0].zoom;
   const zMode = segmented([["none", "Off"], ["in", "In"], ["out", "Out"], ["hold", "Hold"]], z.mode, (v) => onSel((p) => { p.zoom = { mode: v, amount: p.zoom.amount || 1.3 }; }));
   const zAmt = el("input", { type: "range", class: "rng", min: "1.1", max: "2.5", step: "0.05", value: String(z.amount), "aria-label": "Zoom amount" });
@@ -3289,7 +3315,8 @@ function renderOverview(R) {
   const all = btn("Put all back", { icon: "restore", onclick: () => change(() => { for (const p of off) p.off = false; S.proj.pieces.sort((a, b) => a.start - b.start); markHand(); }) });
   R.append(sec("Removed pieces (" + off.length + ")", "trash", false, off.length ? list : el("p", { class: "hint", text: "Nothing removed yet." }), off.length ? all : null));
   R.append(sec("Shortcuts", "info", false,
-    ...[["Space", "Play / pause"], ["S", "Split at the playhead"], ["Delete", "Remove selected"], ["Ctrl+Z / Ctrl+Y", "Undo / redo"], ["Ctrl+D", "Duplicate"], ["Ctrl+A", "Select all"], ["← →", "One frame (Shift: one second)"], ["+ / −", "Zoom the timeline (all the way in: every frame)"], ["[ / ]", "Previous / next scene change"]]
+    ...[["Space", "Play / pause"], ["S", "Split at the playhead"], ["Delete", "Remove selected"], ["Ctrl+Z / Ctrl+Y", "Undo / redo"], ["Ctrl+D", "Duplicate"], ["Ctrl+A", "Select all"], ["← →", "One frame (Shift: one second)"], ["+ / −", "Zoom the timeline (all the way in: every frame)"], ["[ / ]", "Previous / next scene change"]].concat(S.studio ? [[", / .", "One frame back / forward"], ["T", "Type a time to go to"],
+      ["I / O", "In / Out point (then Remove closes the gap)"], ["M / Shift+M", "Add a marker / next marker"], ["J / K / L", "Back 1 s / pause / play"]] : [])
       .map(([k, v]) => el("div", { class: "row between" }, el("span", { class: "kbd", text: k }), el("span", { class: "note", text: v })))));
 }
 
@@ -3572,7 +3599,7 @@ function exportDialog() {
 // ================================================================== other projects (Media panel)
 function projItem(p, cur) {
   const tag = p.version ? p.version.charAt(0).toUpperCase() + p.version.slice(1) + " · " : "";
-  return el("div", { class: "item" + (cur ? " on" : ""), onclick: () => { location.href = (p.stage === "final" ? "/final" : "/edit") + "?p=" + p.id; } },
+  return el("div", { class: "item" + (cur ? " on" : ""), onclick: () => { location.href = "/" + (p.stage === "final" || p.stage === "studio" ? p.stage : "edit") + "?p=" + p.id; } },
     icon("layers"), el("div", { class: "t" }, el("b", { text: p.name }), el("small", { text: tag + fmtTime(p.length, 0) + " · " + p.pieces + " sections" })), icon("chevr", "s"));
 }
 
@@ -3583,8 +3610,9 @@ async function openProject() {
   catch (e) { location.replace("/?msg=" + encodeURIComponent(errText(e))); return; }
   S.proj = r.project; S.info = r.info;
   loadHistory();
-  const stage = S.proj.stage === "final" ? "final" : "edit";
-  if (stage !== S.mode) { location.replace("/" + stage + "?p=" + S.id); return; }       // the project belongs to the other stage
+  const stage = S.proj.stage === "final" || S.proj.stage === "studio" ? S.proj.stage : "edit";
+  const here = S.studio ? "studio" : S.mode;
+  if (stage !== here) { location.replace("/" + stage + "?p=" + S.id); return; }       // the project belongs to the other stage
   applyStage();
   S.proj.pieces.forEach(fixPiece); if (!Array.isArray(S.proj.texts)) S.proj.texts = [];
   if (!Array.isArray(S.proj.steps)) S.proj.steps = [];
@@ -3793,11 +3821,155 @@ async function sendToFinal() {
 }
 /** Show only the tools of this page's stage. */
 function applyStage() {
-  for (const n of document.querySelectorAll("[data-stage]")) n.hidden = n.dataset.stage !== S.mode;
+  for (const n of document.querySelectorAll("[data-stage]")) n.hidden = n.dataset.stage === "studio" ? !S.studio : n.dataset.stage !== S.mode;
   document.body.classList.toggle("stage-final", S.mode === "final");
+  document.body.classList.toggle("stage-studio", !!S.studio);
   document.body.classList.toggle("stage-edit", S.mode === "edit");
   $("suite").classList.add(S.mode === "final" ? "final" : "edit");
 }
+
+
+// ================================================================== Studio: precision tools (only on /studio)
+/** Read a typed time: 1:23.40, 1:02:03, 83.4, 83.4s, or a frame number like 2075f. Returns seconds or null. */
+function parseTime(txt) {
+  const t = String(txt || "").trim().toLowerCase().replace(",", ".");
+  if (!t) return null;
+  let m = t.match(/^(\d+)\s*f$/);
+  if (m) return +m[1] / (S.info.fps_float || 25);
+  m = t.match(/^(\d+(?:\.\d+)?)\s*s?$/);
+  if (m) return +m[1];
+  m = t.match(/^(\d+):(\d{1,2}(?:\.\d+)?)$/);
+  if (m) return +m[1] * 60 + +m[2];
+  m = t.match(/^(\d+):(\d{1,2}):(\d{1,2}(?:\.\d+)?)$/);
+  if (m) return +m[1] * 3600 + +m[2] * 60 + +m[3];
+  return null;
+}
+const Studio = {
+  inT: null, outT: null,
+  marks() { return S.proj.settings.markers || (S.proj.settings.markers = []); },
+  wire() {
+    if (!S.studio) return;
+    const box = $("stTime");
+    box.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); const t = parseTime(box.value); if (t === null) { toast("Type a time like 1:23.40, 83.4 or 2075f.", true); return; } seek(t); box.blur(); }
+      else if (e.key === "Escape") { box.value = ""; box.blur(); }
+    });
+    box.addEventListener("focus", () => { if (!box.value) box.value = fmtTime(S.t, 2); box.select(); });
+    $("stCutAt").addEventListener("click", () => {
+      const t = parseTime(box.value);
+      if (box.value.trim() && t === null) { toast("Type a time like 1:23.40, 83.4 or 2075f.", true); return; }
+      if (t !== null) seek(t);
+      splitAtPlayhead();
+    });
+    $("stIn").addEventListener("click", () => this.setIn());
+    $("stOut").addEventListener("click", () => this.setOut());
+    $("stRipple").addEventListener("click", () => this.ripple());
+    $("stMarks").addEventListener("click", (e) => { const r = e.currentTarget.getBoundingClientRect(); ctxMenu(this.markItems(), r.left, r.bottom + 4); });
+    this.paint();
+  },
+  setIn() { this.inT = +S.t.toFixed(3); if (this.outT !== null && this.outT <= this.inT) this.outT = null; this.paint(); toast("In point at " + fmtTime(this.inT, 2) + (this.outT === null ? ". Now go to the end and press O." : ".")); },
+  setOut() { this.outT = +S.t.toFixed(3); if (this.inT !== null && this.inT >= this.outT) this.inT = null; this.paint(); toast("Out point at " + fmtTime(this.outT, 2) + (this.inT === null ? ". Now go to the start and press I." : ".")); },
+  clearInOut() { this.inT = this.outT = null; this.paint(); },
+  /** Take out everything between In and Out and close the gap (pieces are trimmed, split or taken away). */
+  ripple() {
+    if (this.inT === null || this.outT === null) { toast("Set an In point (I) and an Out point (O) first.", true); return; }
+    if (locked()) { lockedNote(); return; }
+    const a = this.inT, b = this.outT, src = (r, t) => (r.p.reverse ? r.p.end - (t - r.out0) * r.p.speed : r.p.start + (t - r.out0) * r.p.speed);
+    const L = layout().filter((r) => r.out1 > a + 1e-6 && r.out0 < b - 1e-6);
+    if (!L.length) { toast("Nothing between In and Out."); return; }
+    change(() => {
+      for (const r of L) {
+        const p = r.p, i = S.proj.pieces.indexOf(p);
+        const keepA = r.out0 < a - 1e-6, keepB = r.out1 > b + 1e-6;
+        if (!keepA && !keepB) { p.off = true; continue; }
+        const cA = keepA ? +src(r, a).toFixed(4) : null, cB = keepB ? +src(r, b).toFixed(4) : null;
+        const front = clone(p), back = clone(p);              // front: the part before In; back: the part after Out
+        if (p.reverse) { if (keepA) { front.start = cA; } if (keepB) { back.end = cB; } }
+        else { if (keepA) { front.end = cA; } if (keepB) { back.start = cB; } }
+        const parts = [];
+        if (keepA && front.end - front.start >= MIN_PIECE) parts.push(front);
+        if (keepB && back.end - back.start >= MIN_PIECE) parts.push(back);
+        if (!parts.length) { p.off = true; continue; }
+        S.proj.pieces.splice(i, 1, ...parts);
+      }
+      S.sel.clear(); markHand();
+      // markers after the gap move up with the video; markers inside it go
+      const gone = b - a;
+      S.proj.settings.markers = this.marks().filter((m) => m.t < a || m.t >= b).map((m) => (m.t >= b ? { t: +(m.t - gone).toFixed(3), note: m.note } : m));
+    });
+    this.inT = this.outT = null; seek(a); this.paint();
+    toast("Removed " + fmtTime(b - a, 2) + " and closed the gap · video now " + fmtTime(finalTotal()) + ". Ctrl + Z brings it back.");
+  },
+  addMark() {
+    const t = +S.t.toFixed(3), list = this.marks();
+    if (list.some((m) => Math.abs(m.t - t) < 0.02)) { toast("There is already a marker here."); return; }
+    if (list.length >= 200) { toast("200 markers is the most.", true); return; }
+    change(() => { S.proj.settings.markers = list.concat([{ t, note: "" }]).sort((x, y) => x.t - y.t); }, { keepVideo: true });
+    this.paint(); toast("Marker at " + fmtTime(t, 2) + ". Jump to it from the Markers button.");
+  },
+  async noteMark(m) {
+    const v = await askText("Marker note", m.note, "What happens here");
+    if (v === null || v === undefined) return;
+    change(() => { const x = this.marks().find((q) => q.t === m.t); if (x) x.note = String(v).slice(0, 80); }, { keepVideo: true });
+  },
+  dropMark(m) { change(() => { S.proj.settings.markers = this.marks().filter((q) => q.t !== m.t); }, { keepVideo: true }); this.paint(); },
+  jumpMark(dir) {
+    const list = this.marks(), t = S.t;
+    const m = dir > 0 ? list.find((q) => q.t > t + 0.01) : list.slice().reverse().find((q) => q.t < t - 0.01);
+    if (m) seek(m.t); else toast(dir > 0 ? "No marker after the playhead." : "No marker before the playhead.");
+  },
+  markItems() {
+    const list = this.marks(), out = [["Add a marker here", "bookmark", () => this.addMark(), { key: "M" }]];
+    if (list.length) out.push(["Next marker", "chevr", () => this.jumpMark(1), { key: "Shift M" }],
+      ["Clear all markers", "trash", () => { change(() => { S.proj.settings.markers = []; }, { keepVideo: true }); this.paint(); }, { danger: true }], "-");
+    const near = list.length > 14 ? list.filter((m) => m.t >= S.t - 0.01).slice(0, 14) : list;   // a long list: the next 14 from the playhead
+    for (const m of near) out.push([fmtTime(m.t, 2) + (m.note ? "  " + m.note : ""), "mark", null,
+      { sub: [["Go there", "play", () => seek(m.t)], ["Add a note", "edit", () => this.noteMark(m)], "-", ["Remove marker", "trash", () => this.dropMark(m), { danger: true }]] }]);
+    if (list.length > near.length) out.push([(list.length - near.length) + " more on the timeline ruler", "info", null, { off: true, why: "Click a marker on the ruler, or press Shift + M to jump to the next one." }]);
+    return out;
+  },
+  paint() {
+    if (!S.studio) return;
+    $("stMarksN").textContent = String(this.marks().length);
+    const ok = this.inT !== null && this.outT !== null;
+    $("stRipple").hidden = !ok;
+    if (ok) $("stRippleT").textContent = "Remove " + fmtTime(this.outT - this.inT, 2);
+    $("stIn").classList.toggle("on", this.inT !== null); $("stOut").classList.toggle("on", this.outT !== null);
+    renderRuler(rawTotal());
+  },
+  ruler(r) {
+    if (this.inT !== null || this.outT !== null) {
+      const a = this.inT === null ? this.outT : this.inT, b = this.outT === null ? a : this.outT;
+      const band = el("div", { class: "st-range" + (this.inT !== null && this.outT !== null ? "" : " half") });
+      band.style.left = px(a) + "px"; band.style.width = Math.max(2, px(b) - px(a)) + "px"; r.append(band);
+    }
+    for (const m of this.marks()) {
+      const d = el("button", { type: "button", class: "st-mark", title: fmtTime(m.t, 2) + (m.note ? ": " + m.note : "") + " (click to go there, right-click for more)",
+        onclick: (e) => { e.stopPropagation(); seek(m.t); },
+        oncontextmenu: (e) => { e.preventDefault(); e.stopPropagation(); ctxMenu([["Add a note", "edit", () => this.noteMark(m)], ["Remove marker", "trash", () => this.dropMark(m), { danger: true }]], e.clientX, e.clientY); } });
+      d.style.left = px(m.t) + "px"; r.append(d);
+    }
+  },
+  /** Studio keys. Returns true when the key was used. */
+  key(e) {
+    if (!S.studio) return false;
+    const k = e.key, mod = e.ctrlKey || e.metaKey;
+    if (mod || e.altKey) return false;
+    const f = 1 / (S.info.fps_float || 25);
+    if (k === ",") { seek(S.t - f); return true; }
+    if (k === ".") { seek(S.t + f); return true; }
+    if (k === "i" || k === "I") { this.setIn(); return true; }
+    if (k === "o" || k === "O") { this.setOut(); return true; }
+    if (k === "m") { this.addMark(); return true; }
+    if (k === "M") { this.jumpMark(1); return true; }
+    if (k === "j" || k === "J") { seek(S.t - 1); return true; }
+    if (k === "k" || k === "K") { pause(); return true; }
+    if (k === "l" || k === "L") { if (!S.playing) play(); return true; }
+    if (k === "t" || k === "T") { $("stTime").focus(); return true; }
+    if (k === "Escape" && (this.inT !== null || this.outT !== null)) { this.clearInOut(); return false; }
+    return false;
+  },
+};
 
 // ================================================================== wiring
 function wire() {
@@ -3922,6 +4094,7 @@ function wire() {
     const tag = (e.target.tagName || "").toLowerCase();
     if (tag === "input" || tag === "textarea" || document.querySelector(".dialog")) return;
     const k = e.key, mod = e.ctrlKey || e.metaKey;
+    if (Studio.key(e)) { e.preventDefault(); return; }
     if (k === " ") { e.preventDefault(); togglePlay(); }
     else if (mod && k.toLowerCase() === "z") { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
     else if (mod && k.toLowerCase() === "y") { e.preventDefault(); redo(); }
@@ -3956,10 +4129,11 @@ function wire() {
 }
 
 (async function init() {
-  topBar("/" + S.mode, [el("div", { class: "lenpill", title: "Length of the video" }, icon("clock", "s"), el("span", { text: "Video" }), el("b", { id: "topLen", text: "0:00.0" })),
+  topBar(S.studio ? "/studio" : "/" + S.mode, [el("div", { class: "lenpill", title: "Length of the video" }, icon("clock", "s"), el("span", { text: "Video" }), el("b", { id: "topLen", text: "0:00.0" })),
     Object.assign(btn("Preview", { icon: "eye", title: "See the finished video before it is made: full window, with the frame, words and music (P)", onclick: () => startPreview() }), { id: "previewBtn" }),
     S.mode === "final" ? btn("Export", { icon: "export", cls: "primary", onclick: () => exportDialog() }) : null].filter(Boolean));
   paintIcons(); enhanceAll();
-  if (!S.id) { location.replace("/?phase=" + S.mode); return; }
+  if (!S.id) { location.replace("/?phase=" + (S.studio ? "studio" : S.mode)); return; }
   wire(); await openProject();
+  if (S.proj && S.studio) Studio.wire();
 })();

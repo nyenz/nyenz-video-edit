@@ -5,6 +5,7 @@ const PHASES = [
   ["clips", "Clips", "scissors", "Take clips out of a movie"],
   ["edit", "Edit", "layers", "Versions, sections and scenes"],
   ["final", "Final", "check", "Sound, picture and export"],
+  ["studio", "Studio", "sparkles", "Any video, every tool"],
 ];
 const H = { phase: "clips", clipsets: [], projects: [], final: [], library: [], trash: false, view: "grid", q: "", sub: "projects", lib: "all",
   pick: new Set(), anchor: "" };                // pick: cards chosen together (Ctrl / Shift + click)
@@ -13,6 +14,10 @@ try {
   H.view = localStorage.getItem("ef.home.view") === "list" ? "list" : "grid";
   const ph = localStorage.getItem("ef.home.phase");
   if (PHASES.some((p) => p[0] === ph)) H.phase = ph;
+} catch (e) { /* storage may be off */ }
+try {
+  const want = new URLSearchParams(location.search).get("phase");          // the top-bar Studio link: /?phase=studio
+  if (PHASES.some((p) => p[0] === want)) H.phase = want;
 } catch (e) { /* storage may be off */ }
 
 // ------------------------------------------------------------------ loading
@@ -24,11 +29,12 @@ async function loadAll() {
   render(); paintTidy();
 }
 const loadProjects = loadAll;                // older name, used by the actions below
-const stageOf = (p) => (p.stage === "final" ? "final" : "edit");
+const stageOf = (p) => (p.stage === "final" || p.stage === "studio" ? p.stage : "edit");
 const pageOf = (p) => "/" + stageOf(p) + "?p=" + p.id;
 /** Edit: the edit projects. Final: the final projects, then the videos they made (their results). */
 function itemsOf(phase) {
   return phase === "clips" ? H.clipsets : phase === "edit" ? H.projects.filter((p) => stageOf(p) === "edit")
+    : phase === "studio" ? H.projects.filter((p) => stageOf(p) === "studio")
     : H.projects.filter((p) => stageOf(p) === "final").concat(H.final);
 }
 const madeView = () => H.phase === "clips" && H.sub === "made";
@@ -50,9 +56,9 @@ function renderPhases() {
   const box = $("phases"); box.replaceChildren();
   PHASES.forEach(([key, name, ic, line], i) => {
     const n = itemsOf(key).filter((p) => !p.trashed).length;
-    const b = el("button", { class: "phase" + (H.phase === key ? " on" : ""), type: "button", role: "tab", "aria-selected": String(H.phase === key),
+    const b = el("button", { class: "phase" + (H.phase === key ? " on" : "") + (key === "studio" ? " studio" : ""), type: "button", role: "tab", "aria-selected": String(H.phase === key),
       onclick: () => { H.phase = key; H.trash = false; try { localStorage.setItem("ef.home.phase", key); } catch (e) { /* off */ } render(); } },
-      el("span", { class: "phase-n", text: String(i + 1) }), el("span", { class: "phase-ic" }, icon(ic)),
+      key === "studio" ? null : el("span", { class: "phase-n", text: String(i + 1) }), el("span", { class: "phase-ic" }, icon(ic)),
       el("span", { class: "t" }, el("b", { text: name }), el("small", { text: line })), el("span", { class: "count num", text: String(n) }));
     box.append(b);
   });
@@ -79,12 +85,13 @@ function render() {
   $("libFilter").hidden = !made;
   $("createRow").hidden = final || made;
   const hasTrash = true;
-  $("createTitle").textContent = H.phase === "clips" ? "New clip project" : "New edit project";
+  $("createTitle").textContent = H.phase === "clips" ? "New clip project" : H.phase === "studio" ? "Open a video in Studio" : "New edit project";
   $("createLine").textContent = H.phase === "clips" ? "Choose a movie, then mark as many clips as you like. Nothing is copied."
+    : H.phase === "studio" ? "Any video, also one you finished before: cut to the frame and use every tool. Not one of the stages."
     : "Choose a video to cut into pieces. It is used where it is, nothing is copied.";
   $("fromClip").hidden = H.phase !== "edit";
   const list = shown(), grid = $("grid"), all = itemsOf(H.phase), trashN = all.filter((p) => p.trashed && !p.job).length;
-  $("projTitle").textContent = H.trash ? "Trash" : { clips: "Clip projects", edit: "Edit projects", final: "Final projects and finished videos" }[H.phase];
+  $("projTitle").textContent = H.trash ? "Trash" : { clips: "Clip projects", edit: "Edit projects", final: "Final projects and finished videos", studio: "Studio projects" }[H.phase];
   $("projCount").textContent = list.length ? String(list.length) : "";
   $("trashBtn").hidden = !hasTrash || made;
   $("trashCount").textContent = String(trashN); $("trashCount").hidden = !trashN || H.trash;
@@ -103,7 +110,8 @@ function render() {
   if (made) { for (const c of list) grid.append(madeCard(c)); return; }
   if (!list.length) {
     const hint = H.trash || H.q ? "" : { clips: "Press New clip project and choose a movie.", edit: "Press New edit project, or open a made clip.",
-      final: "Press 'Send to Final' in an Edit project. Videos you export from a Final project appear here too." }[H.phase];
+      final: "Press 'Send to Final' in an Edit project. Videos you export from a Final project appear here too.",
+      studio: "Press Open a video in Studio. A finished video can also be opened from Exports (the Studio button)." }[H.phase];
     grid.append(el("div", { class: "proj-empty" }, icon(H.trash ? "trash" : final ? "check" : "film", "l"),
       el("b", { text: H.q ? "Nothing matches '" + H.q + "'." : H.trash ? "The trash is empty." : final ? "Nothing in Final yet." : "No projects yet." }),
       el("span", { class: "hint", text: hint })));
@@ -226,7 +234,8 @@ function madeItems(c) {
   return [
     ["Watch", "play", () => watchClip(c)],
     ["New edit project from it", "layers", () => openInEditor(c.file, 2)],
-    ...uses.filter((u) => !u.trashed).slice(0, 4).map((u) => ["Open '" + u.name + "'", u.stage === "final" ? "check" : "layers", () => { location.href = "/" + u.stage + "?p=" + u.id; }]),
+    ["Open in Studio", "sparkles", () => openInStudio(c.file)],
+    ...uses.filter((u) => !u.trashed).slice(0, 4).map((u) => ["Open '" + u.name + "'", u.stage === "final" ? "check" : u.stage === "studio" ? "sparkles" : "layers", () => { location.href = "/" + u.stage + "?p=" + u.id; }]),
     c.clipset && !c.clipset_trashed ? ["Open its clip project", "scissors", () => { location.href = "/clips?c=" + c.clipset; }] : null,
     ["Save a copy", "download", () => { location.href = "/download/" + c.job + "?t=" + encodeURIComponent(TOKEN); }],
     "-",
@@ -436,7 +445,8 @@ async function createProject(dropped) {
     if (H.phase === "clips") {
       const r = await api("/api/clipsets", { method: "POST", json: { source: d.id } });
       location.href = "/clips?c=" + r.clipset.id;
-    } else await openInEditor(d.id, 2);
+    } else if (H.phase === "studio") await openInStudio(d.id);
+    else await openInEditor(d.id, 2);
   } catch (e) { toast(errText(e), true); }
   finally { bar.hidden = true; }
 }
@@ -552,6 +562,9 @@ async function storagePanel() {
       onclick: (e) => { e.preventDefault(); H.phase = "clips"; H.sub = "made"; H.trash = false; try { localStorage.setItem("ef.home.phase", "clips"); localStorage.setItem("ef.home.sub", "made"); } catch (er) { /* off */ } render(); } },
       icon("film"), el("span", { text: "Made clips" })));
   }
+  nav.append(el("a", { href: "/?phase=studio", class: "home-link studio-side", title: "Studio: open any video, also a finished one, and change anything",
+    onclick: (e) => { e.preventDefault(); H.phase = "studio"; H.trash = false; try { localStorage.setItem("ef.home.phase", "studio"); } catch (er) { /* off */ } render(); } },
+    icon("sparkles"), el("span", { text: "Studio" })));
   $("homeTop").append(el("span", { class: "grow" }), Update.pill(), activityButton(), exportsButton());
   Exports.start(); Activity.start();
   Exports.onFiles = () => loadAll();

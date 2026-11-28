@@ -507,7 +507,7 @@ details.steps-all[open] > summary .chev { transform: rotate(180deg); }
 .ly-mute.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 
 /* ---------------------------------------------------------------- home: the three phases */
-.phases { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; flex: none; }
+.phases { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(0, .8fr); gap: 12px; flex: none; }
 .phase { position: relative; display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-radius: var(--r-l); background: var(--panel);
   border: 1px solid var(--line-soft); color: var(--ink); cursor: pointer; text-align: left; }
 .phase:hover { border-color: var(--line); background: var(--raised); }
@@ -1151,3 +1151,43 @@ svg.vline .vl-dot:hover { r: 6; fill: var(--amber); }
 /* tracking options */
 .follow-box { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding: 10px; border-radius: var(--r-s); background: var(--sunk); border: 1px solid var(--line-soft); animation: shapeIn .16s ease-out; }
 .follow-box .seg button { font-size: 11.5px; padding: 0 3px; }
+
+/* Studio: set apart from the numbered stages */
+.studio-link { display: flex; align-items: center; gap: 7px; padding: 6px 12px; margin-left: 6px; border-radius: 7px; color: var(--muted); text-decoration: none; font-weight: 550;
+  border-left: 1px solid var(--line); border-top-left-radius: 0; border-bottom-left-radius: 0; transition: color .15s, background .15s; }
+.studio-link .ic { color: var(--amber); }
+.studio-link:hover { color: var(--ink); background: var(--raised); }
+.studio-link.on { color: var(--ink); background: var(--raised); box-shadow: inset 0 0 0 1px var(--line); }
+.phase.studio { border-style: dashed; }
+.phase.studio .phase-ic { color: var(--amber); }
+.phase.studio.on { border-style: solid; border-color: var(--amber); background: rgba(245, 181, 68, .08); box-shadow: inset 0 0 0 1px var(--amber); }
+@media (max-width: 900px) { .studio-link span { display: none; } }
+/* Studio precision tools (timeline bar) */
+.studio-tools { display: flex; align-items: center; gap: 4px; }
+.studio-tools[hidden] { display: none; }
+.st-time { width: 92px; height: 28px; padding: 0 8px; border-radius: 7px; border: 1px solid var(--line); background: var(--sunk); color: var(--ink);
+  font: 600 12.5px/1 inherit; font-variant-numeric: tabular-nums; outline: none; transition: border-color .15s, box-shadow .15s; }
+.st-time::placeholder { color: var(--faint); }
+.st-time:focus { border-color: var(--amber); box-shadow: 0 0 0 3px rgba(245, 181, 68, .16); }
+.studio-tools .btn.on { color: var(--amber); background: rgba(245, 181, 68, .1); box-shadow: inset 0 0 0 1px rgba(245, 181, 68, .45); }
+#stRipple { animation: st-pop .18s ease-out; }
+@keyframes st-pop { from { transform: scale(.92); opacity: 0; } to { transform: none; opacity: 1; } }
+.ruler .st-range { position: absolute; top: 0; bottom: 0; background: rgba(245, 181, 68, .18); border-left: 2px solid var(--amber); border-right: 2px solid var(--amber); pointer-events: none; z-index: 1; }
+.ruler .st-range.half { background: none; border-right: 0; }
+.ruler .st-mark { position: absolute; bottom: 1px; width: 10px; height: 12px; margin-left: -5px; padding: 0; border: 0; cursor: pointer; z-index: 3;
+  background: var(--rose); clip-path: polygon(0 0, 100% 0, 100% 70%, 50% 100%, 0 70%); transition: transform .12s, filter .12s; }
+.ruler .st-mark:hover { transform: scale(1.2); filter: brightness(1.15); }
+/* colour looks: a small sample of each */
+.color-presets .btn { gap: 8px; }
+.cp-sw { width: 16px; height: 16px; border-radius: 4px; flex: none; background: linear-gradient(135deg, #e9a56b 0%, #d8c27a 35%, #6fa7c9 70%, #3b5e7c 100%);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .14); }
+.tl-bar .info span { white-space: nowrap; }
+.stage-studio .tl-bar .info span:nth-child(2) { display: none; }
+@media (max-width: 1280px) { .stage-studio .tl-bar .info { display: none; } }
+/* with the Studio link, the editor's top bar needs a little more room before the narrow layout */
+@media (max-width: 1480px) {
+  .top .brand span, .top .lenpill > span:first-of-type { display: none; }
+  .top > .btn.ghost:not(.back-btn):not(.primary) > span:not(.count) { display: none; }
+}
+.home-link.studio-side { margin-top: 6px; border-top: 1px solid var(--line-soft); border-top-left-radius: 0; border-top-right-radius: 0; padding-top: 10px; }
+.home-link.studio-side .ic { color: var(--amber); }

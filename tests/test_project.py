@@ -65,7 +65,7 @@ def test_clean_project_drops_bad_pieces_and_bad_values():
     assert p["name"] == "my <b>video</b>" and len(p["pieces"]) == 2          # the page shows names as text, never as HTML
     a, b = p["pieces"]
     assert a["speed"] == 16 and a["fx"] == ["hflip"] and a["zoom"] == {"mode": "none", "amount": 4.0}
-    assert a["color"] == {"brightness": 0.0, "contrast": 3.0, "saturation": 1.0} and a["volume"] == 0
+    assert a["color"] == {"brightness": 0.0, "contrast": 3.0, "saturation": 1.0, "warmth": 0.0} and a["volume"] == 0
     assert (b["start"], b["end"]) == (0, 10)
     s = p["settings"]
     assert (s["shape"], s["transition"], s["quality"], s["music_volume"], s["fade_in"], s["duck"]) == ("original", "none", "best", 0.25, 0, False)

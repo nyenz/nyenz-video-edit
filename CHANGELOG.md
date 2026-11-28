@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.40.0 — Studio
+* **Studio** (top bar, Home sidebar and its own Home tab, set apart from the three stages): open **any video, also one
+  you finished before** (Exports → *Open in Studio*, or Made clips → *Open in Studio*), with every Final tool plus
+  precision tools. Its exports go in the **Studio** tab of Exports.
+* **Go to an exact time**: type `1:23.40`, `83.4` or a frame number like `2075f`, Enter goes there; the split button
+  next to it splits at that time. `,` and `.` step one frame.
+* **In / Out** (I and O): mark a part, then **Remove** takes it out and closes the gap (pieces are trimmed or split by
+  themselves). Ctrl + Z brings it back.
+* **Markers** (M, Shift + M for the next one): drawn on the ruler, a list to jump to, a note on each. They move with
+  the video when a part before them is removed. Kept in the project.
+* **J / K / L**: back 1 second, pause, play.
+* **Colour looks** (every Final project too): Natural, Warm, Cool, Vivid, Muted, Film, Bright, B&W — one click, then
+  fine-tune with the sliders. New **Warm or cool** slider.
+* **New looks**: **Less grain** (cleans noisy night and phone video) and **Steady shaky** (calms a hand-held shot).
+
 ## 1.39.0 — tracking that works for 9:16 (and 4:5, 1:1)
 * **Track every section** (Picture → Tracking, or *Make it 9:16 and track*): every section of a tall frame follows the
   most visible person or thing of its shots, by itself. The picture is zoomed to fill the frame, the view moves so the

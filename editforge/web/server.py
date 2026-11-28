@@ -78,7 +78,7 @@ def versioned(html: str) -> str:
 BROWSER_VIDEO = {"h264", "vp8", "vp9", "av1"}
 BROWSER_AUDIO = {"aac", "mp3", "opus", "vorbis", "flac"}
 BROWSER_CONTAINERS = {".mp4", ".m4v", ".mov", ".webm"}
-PAGES = {"/": "home.html", "/clips": "workshop.html", "/edit": "editor.html", "/final": "editor.html", "/combine": "combine.html", "/advanced": "index.html"}
+PAGES = {"/": "home.html", "/clips": "workshop.html", "/edit": "editor.html", "/final": "editor.html", "/studio": "editor.html", "/combine": "combine.html", "/advanced": "index.html"}
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wma"}
 SUBTITLE_EXTS = {".srt", ".vtt"}
 MAX_SUBTITLE_BYTES = 5 * 1024 * 1024
@@ -2594,6 +2594,8 @@ class Handler(BaseHTTPRequestHandler):
         st = self.state
         if (proj.get("stage") or "edit") == "final":
             raise EditForgeError("This one is already in Final.", "Open it from the Final tab.")
+        if proj.get("stage") == "studio":
+            raise EditForgeError("Studio projects are not sent to Final.", "Export it from Studio: it has every Final tool.")
         for d in st.all_projects():                     # sent before: open that one, never a second copy of the same thing
             if d.get("parent") == proj["id"] and d.get("stage") == "final" and not d.get("trashed"):
                 return {"project": {"id": d["id"], "name": d.get("name")}, "existing": True}
@@ -2695,7 +2697,7 @@ class Handler(BaseHTTPRequestHandler):
         pieces = project_mod.slice_pieces(info.duration, interval) if interval > 0 else project_mod.slice_pieces(info.duration, info.duration + 1)
         name = str(data.get("name") or project_mod.nice_title(Path(src).stem))      # the title comes from the file name
         proj = self.state.save_project(uuid.uuid4().hex[:12], {"name": name, "source": src_id, "pieces": pieces, "settings": {},
-                                                               "stage": "final" if data.get("stage") == "final" else "edit"})
+                                                               "stage": data.get("stage") if data.get("stage") in ("final", "studio") else "edit"})
         return self._project_view(proj)
 
     def _render_project(self, pid: str, preview: bool) -> str:
@@ -2734,7 +2736,7 @@ class Handler(BaseHTTPRequestHandler):
                                      stems_home=str(self.state.home))
         opts = {"kind": "project", "preview": preview, "music_path": music_path, "layers": layers, "captions_path": captions_path, "project_id": pid,
                 "output_dir": str(self.state.outputs), "stems_home": str(self.state.home),
-                "output_name": project_mod.output_stem(proj, src, preview)}
+                "output_name": project_mod.output_stem(proj, src, preview), "studio": proj.get("stage") == "studio"}
         return self.state.manager.submit(json.dumps(proj), src, "", opts)
 
     def _beats(self, ident: str) -> Dict[str, Any]:

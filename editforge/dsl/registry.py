@@ -72,12 +72,14 @@ EASING = P("easing", "enum", "ease", "curve", default="ease_in_out",
            choices=("linear", "ease_in", "ease_out", "ease_in_out"),
            ea={"easein": "ease_in", "easeout": "ease_out", "easeinout": "ease_in_out", "smooth": "ease_in_out",
                "in": "ease_in", "out": "ease_out", "in_out": "ease_in_out"})
-EFFECT_NAMES = ("mirror", "hflip", "flip", "vflip", "invert", "grayscale", "blur", "sharpen", "sepia", "vignette")
+EFFECT_NAMES = ("mirror", "hflip", "flip", "vflip", "invert", "grayscale", "blur", "sharpen", "sepia", "vignette", "denoise",
+                "stabilize")
 EFFECT_ALIASES = {"flip_h": "hflip", "flop": "hflip", "flip_horizontal": "hflip", "flip_v": "vflip",
                   "flip_vertical": "vflip", "upside_down": "vflip", "negate": "invert", "negative": "invert",
                   "gray": "grayscale", "grey": "grayscale", "greyscale": "grayscale", "bw": "grayscale",
                   "black_and_white": "grayscale", "mirror_h": "mirror", "kaleidoscope": "mirror",
-                  "unsharp": "sharpen", "gaussian_blur": "blur", "soften": "blur"}
+                  "unsharp": "sharpen", "gaussian_blur": "blur", "soften": "blur", "clean": "denoise",
+                  "grain": "denoise", "steady": "stabilize", "deshake": "stabilize", "stabilise": "stabilize"}
 XFADE = ("fade", "dissolve", "fadeblack", "fadewhite", "wipeleft", "wiperight", "wipeup", "wipedown", "slideleft",
          "slideright", "slideup", "slidedown", "smoothleft", "smoothright", "circleopen", "circleclose", "radial",
          "pixelize", "hblur", "zoomin", "distance", "horzopen", "vertopen", "diagtl")
@@ -241,9 +243,9 @@ SPECS: List[Spec] = [
          (P("name", "enum", "effect", "type", "fx", req=True, choices=EFFECT_NAMES, ea=EFFECT_ALIASES),
           P("strength", "num", "amount", "level", default=0.5, lo=0, hi=1)) + RANGE, ("name",),
          ("fx", "filter", "video_effect", "look", "mirror", "hflip", "flip", "vflip", "invert", "negate", "grayscale",
-          "greyscale", "blur", "sharpen", "sepia", "vignette"),
+          "greyscale", "blur", "sharpen", "sepia", "vignette", "denoise", "stabilize"),
          presets={k: {"name": k} for k in ("mirror", "hflip", "flip", "vflip", "invert", "grayscale", "blur", "sharpen",
-                                           "sepia", "vignette")} | {"negate": {"name": "invert"}, "greyscale": {"name": "grayscale"}}),
+                                           "sepia", "vignette", "denoise", "stabilize")} | {"negate": {"name": "invert"}, "greyscale": {"name": "grayscale"}}),
     Spec("every_nth", "clip", "Apply an effect to every 2nd, 3rd ... segment.", "every_nth 2 effect=mirror",
          (P("n", "int", "every", "step", "nth", req=True, lo=1, hi=1000),
           P("effect", "enum", "name", "fx", "type", req=True, choices=EFFECT_NAMES, ea=EFFECT_ALIASES),

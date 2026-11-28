@@ -257,6 +257,17 @@
       <button class="btn sm" id="bCombine" title="Combine the chosen scenes into one scene (Ctrl + J)" hidden><i data-ic="combine" class="s"></i><span>Combine</span></button>
       <div id="chooseSeg" class="choose-seg" hidden title="What a click chooses on the timeline"></div>
       <span class="sep"></span>
+      <div class="studio-tools" id="studioTools" data-stage="studio" hidden>
+        <input id="stTime" class="num st-time" type="text" inputmode="decimal" spellcheck="false" autocomplete="off" title="Type a time, like 1:23.40, 83.4 or 83.4s, then Enter to go there" placeholder="0:00.00">
+        <button class="btn ghost icon" id="stCutAt" title="Split at the typed time (or at the playhead)"><i data-ic="split"></i></button>
+        <span class="sep"></span>
+        <button class="btn ghost icon" id="stIn" title="In point: start of a part to remove (I)"><i data-ic="inp"></i></button>
+        <button class="btn ghost icon" id="stOut" title="Out point: end of a part to remove (O)"><i data-ic="outp"></i></button>
+        <button class="btn sm" id="stRipple" title="Remove from In to Out and close the gap" hidden><i data-ic="trash" class="s"></i><span id="stRippleT">Remove</span></button>
+        <span class="sep"></span>
+        <button class="btn ghost hist-btn" id="stMarks" title="Markers: add one at the playhead (M), or jump to one"><i data-ic="bookmark" class="s"></i><span id="stMarksN">0</span><i data-ic="chev" class="s"></i></button>
+      </div>
+      <span class="sep" data-stage="studio" hidden></span>
       <div class="info"><span>Video <b id="iLen">0:00.0</b></span><span><b id="iCount">0</b> pieces</span><span id="iSel"></span></div>
       <span class="grow"></span>
       <div class="locks" data-stage="edit" title="Lock a track when you are done with it, so nothing changes by mistake">
