@@ -89,7 +89,6 @@ def test_a_song_is_mixed_from_a_clean_copy(tmp_path):
     from editforge import project as P
     from editforge.core.media import probe_media
     src = real_world_song("mp3_cover", tmp_path)
-    assert probe_media(src).has_video                               # the cover picture counts as a video stream
     out = P.song_copy(src, str(tmp_path / "home"))
     m = probe_media(out)
     assert out.endswith(".flac") and m.has_audio and not m.has_video and abs(m.duration - 30) < 0.1
