@@ -3573,8 +3573,22 @@ function startDrawBox() {
 }
 
 // ================================================================== export
-function exportDialog() {
+async function exportDialog() {
   if (!kept().length) { toast("The timeline is empty: put a piece back first.", true); return; }
+  if (S.exportStarting) { toast("Your export is starting: it shows in Exports in a moment."); Exports.show(); return; }
+  if (S.exportOpening || document.querySelector(".dialog[aria-label=Export]")) return;          // pressed twice: one window
+  S.exportOpening = true;                                // until the window is open (or the question is answered)
+  try { await exportWindow(); } finally { S.exportOpening = false; }
+}
+async function exportWindow() {
+  // already exporting this project? say so first, so one press is not taken for nothing and pressed again
+  {
+    const jobs = (Exports.jobs || []).filter((j) => j.project_id === S.id && (j.status === "running" || j.status === "queued"));   // known from the last check (every second while busy): no wait here
+    if (jobs.length) {
+      const pv = jobs.every((j) => j.preview);
+      if (!(await askYes("This project is already " + (pv ? "making a preview" : "exporting") + " (" + jobs.length + " running). Start another one anyway?", "Start another"))) { Exports.show(); return; }
+    }
+  }
   let quality = S.proj.settings.quality || "best", esize = S.proj.settings.export_size || "4k";
   let loud = +S.proj.settings.loudness_step || 0;
   const pickLoud = (v) => {                        // heard at once in the player (it plays from the playhead): nothing is made
@@ -3605,18 +3619,34 @@ function exportDialog() {
   const listen = btn(S.playing ? "Stop listening" : "Listen", { icon: S.playing ? "pause" : "play", cls: "sm ghost", title: "Play the video here with this loudness (nothing is made)",
     onclick: () => { if (S.playing) { pause(); listen.replaceChildren(icon("play", "s"), el("span", { text: "Listen" })); } else { if (MCTX && MCTX.state === "suspended") MCTX.resume(); applyMaster(); play(); listen.replaceChildren(icon("pause", "s"), el("span", { text: "Stop listening" })); } } });
   let starting = false;
-  const go = async (preview) => {
-    if (starting) return;                                  // a double click must not start two exports
-    starting = true;
-    for (const b of dlg.querySelectorAll(".btns .btn")) b.disabled = true;
+  const status = el("div", { class: "ex-status", role: "status", "aria-live": "polite", hidden: true });
+  const go = async (preview, ev) => {
+    if (starting || S.exportStarting) return;              // a double click must not start two exports
+    starting = S.exportStarting = true;
+    const btns = [...dlg.querySelectorAll(".btns .btn")];
+    for (const b of btns) b.disabled = true;
+    const pressed = ev && ev.currentTarget, label = pressed && pressed.querySelector("span"), was = label ? label.textContent : "";
+    if (pressed) pressed.classList.add("busy");
+    const say = (t) => { if (label) label.textContent = t; status.textContent = t; status.hidden = false; };
+    say("Saving your edit…");
+    const slow = setTimeout(() => say("Checking the edit (sound, tracking, songs)… a long video can take a few seconds"), 1500);
     try {
       if (quality !== S.proj.settings.quality) { S.proj.settings.quality = quality; }
       S.proj.settings.export_size = esize;
       S.proj.settings.loudness_step = loud;
       await saveNow();
+      if ($("saveState").textContent === "Not saved") throw new Error("Your latest changes could not be saved, so the export would miss them. Try again in a moment.");   // never export an older version
+      say("Starting…");
       await api("/api/projects/" + S.id + "/render", { method: "POST", json: { preview } });
-      close(); toast(preview ? "Making a quick preview" : "Exporting your video"); Exports.show();
-    } catch (e) { starting = false; for (const b of dlg.querySelectorAll(".btns .btn")) b.disabled = false; toast(errText(e), true); }
+      clearTimeout(slow);
+      close(); toast(preview ? "Making a quick preview: see its progress in Exports" : "Exporting your video: see its progress in Exports"); Exports.show();
+    } catch (e) {
+      clearTimeout(slow);
+      for (const b of btns) b.disabled = false;
+      if (pressed) pressed.classList.remove("busy");
+      if (label) label.textContent = was;
+      status.hidden = true; toast(errText(e), true);
+    } finally { starting = S.exportStarting = false; }
   };
   const dlg = el("div", { class: "dialog", role: "dialog", "aria-label": "Export" },
     el("div", { class: "side-h" }, el("h2", { text: "Export video" }), btn("", { icon: "x", cls: "ghost", title: "Close", onclick: close })),
@@ -3632,7 +3662,8 @@ function exportDialog() {
         segmented([[-3, "−3"], [-2, "−2"], [-1, "−1"], [0, "Standard"], [1, "+1"], [2, "+2"], [3, "+3"]], loud, pickLoud)),
       el("div", { class: "row loud-row" }, listen, loudTxt),
       el("p", { class: "hint", text: "4K + Best gives the sharpest result on YouTube (it streams 4K uploads at a higher quality, also to 1080p viewers). The file is big and takes longer." }),
-      el("div", { class: "btns" }, btn("Quick preview file", { icon: "eye", title: "Makes a small, fast video file of the whole mix (shows in Exports). To only hear the loudness, use Listen.", onclick: () => go(true) }), el("span", { class: "grow" }), btn("Export", { icon: "export", cls: "primary big", onclick: () => go(false) }))));
+      status,
+      el("div", { class: "btns" }, btn("Quick preview file", { icon: "eye", title: "Makes a small, fast video file of the whole mix (shows in Exports). To only hear the loudness, use Listen.", onclick: (e) => go(true, e) }), el("span", { class: "grow" }), btn("Export", { icon: "export", cls: "primary big", onclick: (e) => go(false, e) }))));
   document.body.append(scrim, dlg);
 }
 

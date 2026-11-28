@@ -47,6 +47,7 @@ def test_a_running_card_is_updated_in_place_and_the_list_keeps_its_place(live, p
       Exports.gone.clear(); Exports.refresh(true);
     }""")
     page.wait_for_selector("#exportsBody .job[data-id=aaaaaaaaaaaa]")
+    page.wait_for_timeout(1500)                                   # any check that was already on its way has landed
     page.evaluate("() => { const b = document.querySelector('#exportsBody'); b.style.maxHeight = '200px'; b.style.overflow = 'auto'; b.scrollTop = 150; window._top = b.scrollTop; document.querySelector('.job[data-id=aaaaaaaaaaaa]')._mark = 1; }")
     page.evaluate("async () => { window._p = 55; await Exports.refresh(false); }")
     assert page.evaluate("() => !!document.querySelector('.job[data-id=aaaaaaaaaaaa]')._mark") is True       # the same card, not rebuilt
@@ -85,4 +86,50 @@ def test_removing_an_export_closes_the_card_and_says_so_and_a_used_video_stays(l
     page.locator(".dialog button:has-text('Remove')").click()
     page.wait_for_function("(id) => !document.querySelector(\".job[data-id='\" + id + \"']\")", arg=jid, timeout=5000)
     assert all(j["id"] != jid for j in live.call("GET", "/api/jobs")["jobs"])
+    assert page.errors == []
+
+
+def test_the_exports_list_scrolls_and_cards_keep_their_size(live, page, vid_id):
+    open_final(live, page, vid_id, "Scroll")
+    page.set_viewport_size({"width": 1366, "height": 620})
+    page.evaluate("() => Exports.show()")
+    page.wait_for_selector("#exportsDrawer")
+    page.evaluate("""() => {
+      window._real = api;
+      const mk = (i) => ({ id: ('0000000000' + (10 + i)).slice(-12), status: 'done', progress: 1, title: 'Old ' + i, file_id: 'f' + i, group: 'final',
+        result: { duration: 5 }, warnings: [] });
+      window.api = async (path) => path === '/api/jobs' ? { jobs: Array.from({ length: 14 }, (_, i) => mk(i)) } : window._real(path);
+      Exports.gone.clear(); Exports.refresh(true);
+    }""")
+    page.wait_for_function("() => document.querySelectorAll('#exportsBody .job').length === 14")
+    info = page.evaluate("""() => { const b = document.querySelector('#exportsBody'); const j = [...b.querySelectorAll('.job')];
+      return { sh: b.scrollHeight, ch: b.clientHeight, cut: j.filter(x => x.scrollHeight > x.clientHeight + 1).length }; }""")
+    assert info["cut"] == 0, info                            # no card is squeezed
+    assert info["sh"] > info["ch"] + 100, info              # so the list is longer than the panel ...
+    page.mouse.move(1100, 400)
+    page.mouse.wheel(0, 600)
+    page.wait_for_timeout(300)
+    assert page.evaluate("() => document.querySelector('#exportsBody').scrollTop") > 100     # ... and it scrolls
+    page.evaluate("() => { window.api = window._real; }")
+    assert page.errors == []
+
+
+def test_the_export_button_shows_what_it_is_doing(live, page, vid_id):
+    open_final(live, page, vid_id, "Feedback")
+    page.evaluate("""() => { window._real = api; window.api = async (path, o) => { if (path.endsWith('/render')) await new Promise(r => setTimeout(r, 2500)); return window._real(path, o); }; }""")
+    page.evaluate("() => exportDialog()")
+    btn = page.locator(".dialog[aria-label=Export] .btns .btn.primary")
+    btn.click()
+    page.wait_for_selector(".dialog[aria-label=Export] .ex-status:not([hidden])", timeout=3000)
+    assert btn.is_disabled()
+    assert page.evaluate("() => exportDialog().then(() => document.querySelectorAll('.dialog[aria-label=Export]').length)") == 1
+    page.wait_for_function("() => !document.querySelector('.dialog[aria-label=Export]') && !S.exportStarting", timeout=20000)
+    # a second Export while one runs asks first
+    page.evaluate("""() => { window._fake = [{ id: 'bbbbbbbbbbbb', status: 'running', progress: .3, project_id: S.id, preview: false, group: 'final', title: 'x' }]; window.api = async (path, o) => path === '/api/jobs' ? { jobs: window._fake } : window._real(path, o); }""")
+    page.wait_for_function("() => (Exports.jobs || []).some(j => j.id === 'bbbbbbbbbbbb')", timeout=10000)
+    page.evaluate("() => { exportDialog(); }")
+    page.wait_for_selector(".dialog:has-text('already')", timeout=5000)
+    page.locator(".dialog:has-text('already') button:has-text('Cancel'), .dialog:has-text('already') button:has-text('No')").first.click()
+    assert page.locator(".dialog[aria-label=Export]").count() == 0
+    page.evaluate("() => { window.api = window._real; }")
     assert page.errors == []

@@ -559,6 +559,7 @@ const Exports = {
     const ids = new Set(data.jobs.map((j) => j.id));
     for (const id of [...this.gone]) if (!ids.has(id)) this.gone.delete(id);       // the app has caught up with the removal
     data.jobs = data.jobs.filter((j) => !this.gone.has(j.id));
+    this.jobs = data.jobs;
     const running = data.jobs.filter((j) => j.status === "running" || j.status === "queued").length;
     this.busy = running > 0;
     const pill = $("exportsCount");
@@ -603,7 +604,10 @@ const Exports = {
     const busy = list.filter((j) => j.status === "running" || j.status === "queued");
     const rest = list.filter((j) => !busy.includes(j));
     if (!list.length) body.append(el("p", { class: "hint", text: q ? "Nothing here matches '" + this.q + "'." : { final: "No finished videos yet. Export from Final and they appear here, newest on top.", clip: "No clips yet. Clips you make appear here, newest on top.", studio: "Nothing from Studio yet.", preview: "No quick previews yet." }[this.tab] }));
-    for (const j of busy.concat(rest)) body.append(this.card(j));
+    for (const j of busy.concat(rest)) {
+      try { body.append(this.card(j)); }
+      catch (e) { body.append(el("div", { class: "job", "data-id": j.id }, el("div", { class: "facts warn", text: (j.title || "An export") + ": its details could not be shown." }))); }   // one odd record never empties the list
+    }
     body.scrollTop = keep;
   },
   /** Only the running cards' bar, percentage and message. */
@@ -633,7 +637,7 @@ const Exports = {
     const v = j.result && j.result.verify;
     if (j.status === "done" && j.result) node.append(el("div", { class: "facts", text: fmtTime(j.result.duration) + " long" + (v && v.width ? " · " + v.width + "×" + v.height : "") + (v && v.size_bytes ? " · " + fmtSize(v.size_bytes) : "") + (j.preview ? " · quick preview" : "") }));
     const ld = j.status === "done" && j.result && j.result.loudness;
-    if (ld) { const lv = loudVerdict(ld); node.append(el("div", { class: "facts " + (lv.good ? "good" : "warn"), text: "Loudness " + ld.lufs.toFixed(1) + " LUFS · peak " + ld.true_peak.toFixed(1) + " dBTP · " + lv.text })); }
+    if (ld && typeof ld.lufs === "number" && typeof ld.true_peak === "number") { const lv = loudVerdict(ld); node.append(el("div", { class: "facts " + (lv.good ? "good" : "warn"), text: "Loudness " + ld.lufs.toFixed(1) + " LUFS · peak " + ld.true_peak.toFixed(1) + " dBTP · " + lv.text })); }
     for (const w of j.warnings || []) node.append(el("div", { class: "facts warn", text: w }));
     if (j.error) node.append(el("div", { class: "facts err", text: j.error + (j.error_fix ? " " + j.error_fix : "") }));
     const acts = el("div", { class: "btns" });

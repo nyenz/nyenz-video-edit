@@ -166,7 +166,11 @@ def test_overall_loudness_has_seven_steps_and_is_used_by_the_preview(live, page,
     dlg.locator("button:has-text('Quick preview')").click()
     page.wait_for_function("() => !document.querySelector('.dialog[aria-label=Export]')")
     assert live.call("GET", f"/api/projects/{pid}")["project"]["settings"]["loudness_step"] == 2
-    page.evaluate("() => exportDialog()")                                 # (the Exports drawer is open now)
+    page.evaluate("() => { exportDialog(); }")                            # (the Exports drawer is open now)
+    page.wait_for_selector(".dialog[aria-label=Export], .dialog:has-text('already')")
+    if page.locator(".dialog:has-text('already')").count():              # the preview still runs: it asks first (1.40.3)
+        page.locator(".dialog:has-text('already') button:has-text('Start another')").click()
+        page.wait_for_selector(".dialog[aria-label=Export]")
     assert page.locator(".dialog[aria-label=Export] .seg button.on:has-text('+2')").count() == 1           # remembered
     assert page.errors == []
 
