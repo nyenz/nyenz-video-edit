@@ -830,6 +830,7 @@ function renderTimeline() {
     lm.append(row);
   });
   renderAudioLane();
+  renderSongWaves();
   renderStemLanes();
   renderLoudLane();
   if (S.mode === "final") prefetchEnvs();
@@ -931,6 +932,36 @@ async function loadPeaks() {
     if (r.status !== 202) return;
     await new Promise((ok) => setTimeout(ok, 1500));
   }
+}
+/** The wave of each song on its row of the timeline, as loud as it plays (parts, fades-by-part and the volume you set). */
+function renderSongWaves() {
+  const sc = $("tlScroll"); if (!sc) return;
+  const left = sc.scrollLeft, w = sc.clientWidth, H = 30, dpr = Math.min(2, window.devicePixelRatio || 1);
+  layers().forEach((x, i) => {
+    const row = document.querySelector('#laneM .mrow[data-i="' + i + '"]'); if (!row) return;
+    let cv = row.querySelector("canvas.mwave");
+    if (!cv) { cv = el("canvas", { class: "mwave" }); row.append(cv); }
+    if (cv.width !== Math.round(w * dpr) || cv.height !== H * dpr) { cv.width = Math.round(w * dpr); cv.height = H * dpr; }
+    cv.style.left = left + "px"; cv.style.width = w + "px"; cv.style.height = H + "px";
+    const g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, H);
+    const P = songPeaks(x.file), mid = H / 2;
+    if (!P || !P.length) { g.fillStyle = "rgba(217, 207, 251, .55)"; g.font = "500 10.5px system-ui, sans-serif"; g.fillText("Reading the song…", 12, mid + 4); return; }
+    g.fillStyle = "rgba(217, 207, 251, .5)";
+    if (!P._max) { let mx = 1; for (let k = 0; k < P.length; k++) if (P[k] > mx) mx = P[k]; P._max = mx; }     // drawn as tall as the song's loudest moment, so its shape reads
+    for (const r of mspans(x)) {
+      if (r.q.mute) continue;
+      const x0 = px(r.a), x1 = px(r.b);
+      if (x1 < left || x0 > left + w) continue;
+      const gain = Math.min(2, Math.max(0.05, x.volume * (r.q.volume === undefined ? 1 : r.q.volume)));
+      for (let X = Math.floor(Math.max(x0, left)); X < Math.min(x1, left + w); X++) {
+        const s0 = r.src + (timeAt(X) - r.a), s1 = r.src + (timeAt(X + 1) - r.a);
+        const i0 = Math.max(0, Math.floor(s0 * 50)), i1 = Math.min(P.length, Math.max(i0 + 1, Math.ceil(s1 * 50)));
+        let m = 0; for (let k = i0; k < i1; k++) if (P[k] > m) m = P[k];
+        const hgt = Math.max(1, (m / P._max) * Math.min(1, gain) * (H / 2 - 3));
+        g.fillRect(X - left, mid - hgt, 1, hgt * 2);
+      }
+    }
+  });
 }
 function renderAudioLane() {
   const la = $("laneA");
@@ -1288,7 +1319,7 @@ function songPeaks(file) {
       for (let tries = 0; tries < 60; tries++) {
         const r = await fetch("/api/peaks?id=" + encodeURIComponent(file), { headers: { "X-EditForge-Token": TOKEN } }).catch(() => null);
         if (!r || (r.status !== 200 && r.status !== 202)) break;
-        if (r.status === 200) { S.songPeaks.set(file, new Uint8Array(await r.arrayBuffer())); S.meterAvg = null; paintMeter(); return; }
+        if (r.status === 200) { S.songPeaks.set(file, new Uint8Array(await r.arrayBuffer())); S.meterAvg = null; paintMeter(); renderSongWaves(); return; }
         await new Promise((ok) => setTimeout(ok, 1500));
       }
       S.songPeaks.set(file, new Uint8Array(0));
@@ -2683,6 +2714,7 @@ function openPanel(name) {
   for (const s of document.querySelectorAll("#left [data-for]")) s.hidden = s.dataset.for !== name;
   Frame.setEditing(name === "frame");
   if (name === "text") renderTexts();
+  if (name === "cut") { renderPattern(); Studio.cutNote(); }
   if ($("capAuto")) paintCaptions();
   if (name === "sound") { Layers.open(); renderMusicLayers(); }
   if (name === "frame") { Frame.renderPanel(); renderShape(); }
@@ -2699,14 +2731,18 @@ function parentPieces(sec) {
   return pieces;
 }
 /** The pieces the newest step starts from: the whole video (step 1) or the pinned step before it, laid end to end. */
-function stepBase() { const st = S.proj.steps[S.proj.steps.length - 1]; return st ? st.pieces : null; }
+function stepBase() {
+  const st = S.proj.steps[S.proj.steps.length - 1];
+  if (st) return st.pieces;
+  return S.studio ? kept().map((p) => Object.assign(JSON.parse(JSON.stringify(p)), { unit: undefined })) : null;     // Studio cuts what is on the timeline now
+}
 function cutInto(sec) {
   if (!(sec >= MIN_PIECE)) { $("cutNote").textContent = "Write a length of at least 0.1 seconds, for example 2."; return; }
   let pieces;
   try { pieces = stepBase() ? Steps.recut(stepBase(), sec).map(fixPiece) : parentPieces(sec); }
   catch (e) { $("cutNote").textContent = e.message; return; }
   if (!change(() => { S.proj.pieces = pieces; S.proj.rule = { interval: sec, group: 1, picks: [], action: "", hand: false }; S.sel.clear(); S.t = 0; })) return;
-  $("cutNote").textContent = Steps.countUnits(pieces) + " pieces of " + sec + " s" + (stepBase() ? ", cut from step " + S.proj.steps.length + "." : ".") + " Undo brings back the old cut.";
+  $("cutNote").textContent = Steps.countUnits(pieces) + " pieces of " + sec + " s" + (S.proj.steps.length ? ", cut from step " + S.proj.steps.length + "." : ".") + " Undo brings back the old cut.";
   fitZoom();
 }
 /** The scene separator: one piece per scene (the scene changes are found once per video and kept). */
@@ -2725,7 +2761,7 @@ async function cutAtScenes() {
     const pieces = Steps.cutAt(base, st.scenes).map(fixPiece);
     const wasThin = stepFlags(S.proj).thin;
     if (!change(() => { S.proj.pieces = pieces; S.proj.rule = { interval: 0, group: 1, picks: [], action: "", hand: true, thin: wasThin }; S.sel.clear(); S.t = 0; })) return;
-    $("cutNote").textContent = Steps.countUnits(pieces) + " scenes" + (stepBase() ? " in step " + S.proj.steps.length : "") + ". Undo brings back the old cut.";
+    $("cutNote").textContent = Steps.countUnits(pieces) + " scenes" + (S.proj.steps.length ? " in step " + S.proj.steps.length : "") + ". Undo brings back the old cut.";
     fitZoom();
   } catch (e) { $("cutNote").textContent = errText(e); }
   finally { b.disabled = false; label.textContent = "Cut at scene changes"; }
@@ -3849,6 +3885,7 @@ const Studio = {
   marks() { return S.proj.settings.markers || (S.proj.settings.markers = []); },
   wire() {
     if (!S.studio) return;
+    this.moveCutTools();
     const box = $("stTime");
     box.addEventListener("keydown", (e) => {
       if (e.key === "Enter") { e.preventDefault(); const t = parseTime(box.value); if (t === null) { toast("Type a time like 1:23.40, 83.4 or 2075f.", true); return; } seek(t); box.blur(); }
@@ -3899,6 +3936,33 @@ const Studio = {
     });
     this.inT = this.outT = null; seek(a); this.paint();
     toast("Removed " + fmtTime(b - a, 2) + " and closed the gap · video now " + fmtTime(finalTotal()) + ". Ctrl + Z brings it back.");
+  },
+  /** The stretches (finished-video time) the given pieces take up now; call before they are removed. */
+  rangesOf(pieces) {
+    if (!S.studio) return [];
+    const set = new Set(pieces);
+    return layout().filter((r) => set.has(r.p)).map((r) => [r.out0, r.out1]);
+  },
+  /** After those stretches were removed: markers inside them go, later ones move up (inside a change(), before it saves). */
+  closeMarks(ranges) {
+    if (!S.studio || !ranges.length) return;
+    const merged = [];
+    for (const [a, b] of ranges.slice().sort((x, y) => x[0] - y[0])) { if (merged.length && a <= merged[merged.length - 1][1] + 1e-6) merged[merged.length - 1][1] = Math.max(merged[merged.length - 1][1], b); else merged.push([a, b]); }
+    S.proj.settings.markers = this.marks().filter((m) => !merged.some(([a, b]) => m.t >= a && m.t < b))
+      .map((m) => ({ t: +(m.t - merged.reduce((g, [a, b]) => g + (b <= m.t ? b - a : 0), 0)).toFixed(3), note: m.note }));
+  },
+  cutNote() { /* the Cut tab shares its notes with Edit: nothing extra to say */ },
+  /** Studio's Cut tab: the cutting tools of Edit (equal pieces, scene changes, patterns) live here too. */
+  moveCutTools() {
+    const host = $("studioCut");
+    host.append(el("div", { class: "side-h" }, el("h2", { text: "Cut" })));
+    for (const name of ["cut", "pattern"]) {
+      const d = document.querySelector('details[data-sec="' + name + '"]');
+      if (!d) continue;
+      d.open = true; host.append(d);
+      for (const h of d.querySelectorAll(".hint")) if (h.textContent.includes("from step 2 on")) h.textContent = "Chop what is on the timeline into equal pieces.";
+    }
+    host.append(el("p", { class: "hint pad", text: "Here these work on what is on the timeline now. Pieces you removed stay removed. Undo (Ctrl + Z) brings the old cut back." }));
   },
   addMark() {
     const t = +S.t.toFixed(3), list = this.marks();
@@ -3991,8 +4055,8 @@ function wire() {
     cutInto(sec);
   });
   // pattern
-  $("patRemove").addEventListener("click", () => { const h = patternHits(); if (!h.length) return; if (!change(() => { for (const p of h) p.off = true; S.sel.clear(); setRule("remove"); })) return; renderPattern(); toast(Steps.countUnits(h) + " pieces removed · video now " + fmtTime(finalTotal())); });
-  $("patKeep").addEventListener("click", () => { const h = new Set(patternHits()); if (!h.size) return; const gone = kept().filter((p) => !h.has(p)); if (!change(() => { for (const p of gone) p.off = true; S.sel.clear(); setRule("keep"); })) return; renderPattern(); toast(Steps.countUnits(gone) + " pieces removed · video now " + fmtTime(finalTotal())); });
+  $("patRemove").addEventListener("click", () => { const h = patternHits(); if (!h.length) return; const gone = Studio.rangesOf(h); if (!change(() => { for (const p of h) p.off = true; S.sel.clear(); setRule("remove"); Studio.closeMarks(gone); })) return; renderPattern(); toast(Steps.countUnits(h) + " pieces removed · video now " + fmtTime(finalTotal())); });
+  $("patKeep").addEventListener("click", () => { const h = new Set(patternHits()); if (!h.size) return; const gone = kept().filter((p) => !h.has(p)), gr = Studio.rangesOf(gone); if (!change(() => { for (const p of gone) p.off = true; S.sel.clear(); setRule("keep"); Studio.closeMarks(gr); })) return; renderPattern(); toast(Steps.countUnits(gone) + " pieces removed · video now " + fmtTime(finalTotal())); });
   $("patSelect").addEventListener("click", () => { S.sel = new Set(patternHits()); refreshAll({ keepVideo: true }); });
   $("recipeSave").addEventListener("click", async () => {
     const name = await askText("Name for this pattern", "", "for example: remove 1st of every 3");

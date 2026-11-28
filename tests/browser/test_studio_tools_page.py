@@ -85,3 +85,30 @@ def test_colour_looks_and_new_effects(live, page, vid_id):
     assert page.evaluate("() => kept()[0].fx") == ["denoise", "stabilize"]
     page.evaluate("() => saveNow()")
     assert page.errors == []
+
+
+def test_studio_cut_tab_has_equal_pieces_and_patterns_and_the_song_shows_its_wave(live, page, vid_id, tmp_path_factory):
+    import subprocess
+    from editforge.core import ffmpeg as ff
+    song = tmp_path_factory.mktemp("sg") / "Song.wav"
+    subprocess.run([ff.find_executable("ffmpeg"), "-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=330:duration=30", str(song)], check=True)
+    sid = live.upload(str(song))
+    open_studio(live, page, vid_id)
+    page.evaluate("(id) => { S.proj.settings.layers = [{ file: id, volume: 0.6, mute: false, solo: false }]; scheduleSave(); loadFiles(); renderTimeline(); }", sid)
+    page.wait_for_function("() => document.querySelector('#laneM .mrow canvas.mwave')", timeout=10000)
+    page.wait_for_function("() => [...S.songPeaks.values()].some(v => v !== 'loading' && v.length > 100)", timeout=40000)      # the wave of the song has been read
+    page.wait_for_function("() => { const c = document.querySelector('#laneM .mrow canvas.mwave'); const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i]) n++; return n > 3000; }", timeout=10000)
+    # the Cut tab is there in Studio and holds Edit's cutting tools
+    assert page.is_visible(".ftabs button[data-panel=cut]")
+    page.click(".ftabs button[data-panel=cut]")
+    assert page.is_visible("#cutSec") and page.is_visible("#sceneCut") and page.is_visible("#patRemove")
+    page.fill("#cutSec", "2"); page.click("#cutBtn")
+    page.wait_for_function("() => kept().length === 10", timeout=5000)
+    page.evaluate("() => { S.proj.settings.markers = [{ t: 3, note: 'a' }, { t: 7, note: 'b' }, { t: 15, note: 'c' }]; }")
+    page.click("#patGroup .chip[data-n='2']")                      # in every group of 2 ...
+    page.click("#patRemove")                                        # ... remove number 1: 0-2, 4-6, 8-10 ... go
+    assert page.evaluate("() => kept().length") == 5
+    assert abs(page.evaluate("() => rawTotal()") - 10) < 0.05
+    assert page.evaluate("() => S.proj.settings.markers.map(m => m.t)") == [1, 3, 7]        # each marker moved up by what was removed before it
+    page.evaluate("() => saveNow()")
+    assert page.errors == []

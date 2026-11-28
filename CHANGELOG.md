@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.40.1
+* **Studio has a Cut tab**: cut into equal pieces, cut at scene changes and keep or remove by a pattern, working on what
+  is on the timeline now. Markers move up when a pattern takes pieces out.
+* **Songs now show their wave** on their row of the timeline (as loud as they play), also while they are being read.
+
 ## 1.40.0 — Studio
 * **Studio** (top bar, Home sidebar and its own Home tab, set apart from the three stages): open **any video, also one
   you finished before** (Exports → *Open in Studio*, or Made clips → *Open in Studio*), with every Final tool plus

@@ -71,7 +71,10 @@
       <button type="button" data-panel="sound" role="tab"><i data-ic="sliders" class="s"></i>Sound</button>
       <button type="button" data-panel="frame" role="tab"><i data-ic="crop" class="s"></i>Picture</button>
       <button type="button" data-panel="text" role="tab"><i data-ic="type" class="s"></i>Text</button>
+      <button type="button" data-panel="cut" role="tab" data-stage="studio" hidden><i data-ic="scissors" class="s"></i>Cut</button>
     </div>
+    <!-- Studio: the cutting tools of Edit (equal pieces, scene changes, patterns) are moved in here by editor.js -->
+    <section data-for="cut" data-stage="studio" id="studioCut" hidden></section>
 
     <!-- Sound: the three jobs first, then the mix -->
     <section data-for="sound" data-stage="final" hidden>
