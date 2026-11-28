@@ -638,6 +638,8 @@ const Exports = {
     if (j.status === "done" && j.result) node.append(el("div", { class: "facts", text: fmtTime(j.result.duration) + " long" + (v && v.width ? " · " + v.width + "×" + v.height : "") + (v && v.size_bytes ? " · " + fmtSize(v.size_bytes) : "") + (j.preview ? " · quick preview" : "") }));
     const ld = j.status === "done" && j.result && j.result.loudness;
     if (ld && typeof ld.lufs === "number" && typeof ld.true_peak === "number") { const lv = loudVerdict(ld); node.append(el("div", { class: "facts " + (lv.good ? "good" : "warn"), text: "Loudness " + ld.lufs.toFixed(1) + " LUFS · peak " + ld.true_peak.toFixed(1) + " dBTP · " + lv.text })); }
+    if (j.status === "done" && j.kind === "project" && !j.preview || j.status === "done" && j.preview && (j.songs || []).length)
+      node.append(el("div", { class: "facts songs", text: (j.songs || []).length ? "With " + (j.songs.length > 1 ? "songs: " : "song: ") + j.songs.join(", ") : "No song in this one" }));
     for (const w of j.warnings || []) node.append(el("div", { class: "facts warn", text: w }));
     if (j.error) node.append(el("div", { class: "facts err", text: j.error + (j.error_fix ? " " + j.error_fix : "") }));
     const acts = el("div", { class: "btns" });
@@ -722,7 +724,9 @@ const Activity = {
     if (before) for (const [k, st] of before) {
       const i = now.get(k);
       if ((st === "running" || st === "queued") && i && (i.state === "done" || i.state === "failed") && !location.search.includes(i.project || "~"))
-        toast(i.title + ": " + i.what, i.state === "failed", i.link ? ["Open", () => { location.href = i.link; }] : null);
+        toast(i.title + ": " + i.what, i.state === "failed", i.kind === "export" && i.state === "done" && i.job && typeof Exports !== "undefined"
+          ? ["Watch", () => { const j = (Exports.jobs || []).find((x) => x.id === i.job); if (j) Exports.tab = j.group || "final"; Exports.openIds.add(i.job); Exports.show(); Exports.refresh(true); }]
+          : i.link ? ["Open", () => { location.href = i.link; }] : null);
     }
     this.seen = new Map(data.items.map((i) => [this.key(i), i.state]));
     this.paintButton();

@@ -3580,6 +3580,28 @@ async function exportDialog() {
   S.exportOpening = true;                                // until the window is open (or the question is answered)
   try { await exportWindow(); } finally { S.exportOpening = false; }
 }
+/** Export window: what sound goes into the video, so nothing is a surprise (a muted song, a Solo left on, the split mix). */
+function exportSoundSummary() {
+  const st = S.proj.settings, rows = [];
+  const pc = (v) => Math.round((v === undefined ? 1 : v) * 100) + "%";
+  if (!st.original_sound && st.original_sound !== undefined) rows.push(["Video sound", "off"]);
+  else if (keyMuted("original")) rows.push(["Video sound", "muted, left out"]);
+  else if (st.mix_split) rows.push(["Video sound", ["voices", "music", "effects"].map((k) => k[0].toUpperCase() + k.slice(1) + " " + (keyMuted(k) ? "muted" : pc(st["mix_" + k]))).join(" · ")]);
+  else rows.push(["Video sound", "as it is"]);
+  layers().forEach((x) => {
+    const name = (S.files.find((f) => f.id === x.file) || { name: x.file.split("/").pop() }).name;
+    const dk = Object.keys(duckOf(x.duck, null, "voices"));
+    rows.push(["Song", name + " · " + (x.mute ? "muted, left out" : pc(x.volume) + (dk.length ? " · goes down under " + dk.join(", ") : "") + (x.auto ? " · level " + ((LEVELS.find((l) => l[0] === x.auto) || [0, "custom"])[1]).toLowerCase() : ""))]);
+  });
+  if (!layers().length) rows.push(["Song", "none"]);
+  const notes = [];
+  if (soloOn()) notes.push("Solo is on: that is only for listening here. The export has every track that is not muted.");
+  if (layers().some((x) => x.mute)) notes.push("A muted song is not in the export. Unmute it in Sound if you want it.");
+  return el("div", { class: "box ex-sound" },
+    el("div", { class: "ex-sound-h" }, icon("vol", "s"), el("b", { text: "Sound in this video" })),
+    ...rows.map(([k, v]) => el("div", { class: "stat" }, el("span", { class: "lbl", text: k }), el("span", { class: "ex-sound-v", text: v, title: v }))),
+    ...notes.map((n) => el("p", { class: "hint warn", text: n })));
+}
 async function exportWindow() {
   // already exporting this project? say so first, so one press is not taken for nothing and pressed again
   {
@@ -3655,6 +3677,7 @@ async function exportWindow() {
         el("div", { class: "stat" }, el("span", { class: "lbl", text: "Length" }), el("b", { text: fmtTime(finalTotal()) })),
         el("div", { class: "stat" }, el("span", { class: "lbl", text: "Size" }), sizeTxt),
         el("div", { class: "stat" }, el("span", { class: "lbl", text: "Pieces" }), el("span", { class: "num", text: String(kept().length) }))),
+      exportSoundSummary(),
       el("div", { class: "field" }, el("span", { text: "Picture size" }), segmented([["4k", "4K"], ["1440", "1440p"], ["1080", "1080p"], ["source", "As the video"]], esize, (v) => { esize = v; sizeTxt.textContent = sizeOf(v); })),
       el("div", { class: "field" }, el("span", { text: "Quality" }), segmented([["best", "Best"], ["high", "High"], ["small", "Smaller file"]], quality, (v) => { quality = v; })),
       el("div", { class: "field" }, el("span", { text: "Made for" }), segmented(Object.entries(MF).map(([k, [l]]) => [k, l]), made, pickMade)),
