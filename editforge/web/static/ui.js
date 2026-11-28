@@ -550,15 +550,25 @@ async function ensurePreview(fileId, info, onstate, always, onquick) {
 const Exports = {
   visible: false, openIds: new Set(), sig: "", timer: null, onFiles: null,
   busy: false,
+  seq: 0, gone: new Set(), struct: "",
   async refresh(force) {
     let data;
+    const mine = ++this.seq;
     try { data = await api("/api/jobs"); } catch (e) { return; }
+    if (mine !== this.seq) return;                       // a newer answer is on its way: an old one must not bring back what was just removed
+    const ids = new Set(data.jobs.map((j) => j.id));
+    for (const id of [...this.gone]) if (!ids.has(id)) this.gone.delete(id);       // the app has caught up with the removal
+    data.jobs = data.jobs.filter((j) => !this.gone.has(j.id));
     const running = data.jobs.filter((j) => j.status === "running" || j.status === "queued").length;
     this.busy = running > 0;
     const pill = $("exportsCount");
     if (pill) { pill.textContent = running ? String(running) : ""; pill.hidden = !running; }
     if (!this.visible) return;
-    const sig = JSON.stringify(data.jobs.map((j) => [j.id, j.status, Math.round((j.progress || 0) * 100), j.message])) + [...this.openIds].join();
+    // two kinds of change: the list itself (rebuilt) and only the numbers of what is running (updated where they are,
+    // so the list does not jump, a click on Stop is not lost and the bars do not restart)
+    const struct = JSON.stringify(data.jobs.map((j) => [j.id, j.status, j.title, j.file_id, j.error, (j.warnings || []).length, j.result && j.result.duration])) + [...this.openIds].join() + "|" + this.tab + "|" + this.q;
+    if (!force && struct === this.struct && $("exportsBody") && $("exportsBody").querySelector(".ex-tabs")) { this.live(data.jobs); return; }
+    const sig = struct + JSON.stringify(data.jobs.map((j) => [j.id, Math.round((j.progress || 0) * 100), j.message]));
     if (!force && sig === this.sig) return;
     const body = $("exportsBody");
     // while a finished video is being watched here (playing, or full screen), the list is not rebuilt: that would stop
@@ -566,7 +576,8 @@ const Exports = {
     const playing = [...body.querySelectorAll(".mini video")].some((v) => !v.paused);
     const full = document.fullscreenElement && body.contains(document.fullscreenElement);
     if (full || (playing && !force)) { this.later = true; return; }
-    this.sig = sig; this.later = false;
+    this.sig = sig; this.struct = struct; this.later = false;
+    const keep = body.scrollTop;
     const fa = document.activeElement, typing = fa && fa.classList && fa.classList.contains("ex-find") ? (fa.selectionStart || fa.value.length || 0.1) : 0;
     body.replaceChildren();
     // tabs, so finished videos, clips and previews never show at once; newest on top, and what is being made first
@@ -593,16 +604,31 @@ const Exports = {
     const rest = list.filter((j) => !busy.includes(j));
     if (!list.length) body.append(el("p", { class: "hint", text: q ? "Nothing here matches '" + this.q + "'." : { final: "No finished videos yet. Export from Final and they appear here, newest on top.", clip: "No clips yet. Clips you make appear here, newest on top.", studio: "Nothing from Studio yet.", preview: "No quick previews yet." }[this.tab] }));
     for (const j of busy.concat(rest)) body.append(this.card(j));
+    body.scrollTop = keep;
+  },
+  /** Only the running cards' bar, percentage and message. */
+  live(jobs) {
+    for (const j of jobs) {
+      if (j.status !== "running" && j.status !== "queued") continue;
+      const node = $("exportsBody").querySelector('.job[data-id="' + j.id + '"]'); if (!node) continue;
+      const pct = Math.round((j.progress || 0) * 100);
+      const st = node.querySelector(".st"), bar = node.querySelector(".prog i"), facts = node.querySelector(".facts.live");
+      const label = j.status === "queued" ? "Waiting" : pct + "%";
+      if (st && st.textContent !== label) st.textContent = label;
+      if (bar) bar.style.width = pct + "%";
+      const text = (j.message || "") + (j.eta ? " · about " + fmtTime(j.eta, 0) + " left" : "");
+      if (facts && facts.textContent !== text) facts.textContent = text;
+    }
   },
   nameOf(j) { return j.title || (j.output_path || "").split(/[\\/]/).pop() || "Waiting to start"; },
   card(j) {
     const pct = Math.round((j.progress || 0) * 100);
     const name = this.nameOf(j);
     const label = { queued: "Waiting", running: pct + "%", done: "Done", failed: "Failed", cancelled: "Stopped", interrupted: "Stopped" }[j.status] || j.status;
-    const node = el("div", { class: "job" }, el("div", { class: "hd" }, icon(j.preview ? "eye" : "film", "s"), el("b", { text: name, title: name }), el("span", { class: "st " + j.status, text: label })));
+    const node = el("div", { class: "job", "data-id": j.id }, el("div", { class: "hd" }, icon(j.preview ? "eye" : "film", "s"), el("b", { text: name, title: name }), el("span", { class: "st " + j.status, text: label })));
     if (j.status === "running" || j.status === "queued") {
       const bar = el("div", { class: "prog" }, el("i")); bar.firstChild.style.width = pct + "%"; node.append(bar);
-      node.append(el("div", { class: "facts", text: (j.message || "") + (j.eta ? " · about " + fmtTime(j.eta, 0) + " left" : "") }));
+      node.append(el("div", { class: "facts live", text: (j.message || "") + (j.eta ? " · about " + fmtTime(j.eta, 0) + " left" : "") }));
     }
     const v = j.result && j.result.verify;
     if (j.status === "done" && j.result) node.append(el("div", { class: "facts", text: fmtTime(j.result.duration) + " long" + (v && v.width ? " · " + v.width + "×" + v.height : "") + (v && v.size_bytes ? " · " + fmtSize(v.size_bytes) : "") + (j.preview ? " · quick preview" : "") }));
@@ -611,8 +637,10 @@ const Exports = {
     for (const w of j.warnings || []) node.append(el("div", { class: "facts warn", text: w }));
     if (j.error) node.append(el("div", { class: "facts err", text: j.error + (j.error_fix ? " " + j.error_fix : "") }));
     const acts = el("div", { class: "btns" });
-    if (j.status === "running" || j.status === "queued") acts.append(btn("Stop", { icon: "x", onclick: async () => { await api("/api/jobs/" + j.id + "/cancel", { method: "POST", json: {} }); this.refresh(true); } }));
-    if (["interrupted", "failed", "cancelled"].includes(j.status)) acts.append(btn("Try again", { icon: "restore", onclick: async () => { await api("/api/jobs/" + j.id + "/resume", { method: "POST", json: {} }); this.refresh(true); } }));
+    if (j.status === "running" || j.status === "queued") acts.append(btn("Stop", { icon: "x", onclick: async (e) => { const b = e.currentTarget; if (b.disabled) return; b.disabled = true; b.querySelector("span").textContent = "Stopping…";
+      try { await api("/api/jobs/" + j.id + "/cancel", { method: "POST", json: {} }); } catch (er) { toast(errText(er), true); } this.refresh(true); } }));
+    if (["interrupted", "failed", "cancelled"].includes(j.status)) acts.append(btn("Try again", { icon: "restore", onclick: async (e) => { const b = e.currentTarget; if (b.disabled) return; b.disabled = true;
+      try { await api("/api/jobs/" + j.id + "/resume", { method: "POST", json: {} }); } catch (er) { b.disabled = false; toast(errText(er), true); return; } this.refresh(true); } }));
     if (j.status === "done" && j.file_id) {
       acts.append(btn(this.openIds.has(j.id) ? "Hide" : "Watch", { icon: "play", cls: "primary", onclick: () => { if (this.openIds.has(j.id)) this.openIds.delete(j.id); else this.openIds.add(j.id); this.refresh(true); } }));
       acts.append(el("a", { class: "btn", href: "/download/" + j.id + "?t=" + encodeURIComponent(TOKEN) }, icon("download", "s"), el("span", { text: "Save" })));
@@ -630,10 +658,18 @@ const Exports = {
         try { const r = await api("/api/jobs/" + j.id + "/reveal", { method: "POST", json: {} }); if (!r.ok) toast("The folder could not be opened here. Use Save instead.", true); } catch (e) { toast(errText(e), true); }
       } }));
     }
-    if (["done", "failed", "cancelled", "interrupted"].includes(j.status)) acts.append(btn("", { icon: "trash", cls: "ghost danger", title: "Remove", onclick: async () => {
+    if (["done", "failed", "cancelled", "interrupted"].includes(j.status)) acts.append(btn("", { icon: "trash", cls: "ghost danger", title: "Remove", onclick: async (e) => {
+      const b = e.currentTarget; if (b.disabled) return;
       if (!(await askYes("Remove '" + name + "'? The file is deleted from the app (copies you saved are kept).", "Remove", true))) return;
-      try { await api("/api/jobs/" + j.id, { method: "DELETE" }); } catch (e) { toast(errText(e), true); return; }
-      this.openIds.delete(j.id); if (this.onFiles) this.onFiles(); this.refresh(true);
+      b.disabled = true; node.classList.add("removing");
+      let r;
+      try { r = await api("/api/jobs/" + j.id, { method: "DELETE" }); }
+      catch (er) { b.disabled = false; node.classList.remove("removing"); toast(errText(er), true); return; }       // e.g. a project still uses it: the card stays
+      if (!r || r.ok === false) { b.disabled = false; node.classList.remove("removing"); toast("It could not be removed now. Try again in a moment.", true); return; }
+      this.gone.add(j.id); this.openIds.delete(j.id);
+      node.style.height = node.offsetHeight + "px"; node.getBoundingClientRect(); node.classList.add("gone");
+      setTimeout(() => { if (this.onFiles) this.onFiles(); this.refresh(true); }, 220);
+      toast("Removed '" + name + "'.");
     } }));
     node.append(acts);
     if (j.status === "done" && j.file_id && this.openIds.has(j.id)) node.append(miniPlayer(mediaUrl(j.file_id, false), { meter: j.options && j.options.kind === "project" || !!(j.result && j.result.loudness), loudness: j.result && j.result.loudness }));

@@ -11,7 +11,7 @@ from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from fractions import Fraction
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..api import Plan
 from ..core.cache import atomic_write_json, atomic_write_text, home_dir
@@ -124,6 +124,8 @@ class Renderer:
         self._lock = threading.Lock()
         self._piece_frames: Dict[int, float] = {}
         self._weights = (0.0, 0.0, 0.0)  # (pieces, measure, final)
+        self._eta_ref: Optional[Tuple[float, float]] = None       # (time, progress) when real work started in this run
+        self._eta_last: Optional[Tuple[float, float]] = None      # (seconds left, time) of the last guess
         self._phase_base = 0.0
         self.notes: List[str] = []
         self.src_fp = plan.identity["fp"]
@@ -140,12 +142,34 @@ class Renderer:
         base = {"pieces": 0.0, "measure": w[0], "final": w[0] + w[1]}[phase]
         weight = {"pieces": w[0], "measure": w[1], "final": w[2]}[phase]
         overall = max(0.0, min(0.999, base + weight * max(0.0, min(1.0, frac))))
-        elapsed = time.time() - self.t0
-        eta = elapsed * (1 - overall) / overall if overall > 0.03 else None
+        now = time.time()
+        elapsed = now - self.t0
+        eta = self._eta_from(now, overall)
         try:
             self.opts.on_progress(Progress(overall, phase, message, eta, elapsed, done, total))
         except Exception:
             pass
+
+    def _eta_from(self, now: float, overall: float) -> Optional[float]:
+        """Time left, from how fast THIS run is going (pieces kept from an earlier try do not count as speed), smoothed so
+        it counts down steadily instead of jumping. None until there is enough to go by (a few seconds of real work)."""
+        with self._lock:
+            if self._eta_ref is None:
+                self._eta_ref = (now, overall)
+                return None
+            t_ref, o_ref = self._eta_ref
+            dt, do = now - t_ref, overall - o_ref
+            if dt < 3.0 or do < 0.005:
+                return None
+            raw = (1.0 - overall) * dt / do
+            prev = self._eta_last
+            if prev is None:
+                est = raw
+            else:
+                est = max(0.0, prev[0] - (now - prev[1]))          # the last guess, counted down
+                est = est + (raw - est) * 0.15                      # moved a little toward the new measure
+            self._eta_last = (est, now)
+            return est
 
     def _check_cancel(self) -> None:
         if self.opts.cancel is not None and self.opts.cancel.is_set():
@@ -268,7 +292,10 @@ class Renderer:
         assign_names(jobs, ctx)
         piece_frames = sum(j.frames for j in jobs)
         loud = tl.audio.loudnorm is not None and has_audio
-        self._weights = (0.80 if loud else 0.85, 0.05 if loud else 0.0, 0.15)
+        if has_video_pieces:                    # making the picture is nearly all the work; joining the pieces is quick
+            self._weights = (0.88, 0.04, 0.08) if loud else (0.92, 0.0, 0.08)
+        else:
+            self._weights = (0.80 if loud else 0.85, 0.05 if loud else 0.0, 0.15)
         reused = self._run_pieces(jobs, ctx, wd, res, piece_frames, mode)
         self._check_cancel()
         total_frames = tl.total_frames

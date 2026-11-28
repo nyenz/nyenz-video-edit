@@ -49,7 +49,7 @@ jobs:
         timeout-minutes: 25
         shell: pwsh
         run: |
-          python -m pytest -v -rfE --tb=line --timeout=180 -p no:cacheprovider tests/test_timecode.py tests/test_dsl.py tests/test_project.py tests/test_web_workshop.py tests/test_web_editor.py tests/test_desktop.py tests/test_v15.py 2>&1 | Tee-Object -FilePath pytest.txt
+          python -m pytest -v -s -rfE --tb=line --timeout=180 -p no:cacheprovider tests/test_timecode.py tests/test_dsl.py tests/test_project.py tests/test_web_workshop.py tests/test_web_editor.py tests/test_desktop.py tests/test_v15.py tests/test_song_in_export.py 2>&1 | Tee-Object -FilePath pytest.txt
           $code = $LASTEXITCODE
           # Show failures as annotations, so they can be read without the full log.
           Get-Content pytest.txt | Select-String -Pattern "^(FAILED|ERROR)|Timeout|passed|failed" | Select-Object -Last 9 | ForEach-Object { Write-Output "::error title=test::$($_.Line)" }

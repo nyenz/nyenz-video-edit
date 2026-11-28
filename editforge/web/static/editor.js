@@ -3604,7 +3604,11 @@ function exportDialog() {
   const loudTxt = el("p", { class: "hint", text: loudNote(loud) });
   const listen = btn(S.playing ? "Stop listening" : "Listen", { icon: S.playing ? "pause" : "play", cls: "sm ghost", title: "Play the video here with this loudness (nothing is made)",
     onclick: () => { if (S.playing) { pause(); listen.replaceChildren(icon("play", "s"), el("span", { text: "Listen" })); } else { if (MCTX && MCTX.state === "suspended") MCTX.resume(); applyMaster(); play(); listen.replaceChildren(icon("pause", "s"), el("span", { text: "Stop listening" })); } } });
+  let starting = false;
   const go = async (preview) => {
+    if (starting) return;                                  // a double click must not start two exports
+    starting = true;
+    for (const b of dlg.querySelectorAll(".btns .btn")) b.disabled = true;
     try {
       if (quality !== S.proj.settings.quality) { S.proj.settings.quality = quality; }
       S.proj.settings.export_size = esize;
@@ -3612,7 +3616,7 @@ function exportDialog() {
       await saveNow();
       await api("/api/projects/" + S.id + "/render", { method: "POST", json: { preview } });
       close(); toast(preview ? "Making a quick preview" : "Exporting your video"); Exports.show();
-    } catch (e) { toast(errText(e), true); }
+    } catch (e) { starting = false; for (const b of dlg.querySelectorAll(".btns .btn")) b.disabled = false; toast(errText(e), true); }
   };
   const dlg = el("div", { class: "dialog", role: "dialog", "aria-label": "Export" },
     el("div", { class: "side-h" }, el("h2", { text: "Export video" }), btn("", { icon: "x", cls: "ghost", title: "Close", onclick: close })),
