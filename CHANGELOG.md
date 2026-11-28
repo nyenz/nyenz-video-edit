@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.40.2 — smoother exporting and removing
+* **Exports panel no longer jumps**: a running export only changes its bar, percentage and message, so the list keeps its
+  place, the bar moves smoothly and a click on Stop is never lost. The list also keeps its scroll place when it changes.
+* **Time left counts down steadily**: it is worked out from how fast this export is really going, so it no longer starts
+  at a few seconds and climbs when finished pieces are reused (Try again, export again). The bar no longer waits at 80 %
+  while the quick joining step runs.
+* **One click is one export**: a double click on Export (or the preview button) starts it once.
+* **Removing**: the card closes smoothly and a message says it was removed; if it can not be removed (a project still
+  uses that video) the card stays and the reason is shown. A removed card never comes back for a moment. Stop and
+  Try again can not be pressed twice. On Home, moving several projects to the trash says how many really moved.
+
 ## 1.40.1
 * **Studio has a Cut tab**: cut into equal pieces, cut at scene changes and keep or remove by a pattern, working on what
   is on the timeline now. Markers move up when a pattern takes pieces out.

@@ -1193,3 +1193,8 @@ svg.vline .vl-dot:hover { r: 6; fill: var(--amber); }
 .home-link.studio-side .ic { color: var(--amber); }
 .mrow canvas.mwave { position: absolute; top: 0; z-index: 2; pointer-events: none; }
 .lane-item.music > span { position: relative; z-index: 3; text-shadow: 0 0 4px #1d1630, 0 0 2px #1d1630; }
+/* Exports: a removed card closes smoothly; a running one only changes its numbers */
+.job { transition: opacity .2s, height .22s ease, margin .22s ease, padding .22s ease; overflow: hidden; }
+.job.removing { opacity: .5; pointer-events: none; }
+.job.gone { opacity: 0; height: 0 !important; margin-top: 0; margin-bottom: 0; padding-top: 0; padding-bottom: 0; border-width: 0; }
+.job .prog i { transition: width .6s linear; }

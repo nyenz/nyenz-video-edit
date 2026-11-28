@@ -174,8 +174,9 @@ function paintPicks() {
 }
 async function manyDo(list, what) {
   const base = H.phase === "clips" ? "/api/clipsets/" : "/api/projects/";
-  for (const p of list) await api(base + p.id + "/" + what, { method: "POST", json: {} }).catch((e) => toast(errText(e), true));
-  toast((what === "trash" ? "Moved " : "Brought back ") + list.length + " project" + (list.length > 1 ? "s" : "") + (what === "trash" ? " to the trash." : "."));
+  let n = 0;
+  for (const p of list) { try { await api(base + p.id + "/" + what, { method: "POST", json: {} }); n++; } catch (e) { toast(p.name + ": " + errText(e), true); } }
+  if (n) toast((what === "trash" ? "Moved " : "Brought back ") + n + " project" + (n > 1 ? "s" : "") + (what === "trash" ? " to the trash." : "."));
   H.pick.clear(); loadAll();
 }
 /** Separate scenes in one or more Edit projects. The app does them one after another; you can open other projects meanwhile. */
@@ -377,7 +378,9 @@ function menuItems(p) {
       ["Edit it again", "edit", () => openInEditor(p.id)],
       ["Remove", "trash", async () => {
         if (!(await askYes("Remove '" + p.name + "'? The file is deleted from the app (copies you saved are kept).", "Remove", true))) return;
-        await api("/api/jobs/" + p.job, { method: "DELETE" }).catch((e) => toast(errText(e), true)); loadAll();
+        try { const r = await api("/api/jobs/" + p.job, { method: "DELETE" }); toast(r && r.ok === false ? "It could not be removed now. Try again in a moment." : "Removed '" + p.name + "'.", !!(r && r.ok === false)); }
+        catch (e) { toast(errText(e), true); }
+        loadAll();
       }]].filter(Boolean);
   }
   const base = H.phase === "clips" ? "/api/clipsets/" : "/api/projects/";
